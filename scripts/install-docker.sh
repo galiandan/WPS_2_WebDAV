@@ -235,7 +235,7 @@ fi
 validate_port "$PORT"
 
 BIND="${BIND_ARG:-${OLD_BIND:-0.0.0.0}}"
-[[ "$BIND" =~ ^[A-Za-z0-9.:[\]-]+$ ]] || die "监听地址格式不正确"
+[[ "$BIND" =~ ^\[?[A-Za-z0-9.:-]+\]?$ ]] || die "监听地址格式不正确"
 
 GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-}}"
 if [[ -z "$GROUP_ID" ]]; then

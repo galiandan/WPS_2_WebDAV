@@ -72,6 +72,29 @@ class InstallerTemplateTests(unittest.TestCase):
         self.assertIn('awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP"', native)
         self.assertIn('--user "$RUN_UID:$RUN_GID"', docker)
 
+    def test_installers_accept_default_and_ipv6_bind_addresses(self) -> None:
+        bind_check = r'''set -eu
+for bind in 0.0.0.0 127.0.0.1 :: '[::1]' host-name; do
+    [[ "$bind" =~ ^\[?[A-Za-z0-9.:-]+\]?$ ]]
+done
+'''
+        completed = subprocess.run(
+            ["bash", "-c", bind_check],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        for installer in ("scripts/install-native.sh", "scripts/install-docker.sh"):
+            script = (PROJECT_ROOT / installer).read_text(encoding="utf-8")
+            self.assertIn(
+                r'[[ "$BIND" =~ ^\[?[A-Za-z0-9.:-]+\]?$ ]]',
+                script,
+            )
+
     def test_compose_passes_current_user_identity_to_the_container(self) -> None:
         compose = (PROJECT_ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
 
