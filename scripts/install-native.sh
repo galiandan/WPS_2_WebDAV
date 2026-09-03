@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # the application checkout so upgrades cannot overwrite them.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-2abd48e264cb3bf4a095e12a10aa72d374afe261}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-c748fcff3dafb6e85eea68ad3b98c3c3d1e35d78}"
 SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-d1a2226de011e87989433d99d0ca8110169d3efaf53ccb3851263cff04e1f9c8}"
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
