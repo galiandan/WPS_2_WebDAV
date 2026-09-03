@@ -1,5 +1,7 @@
 # VPS 部署
 
+当前 VPS `<vps-host>:54321` 已运行 `0.2.0`。本页保留可重复执行的安装/升级步骤；重复部署前先备份 systemd 单元和非秘密配置，并且不要覆盖 `/etc/wps-adapter/secrets/`。
+
 程序只用 Python 标准库，不需要 Docker 或额外 Python 包。下面以 Debian/Ubuntu 风格系统和 `/opt/wps-adapter` 为例；命令中的路径可以按实际目录调整。
 
 ## 1. 准备目录和代码
@@ -28,6 +30,8 @@ sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-p
 把值输入这些文件时不要放进 shell 历史，也不要发到聊天或 Git。Cookie 过期后只替换 `wps-cookie` 和 `wps-csrf` 文件，服务会在下一次请求读取新值，并在上游 `401` 时自动重试一次；程序不会自行猜测 WPS 登录/刷新接口。
 
 如果以后根据本人账号的新抓包实现了一个本地刷新助手，可以把它的绝对路径写入 `WPS_CREDENTIAL_REFRESH_COMMAND`。服务只会在上游 `401` 时调用一次该命令，标准输出和错误输出会被丢弃；命令必须由 root 管理，并以临时文件加重命名的方式原子替换两个 secret。当前没有默认刷新命令，所以不会自动登录、绕过 SSO 或处理验证码。
+
+service 单元对 `/etc/wps-adapter/secrets` 保留了写权限，专门用于上述 root 管理的刷新助手原子替换凭据；如果未配置刷新助手，适配器本身不会主动写入这些文件。
 
 ## 3. 配置非秘密环境变量
 

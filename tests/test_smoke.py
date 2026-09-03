@@ -11,7 +11,13 @@ from tempfile import TemporaryDirectory
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, urlsplit
 
-from wps_adapter.client import FileCredentialSource, WpsClientConfig, WpsCredentials, WpsDriveClient
+from wps_adapter.client import (
+    FileCredentialSource,
+    WpsApiError,
+    WpsClientConfig,
+    WpsCredentials,
+    WpsDriveClient,
+)
 from wps_adapter.har import REDACTED, redact_har, safe_entry_details, safe_url_shape, summarize_har
 from wps_adapter.provider import InsufficientStorageError, RemoteEntry
 
@@ -235,6 +241,23 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(stream.http_status, 206)
             self.assertEqual(stream.content_range, "bytes 6-10/11")
         self.assertEqual(opener.requests[1][0].get_header("Range"), "bytes=6-10")
+
+    def test_range_download_rejects_mismatched_content_range(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(b'{"download_url":"https://object.example/signed"}'),
+            FakeResponse(
+                b"wrong",
+                {"Content-Length": "5", "Content-Range": "bytes 0-4/11"},
+                status=206,
+            ),
+        ])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        with self.assertRaises(WpsApiError):
+            client.open_download("file-1", offset=6, length=5)
 
     def test_upload_uses_confirmed_control_flow_and_streams_object_body(self) -> None:
         object_connection = FakeHttpsConnection()
@@ -699,6 +722,47 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(
                 source.get(),
                 WpsCredentials(cookie="sid=second", csrf_token="csrf-second"),
+            )
+
+    def test_401_retry_replaces_cookie_and_json_csrf(self) -> None:
+        with TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookie"
+            csrf_path = Path(directory) / "csrf"
+            cookie_path.write_text("sid=first", encoding="utf-8")
+            csrf_path.write_text("csrf-first", encoding="utf-8")
+            source = FileCredentialSource(
+                cookie_path=str(cookie_path),
+                csrf_token_path=str(csrf_path),
+            )
+
+            class RefreshingOpener:
+                def __init__(self) -> None:
+                    self.requests = []
+
+                def open(self, request, timeout: float) -> FakeResponse:
+                    self.requests.append((request, timeout))
+                    if len(self.requests) == 1:
+                        cookie_path.write_text("sid=second", encoding="utf-8")
+                        csrf_path.write_text("csrf-second", encoding="utf-8")
+                        raise HTTPError(request.full_url, 401, "expired", {}, BytesIO())
+                    return FakeResponse(
+                        b'{"id":2,"fname":"new-folder","ftype":"folder",'
+                        b'"parentid":1,"fsize":0,"mtime":2,"result":"ok"}'
+                    )
+
+            opener = RefreshingOpener()
+            client = WpsDriveClient(
+                WpsClientConfig(group_id="group-1", credential_source=source),
+                opener=opener,
+            )
+
+            client.create_folder("1", "new-folder")
+
+            retried_request = opener.requests[1][0]
+            self.assertEqual(retried_request.get_header("Cookie"), "sid=second")
+            self.assertEqual(
+                json.loads(retried_request.data.decode("utf-8"))["csrfmiddlewaretoken"],
+                "csrf-second",
             )
 
 

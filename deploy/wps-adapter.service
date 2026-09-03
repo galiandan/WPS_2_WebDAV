@@ -18,7 +18,9 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadOnlyPaths=/etc/wps-adapter/secrets
+# The optional root-managed credential refresh helper atomically replaces
+# these files after a confirmed WPS session refresh.
+ReadWritePaths=/etc/wps-adapter/secrets
 
 [Install]
 WantedBy=multi-user.target

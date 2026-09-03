@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -371,6 +372,23 @@ class WpsDriveClient:
         source = self.config.credential_source
         return source.refresh() if source is not None else False
 
+    @staticmethod
+    def _refresh_json_body(body: bytes | None, csrf_token: str) -> bytes | None:
+        """Replace a stale CSRF field when a request is retried after 401."""
+
+        if not body or not csrf_token:
+            return body
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return body
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("csrfmiddlewaretoken"), str
+        ):
+            return body
+        payload["csrfmiddlewaretoken"] = csrf_token
+        return json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+
     def _url(self, path: str, query: Sequence[tuple[str, str]] = ()) -> str:
         url = self.config.base_url.rstrip("/") + "/" + path.lstrip("/")
         encoded_query = urlencode(query)
@@ -406,6 +424,7 @@ class WpsDriveClient:
                 exc.close()
                 if exc.code == 401 and attempt == 0 and self._refresh_credentials():
                     credentials = self._credentials()
+                    body = self._refresh_json_body(body, credentials.csrf_token)
                     continue
                 raise WpsApiError(path, status=exc.code) from None
             except URLError as exc:
@@ -606,6 +625,27 @@ class WpsDriveClient:
         if parts.query:
             target += "?" + parts.query
         return parts.hostname, parts.port, target
+
+    @staticmethod
+    def _range_response_matches(
+        value: str | None,
+        *,
+        offset: int,
+        length: int | None,
+        content_length: int | None,
+    ) -> bool:
+        if not value or content_length is None or content_length < 0:
+            return False
+        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", value.strip())
+        if match is None:
+            return False
+        start, end = int(match.group(1)), int(match.group(2))
+        total = match.group(3)
+        if start != offset or end < start or end - start + 1 != content_length:
+            return False
+        if length is not None and content_length != length:
+            return False
+        return total == "*" or int(total) > end
 
     def _put_signed_object(self, signed_url: str, source: BinaryIO, size: int) -> tuple[str | None, str | None]:
         host, port, target = self._signed_target(signed_url, "resolve object upload URL")
@@ -1351,6 +1391,14 @@ class WpsDriveClient:
             except (TypeError, ValueError):
                 pass
         content_range = headers.get("Content-Range") if headers is not None else None
+        if range_requested and not self._range_response_matches(
+            content_range,
+            offset=offset,
+            length=length,
+            content_length=content_length,
+        ):
+            response.close()
+            raise WpsApiError("range response metadata was not honored", status=response_status)
         status = payload.get("status") if isinstance(payload.get("status"), str) else None
         return DownloadStream(
             response,

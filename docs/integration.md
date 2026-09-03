@@ -1,6 +1,6 @@
 # WPS Adapter 对接文档
 
-本文记录当前适配器的对接方式和明天的部署验证步骤。文档不包含 Basic Auth 密码、WPS Cookie、CSRF、refresh token 或对象存储签名 URL。
+本文记录当前适配器的对接方式、线上部署状态和后续验收事项。文档不包含 Basic Auth 密码、WPS Cookie、CSRF、refresh token 或对象存储签名 URL。
 
 ## 1. 当前状态
 
@@ -8,6 +8,7 @@
 | --- | --- |
 | VPS 地址 | `<vps-host>` |
 | 对外端口 | `54321` |
+| 线上版本 | `0.2.0` |
 | 网页入口 | `http://<vps-host>:54321/` |
 | WebDAV 入口 | `http://<vps-host>:54321/dav/` |
 | REST 入口 | `http://<vps-host>:54321/api/v1/` |
@@ -16,9 +17,9 @@
 | WPS 企业空间 | 已配置为本人的测试空间和测试目录 |
 | 5005 端口 | 已停用，不再使用 |
 
-今天新增的本地代码尚未同步到 VPS。VPS 线上服务仍以今天开始前的版本为准；明天部署完成后，下面标为“新版本”的能力才会在线生效。
+2026-09-03 已将本地 `0.2.0` 部署到 VPS，并安装低内存传输保护的 systemd drop-in。线上 `/healthz` 已确认返回 `0.2.0`；当前只有 54321 监听，5005 没有监听。业务读写、Range、COPY、LOCK 和 100 MiB 分片上传仍需要使用本人适配器账号进行一次完整验收，不能用未认证的健康检查代替。
 
-本地代码已通过 42 项标准库测试：
+本地代码已通过 44 项标准库测试：
 
 ```bash
 cd <project-dir>
@@ -215,20 +216,23 @@ Lock-Token: <opaquelocktoken:由服务返回的令牌>
 
 因此，“自动读新 Cookie 和恢复请求”已经具备；“适配器自己完成 WPS 登录并取得新会话”仍待新的真实抓包，不能宣称已经解决。
 
-## 9. 明天部署顺序
+## 9. 本次部署记录
 
-今天不执行以下操作，明天按顺序执行：
+已完成：
 
-1. 备份当前 VPS 服务状态和配置文件路径，不读取或打印 secret 内容。
-2. 把本地 `src/`、`pyproject.toml` 和 `deploy/` 同步到 `/opt/wps-adapter`。
-3. 安装 `deploy/wps-adapter-hardening.conf` 和 `deploy/wps-adapter-hardening.env` 到 `/etc/systemd/system/wps-adapter.service.d/` 与 `/etc/wps-adapter/`。
-4. 运行 `PYTHONPATH=src python3 -m wps_adapter check-config`。
-5. `systemctl daemon-reload` 后重启 `wps-adapter.service`。
-6. 先检查本机 `/healthz`，再从外部检查 54321。
-7. 用中性测试文件验证列表、上传、下载、Range、COPY、LOCK/UNLOCK 和 100 MiB 分片上传。
-8. 验证失败后先看 `journalctl -u wps-adapter` 的错误摘要；日志不应出现 Cookie、CSRF、完整 URL 或文件内容。
+1. VPS 旧服务单元和环境配置已备份到 root 管理的回退目录；没有读取或打印 secret 内容。
+2. `src/`、`pyproject.toml`、`deploy/` 和文档已同步到 `/opt/wps-adapter`。
+3. `wps-adapter-hardening.conf` 已安装为 `/etc/systemd/system/wps-adapter.service.d/override.conf`；硬化参数文件已安装为 `/etc/wps-adapter/wps-adapter-hardening.env`。
+4. `check-config` 和远端 44 项标准库测试通过；本地共 44 项通过。
+5. `systemctl daemon-reload`、重启和 `/healthz` 检查通过，线上版本为 `0.2.0`。
+6. 未认证访问 WebDAV/REST 会返回 `401`；5005 没有监听。
 
-## 10. 明天的验收清单
+待完成：
+
+1. 使用本人适配器账号验证列表、上传、下载、Range、COPY、LOCK/UNLOCK 和 100 MiB 分片上传。
+2. 验证失败后查看 `journalctl -u wps-adapter` 的错误摘要；日志不应出现 Cookie、CSRF、完整 URL 或文件内容。
+
+## 10. 后续验收清单
 
 建议所有测试文件都使用统一前缀，例如 `adapter-next-YYYYMMDD-*`，避免误操作已有资料：
 

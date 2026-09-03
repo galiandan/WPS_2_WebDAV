@@ -66,7 +66,7 @@ REST:   http://127.0.0.1:54321/api/v1/
 健康检查: http://127.0.0.1:54321/healthz
 ```
 
-详细接口、VPS 安装和明天的验收步骤见 [docs/api.md](docs/api.md)、[docs/deployment.md](docs/deployment.md) 和 [docs/integration.md](docs/integration.md)。
+详细接口、VPS 安装和后续验收步骤见 [docs/api.md](docs/api.md)、[docs/deployment.md](docs/deployment.md) 和 [docs/integration.md](docs/integration.md)。
 
 ## 目录
 

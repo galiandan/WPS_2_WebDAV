@@ -789,7 +789,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
 
     def _do_propfind(self, path: str) -> None:
         self._discard_body()
-        depth = self.headers.get("Depth", "1").lower()
+        depth = self.headers.get("Depth", "1").strip().lower()
         if depth not in {"0", "1", "infinity"}:
             self._send_error(HTTPStatus.BAD_REQUEST, "Depth must be 0, 1 or infinity")
             return
