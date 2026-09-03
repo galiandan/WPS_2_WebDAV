@@ -138,6 +138,7 @@ def _prompt_port(label: str, default: int) -> int:
 
 
 def _prompt_login_target() -> _LoginTarget:
+    print("提示：[] 里面的是默认选项，直接按回车即可使用。")
     host = input("VPS 地址/IP或域名: ").strip()
     if not host or any(char.isspace() for char in host):
         raise LoginError("VPS 地址不能为空且不能包含空格")
