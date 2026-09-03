@@ -4,6 +4,7 @@ import argparse
 import getpass
 import os
 import sys
+from dataclasses import dataclass
 
 from . import __version__
 from .client import WpsClientConfig, WpsDriveClient
@@ -96,6 +97,12 @@ def _parser() -> argparse.ArgumentParser:
         help="remote SSH target, for example root@203.0.113.10",
     )
     login.add_argument("--ssh-identity", default=None)
+    login.add_argument("--ssh-port", type=int, default=_env_int("WPS_ADAPTER_SSH_PORT", 22))
+    login.add_argument(
+        "--ssh-password-auth",
+        action="store_true",
+        help="force password/keyboard-interactive SSH authentication",
+    )
     login.add_argument("--ssh-cookie-path", default=DEFAULT_REMOTE_COOKIE_PATH)
     login.add_argument("--ssh-csrf-path", default=DEFAULT_REMOTE_CSRF_PATH)
     login.add_argument("--ssh-timeout", type=float, default=30.0)
@@ -105,6 +112,71 @@ def _parser() -> argparse.ArgumentParser:
         help="write wps-cookie and wps-csrf to this local absolute directory",
     )
     return parser
+
+
+@dataclass(frozen=True, slots=True)
+class _LoginTarget:
+    adapter_url: str = ""
+    adapter_user: str = ""
+    ssh_target: str = ""
+    ssh_identity: str | None = None
+    ssh_port: int = 22
+    ssh_password_auth: bool = False
+
+
+def _prompt_port(label: str, default: int) -> int:
+    while True:
+        value = input(f"{label} [{default}]: ").strip() or str(default)
+        try:
+            port = int(value)
+        except ValueError:
+            print("端口必须是数字，请重新输入。")
+            continue
+        if 1 <= port <= 65535:
+            return port
+        print("端口必须在 1 到 65535 之间，请重新输入。")
+
+
+def _prompt_login_target() -> _LoginTarget:
+    host = input("VPS 地址/IP或域名: ").strip()
+    if not host or any(char.isspace() for char in host):
+        raise LoginError("VPS 地址不能为空且不能包含空格")
+    print("选择连接方式：")
+    print("  1) SSH 私钥")
+    print("  2) SSH 密码")
+    print("  3) HTTPS 适配器接口")
+    while True:
+        choice = input("连接方式 [1]: ").strip() or "1"
+        if choice in {"1", "2", "3"}:
+            break
+        print("请输入 1、2 或 3。")
+
+    if choice in {"1", "2"}:
+        user = input("SSH 用户名 [root]: ").strip() or "root"
+        if not user or any(char.isspace() or char in "@/\\" for char in user):
+            raise LoginError("SSH 用户名格式不正确")
+        port = _prompt_port("SSH 端口", 22)
+        if choice == "2":
+            print("WPS 登录完成后，系统 ssh 会在传输凭据时询问 SSH 密码。")
+            return _LoginTarget(
+                ssh_target=f"{user}@{host}",
+                ssh_port=port,
+                ssh_password_auth=True,
+            )
+        identity = input("SSH 私钥路径 [~/.ssh/id_ed25519]: ").strip()
+        identity = identity or "~/.ssh/id_ed25519"
+        return _LoginTarget(
+            ssh_target=f"{user}@{host}",
+            ssh_identity=os.path.expanduser(identity),
+            ssh_port=port,
+        )
+
+    host_for_url = host
+    if ":" in host and not host.startswith("["):
+        host_for_url = f"[{host}]"
+    default_url = f"https://{host_for_url}:54321"
+    adapter_url = input(f"适配器 HTTPS 地址 [{default_url}]: ").strip() or default_url
+    return _LoginTarget(adapter_url=adapter_url)
 
 
 def _check_public_bind(bind: str, auth: BasicAuth) -> None:
@@ -119,12 +191,20 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "login":
         try:
-            adapter_url = args.adapter_url
-            if not adapter_url and not args.ssh_target and args.output_dir is None:
-                adapter_url = input("适配器 HTTPS 地址（例如 https://drive.example.com）: ").strip()
-                if not adapter_url:
-                    raise LoginError("适配器地址不能为空")
-            adapter_user = args.adapter_user
+            interactive_target = (
+                _prompt_login_target()
+                if not args.adapter_url and not args.ssh_target and args.output_dir is None
+                else _LoginTarget(
+                    adapter_url=args.adapter_url,
+                    adapter_user=args.adapter_user,
+                    ssh_target=args.ssh_target,
+                    ssh_identity=args.ssh_identity,
+                    ssh_port=args.ssh_port,
+                    ssh_password_auth=args.ssh_password_auth,
+                )
+            )
+            adapter_url = interactive_target.adapter_url
+            adapter_user = interactive_target.adapter_user
             adapter_password: str | None = None
             if adapter_url:
                 if not adapter_user:
@@ -135,10 +215,12 @@ def main(argv: list[str] | None = None) -> int:
                 browser=args.browser,
                 domain_suffix=args.domain_suffix,
                 wait_timeout=args.wait_timeout,
-                ssh_target=args.ssh_target,
+                ssh_target=interactive_target.ssh_target,
                 ssh_cookie_path=args.ssh_cookie_path,
                 ssh_csrf_path=args.ssh_csrf_path,
-                ssh_identity=args.ssh_identity,
+                ssh_identity=interactive_target.ssh_identity,
+                ssh_port=interactive_target.ssh_port,
+                ssh_password_auth=interactive_target.ssh_password_auth,
                 output_dir=args.output_dir,
                 ssh_timeout=args.ssh_timeout,
                 adapter_url=adapter_url,

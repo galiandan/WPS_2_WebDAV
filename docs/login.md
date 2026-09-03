@@ -7,18 +7,25 @@
 - Python `3.11+`。
 - Chrome 或 Chromium。
 - 已下载本仓库源码。
+- 选择 SSH 连接方式时，还需要系统自带的 `ssh` 命令；选择 HTTPS 时不需要 SSH。
 
 HTTPS 直接同步不需要 SSH。公网适配器必须有 HTTPS 反向代理；登录助手会拒绝把 Cookie 发到远程明文 HTTP。当前只有本机回环地址允许 HTTP 测试。
 
-## Recommended flow: direct HTTPS sync
+## Interactive flow
 
-在项目目录运行：
+在项目目录直接运行：
 
 ```bash
 python3 wps_login.py
 ```
 
-脚本会依次询问适配器 HTTPS 地址、适配器用户名和适配器密码（密码不会显示）。也可以把地址和用户名直接作为参数：
+脚本会依次询问 VPS 地址、连接方式和连接信息。连接方式有三种：
+
+1. SSH 私钥：输入 SSH 用户名、端口和私钥路径。
+2. SSH 密码：输入 SSH 用户名和端口；登录完成后由系统 `ssh` 提示密码。
+3. HTTPS：输入适配器 HTTPS 地址、Basic Auth 用户名和隐藏输入的密码。
+
+也可以把 HTTPS 地址和用户名直接作为参数：
 
 ```bash
 python3 wps_login.py \

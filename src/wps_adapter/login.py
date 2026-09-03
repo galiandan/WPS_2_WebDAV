@@ -256,12 +256,18 @@ def push_credentials_over_ssh(
     cookie_path: str = DEFAULT_REMOTE_COOKIE_PATH,
     csrf_path: str = DEFAULT_REMOTE_CSRF_PATH,
     identity_file: str | None = None,
+    port: int = 22,
+    password_auth: bool = False,
     timeout: float = 30.0,
 ) -> None:
     """Atomically replace the remote secret files through an SSH stdin pipe."""
 
     if not ssh_target or any(char in ssh_target for char in "\r\n\x00"):
         raise LoginError("SSH 目标不能为空且不能包含换行")
+    if any(char.isspace() for char in ssh_target):
+        raise LoginError("SSH 目标不能包含空格")
+    if not 1 <= port <= 65535:
+        raise LoginError("SSH 端口必须在 1 到 65535 之间")
     if timeout <= 0:
         raise LoginError("SSH 超时时间必须为正数")
     for path in (cookie_path, csrf_path):
@@ -284,14 +290,25 @@ def push_credentials_over_ssh(
     )
     command = ["ssh", "-F", "/dev/null"]
     if identity_file:
-        command.extend(["-i", identity_file])
-    command.extend([ssh_target, remote_command])
+        command.extend(["-i", os.path.expanduser(identity_file)])
+    if password_auth:
+        command.extend(
+            [
+                "-o",
+                "PubkeyAuthentication=no",
+                "-o",
+                "PreferredAuthentications=password,keyboard-interactive",
+            ]
+        )
+    if port != 22:
+        command.extend(["-p", str(port)])
+    command.extend(["--", ssh_target, remote_command])
     try:
         completed = subprocess.run(
             command,
             input=payload,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=None if password_auth else subprocess.PIPE,
             timeout=timeout,
             check=False,
         )
@@ -301,7 +318,7 @@ def push_credentials_over_ssh(
         raise LoginError("SSH 同步凭据超时") from exc
     if completed.returncode != 0:
         raise LoginError(
-            "SSH 同步凭据失败；请先手动确认 SSH 主机指纹和登录权限，再重试"
+            "SSH 同步凭据失败；请确认主机、端口、用户名和登录方式后重试"
         )
 
 
@@ -785,6 +802,8 @@ def login_and_sync(
     ssh_cookie_path: str = DEFAULT_REMOTE_COOKIE_PATH,
     ssh_csrf_path: str = DEFAULT_REMOTE_CSRF_PATH,
     ssh_identity: str | None = None,
+    ssh_port: int = 22,
+    ssh_password_auth: bool = False,
     output_dir: str | None = None,
     ssh_timeout: float = 30.0,
     adapter_url: str = "",
@@ -830,6 +849,8 @@ def login_and_sync(
             cookie_path=ssh_cookie_path,
             csrf_path=ssh_csrf_path,
             identity_file=ssh_identity,
+            port=ssh_port,
+            password_auth=ssh_password_auth,
             timeout=ssh_timeout,
         )
         print("已通过 SSH 更新 VPS 凭据，适配器下次请求会读取新会话。", flush=True)

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from wps_adapter.client import WpsCredentials
+from wps_adapter.__main__ import _prompt_login_target
 from wps_adapter.login import (
     LoginError,
     credentials_from_cookies,
@@ -81,6 +82,24 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(payload["cookie"], credentials.cookie)
         self.assertEqual(payload["csrf"], credentials.csrf_token)
         self.assertEqual(command[:4], ["ssh", "-F", "/dev/null", "-i"])
+
+    def test_ssh_password_auth_uses_native_ssh_prompt(self) -> None:
+        credentials = WpsCredentials(cookie="rtk=refresh-secret", csrf_token="csrf-secret")
+        with patch("wps_adapter.login.subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0)
+            push_credentials_over_ssh(
+                credentials,
+                ssh_target="root@vps-host",
+                password_auth=True,
+                port=2222,
+            )
+
+        command = run.call_args.args[0]
+        self.assertIn("-p", command)
+        self.assertEqual(command[command.index("-p") + 1], "2222")
+        self.assertIn("PubkeyAuthentication=no", command)
+        self.assertIn("PreferredAuthentications=password,keyboard-interactive", command)
+        self.assertIsNone(run.call_args.kwargs["stderr"])
 
     def test_https_push_uses_basic_auth_and_fixed_path(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh; csrf=csrf", csrf_token="csrf")
@@ -163,6 +182,18 @@ class LoginHelperTests(unittest.TestCase):
             with self.assertRaisesRegex(LoginError, "绝对路径"):
                 login_and_sync(output_dir="relative")
         session.assert_not_called()
+
+    def test_interactive_target_supports_ssh_password_login(self) -> None:
+        with patch(
+            "builtins.input",
+            side_effect=["vps.example", "2", "deploy", "2222"],
+        ):
+            target = _prompt_login_target()
+
+        self.assertEqual(target.ssh_target, "deploy@vps.example")
+        self.assertEqual(target.ssh_port, 2222)
+        self.assertTrue(target.ssh_password_auth)
+        self.assertIsNone(target.ssh_identity)
 
 
 if __name__ == "__main__":

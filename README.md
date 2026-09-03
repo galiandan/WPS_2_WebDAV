@@ -6,7 +6,7 @@
 WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 ```
 
-> 当前版本为 `0.5.0` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
+> 当前版本为 `0.5.1` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
 
 ## Features
 
@@ -16,7 +16,7 @@ WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 - 普通上传、覆盖更新和基于已观察 WPS 流程的大文件分片上传。
 - 适配器层的递归 `PROPFIND`、`COPY` 和短期写锁兼容能力。
 - Cookie/CSRF 文件动态读取；上游 `401` 时按已确认的 WPS SDK `grant_token` 流程尝试续期。
-- Python 登录助手：在官方 WPS 页面登录后，可通过 HTTPS 直接同步到 VPS；SSH 和本地文件输出仍可作为备用。
+- Python 登录助手：先询问 VPS 地址和连接方式，再在官方 WPS 页面登录并自动同步；支持 HTTPS、SSH 密钥、SSH 密码和本地文件输出。
 - 仅依赖 Python 标准库；不需要 Docker、Playwright 或浏览器插件。
 - 同源浏览器文件管理页面，入口为服务根路径 `/`。
 
@@ -33,6 +33,7 @@ WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 - Python `3.11+`。
 - 运行服务只需要 Python 标准库。
 - 使用登录助手时，需要本机已有 Chrome/Chromium 和 Python `3.11+`；HTTPS 直接同步不需要 SSH。
+- 选择 SSH 登录方式时，需要系统自带的 `ssh` 命令；选择 HTTPS 时不需要 SSH。
 - WPS 企业云盘账号需要已经能在官方网页端正常登录和操作目标文件。
 
 ## Quick start
@@ -88,13 +89,13 @@ Health:     http://127.0.0.1:54321/healthz
 
 适配器网页不能读取另一个域名的 HttpOnly Cookie，所以登录助手必须在账号所有者自己的电脑上运行。它会打开一个临时隔离的 Chrome 窗口；你只在官方 WPS 页面登录，脚本会自动检测到登录完成。
 
-公网直接同步需要已经配置 HTTPS 的适配器地址。脚本会提示输入适配器 Basic Auth 密码，密码不会显示，也不会写入命令行参数：
+登录助手支持 SSH 密钥、SSH 密码和 HTTPS 三种连接方式。直接运行向导即可；公网 HTTPS 同步需要已经配置 HTTPS 的适配器地址。所有密码都不会显示，也不会写入命令行参数：
 
 ```bash
 python3 wps_login.py
 ```
 
-脚本会依次询问适配器 HTTPS 地址、适配器用户名和隐藏输入的适配器密码。也可以把地址和用户名作为参数：
+脚本会先询问 VPS 地址和连接方式。选择 HTTPS 时，再询问适配器用户名和隐藏输入的适配器密码；选择 SSH 密码时，系统 `ssh` 会在传输凭据时自己提示密码。也可以把地址和连接参数作为命令行参数：
 
 ```bash
 python3 wps_login.py \
@@ -112,7 +113,15 @@ python3 wps_login.py \
   --ssh-identity ~/.ssh/id_ed25519
 ```
 
-两种方式都不需要手动复制 Cookie，也不需要回到终端按回车。服务器保存的 `rtk` 会在上游会话过期时按已确认流程自动续期；只有 WPS 撤销刷新票据或要求重新登录时才需要再次运行助手。
+SSH 密码登录方式：
+
+```bash
+python3 wps_login.py \
+  --ssh-target root@your-vps-host \
+  --ssh-password-auth
+```
+
+所有方式都不需要手动复制 Cookie，也不需要回到终端按回车。服务器保存的 `rtk` 会在上游会话过期时按已确认流程自动续期；只有 WPS 撤销刷新票据或要求重新登录时才需要再次运行助手。
 
 ### 5. Try the API
 
