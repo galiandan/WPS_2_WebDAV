@@ -25,7 +25,28 @@ from wps_adapter.login import (
 )
 
 
+PROJECT_ROOT = Path(__file__).parents[1]
+
+
 class LoginHelperTests(unittest.TestCase):
+    def test_standalone_helper_runs_without_the_project_checkout(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        with TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [sys.executable, str(PROJECT_ROOT / "wps_login.py"), "--help"],
+                cwd=directory,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--adapter-url", completed.stdout)
+        self.assertIn("--allow-http", completed.stdout)
+
     def test_cookie_snapshot_keeps_wps_refresh_cookie_and_filters_other_domains(self) -> None:
         credentials, names = credentials_from_cookies(
             [

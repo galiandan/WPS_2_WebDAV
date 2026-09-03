@@ -2,12 +2,26 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+import subprocess
+import sys
 
 
 PROJECT_ROOT = Path(__file__).parents[1]
 
 
 class InstallerTemplateTests(unittest.TestCase):
+    def test_standalone_login_script_matches_its_builder(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "tools/build_login_script.py", "--check"],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_docker_installer_builds_the_deploy_dockerfile(self) -> None:
         script = (PROJECT_ROOT / "scripts/install-docker.sh").read_text(encoding="utf-8")
 

@@ -6,6 +6,7 @@
 
 ### Changed
 
+- `wps_login.py` 现在是可独立下载运行的单文件登录助手，获取 Cookie 不再需要 clone 整个项目。
 - HTTP/HTTPS 登录同步均可用；远程 HTTP 默认要求确认或 `--allow-http`。
 - Native 和 Docker 安装器默认使用执行 `sudo` 的当前用户，并统一保护凭证文件权限。
 - Docker 安装器从正确的 `deploy/Dockerfile` 构建，切换前完成构建，失败时尝试恢复原服务/容器。

@@ -130,11 +130,11 @@ REST：   http://<VPS-IP>:54321/api/v1/
 
 安装器只负责部署服务，不会替你登录 WPS。登录助手必须在你自己的电脑上运行，因为 WPS 登录 Cookie 不能由适配器网页跨域读取。
 
-先获取源码：
+登录助手是一个独立的单文件脚本，不需要 clone 整个项目。直接下载这一个文件：
 
 ```bash
-git clone https://github.com/galiandan/WPS_2_WebDAV.git
-cd WPS_2_WebDAV
+curl -fsSLo wps_login.py \
+  https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py
 ```
 
 然后运行向导：
@@ -142,6 +142,8 @@ cd WPS_2_WebDAV
 ```bash
 python3 wps_login.py
 ```
+
+如果你已经 clone 了项目，也可以直接运行仓库根目录中的同名文件。登录助手只依赖本机 Python 和 Chrome/Chromium，不需要安装项目本身。
 
 向导会依次询问 VPS 地址和连接方式。共有三种方式：
 

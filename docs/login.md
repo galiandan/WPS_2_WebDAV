@@ -2,22 +2,29 @@
 
 登录助手只在账号所有者自己的电脑上运行。它不会读取日常浏览器配置，不会处理 WPS 密码，也不需要在 VPS 上安装 Chrome、Playwright 或图形界面。
 
+登录助手已经打包成一个独立的 `wps_login.py` 文件，不需要为了获取 Cookie 而 clone 整个项目。
+
 ## Requirements
 
 - Python `3.11+`。
 - Chrome 或 Chromium。
-- 已下载本仓库源码。
+- 一个独立的 `wps_login.py` 文件。
 - 选择 SSH 连接方式时，还需要系统自带的 `ssh` 命令；选择 HTTP/HTTPS 时不需要 SSH。
 
 HTTP/HTTPS 直接同步不需要 SSH。远程 HTTPS 是推荐方式；没有域名或证书时，远程 HTTP 也可以使用，但必须在向导中确认风险，或在命令行加 `--allow-http`。HTTP 会明文传输 Cookie、Basic Auth 和文件请求。
 
 ## Interactive flow
 
-在项目目录直接运行：
+直接下载并运行单文件助手：
 
 ```bash
+curl -fsSLo wps_login.py \
+  https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py
+
 python3 wps_login.py
 ```
+
+如果已经 clone 了项目，也可以直接运行仓库根目录中的 `wps_login.py`。若仓库是 Private，GitHub Raw 地址需要相应访问权限。
 
 脚本会依次询问 VPS 地址、连接方式和连接信息。连接方式有三种：
 

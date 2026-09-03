@@ -313,4 +313,4 @@ printf 'WebDAV： http://<VPS地址>:%s/dav/\n' "$PORT"
 printf '网页：   http://<VPS地址>:%s/\n' "$PORT"
 printf '运行用户：%s\n' "$RUN_USER"
 printf '凭据目录：%s（不会被升级覆盖）\n' "$SECRET_DIR"
-printf '下一步：在自己的电脑运行仓库中的 python3 wps_login.py 完成 WPS 登录。\n'
+printf '下一步：在自己的电脑下载并运行独立的 wps_login.py 完成 WPS 登录。\n'
