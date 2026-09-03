@@ -16,21 +16,21 @@
 - 远端路径到 WPS 文件夹 ID 的解析，以及带 TTL 的元数据缓存。
 - `/healthz`、适配器 Basic Auth 和 systemd 单元模板。
 
-上传代码仍属于实验性实现：普通上传、覆盖更新和大文件分片均已有真实回放；大文件分片已在 VPS 上用本人账号的 100 MiB 专用测试文件完成上传和下载校验。失败续传、分片覆盖和 CSRF 生命周期仍待确认。
+上传代码仍属于实验性实现：普通上传、覆盖更新和大文件分片均已有真实回放；大文件分片已在 VPS 上用本人账号的 100 MiB 专用测试文件完成上传和下载校验。失败续传、分片覆盖和 WPS 刷新成功响应的真实账号验收仍待完成。
 
 ## 代码入口
 
 核心类位于 `src/wps_adapter/client.py`：
 
-- `WpsClientConfig` 保存基础地址、企业空间 ID、可选 Referer/Origin、`cid` 和 Cookie/CSRF 来源。
-- Cookie 和 CSRF 可以直接从环境变量读取，也可以从本机文件动态读取；文件更新后下一次请求会使用新值。
+- `WpsClientConfig` 保存基础地址、账号刷新地址、企业空间 ID、可选 Referer/Origin、`cid` 和 Cookie/CSRF 来源。
+- Cookie 和 CSRF 可以直接从环境变量读取，也可以从本机文件动态读取；文件更新后下一次请求会使用新值。文件来源默认开启 WPS SDK `grant_token` 续期，并原子保存响应中的 Set-Cookie。
 - `WpsDriveClient.list_entries()` 返回 `ListPage`，不会把完整响应原文放入 `RemoteEntry.raw`。
 - `WpsDriveClient.open_download()` 先调用 WPS API，再访问返回的签名地址；Cookie 只发给 WPS API，不转发给对象存储。
 - `WpsDriveClient.download_to()` 按块写入调用方提供的二进制文件对象，不把整文件读入内存。
 
 ## 凭据原则
 
-Cookie 和 CSRF 值只能在运行适配器的本机/VPS secret store 中提供，不能写入仓库、命令行参数、日志或 HAR。当前不建议把浏览器 Cookie 长期部署到 VPS；Token 刷新和重新登录机制还未确认。
+Cookie 和 CSRF 值只能在运行适配器的本机/VPS secret store 中提供，不能写入仓库、命令行参数、日志或 HAR。首次部署需要完整浏览器 Cookie（包括 `rtk`）；适配器可以自动续期 WPS 会话，但不负责交互式登录、SSO 或验证码。
 
 调用 `WpsDriveClient` 的列表、下载、上传、创建目录、删除、重命名和移动方法才会访问网络；`python -m wps_adapter check-config` 不访问网络。测试使用本地假响应和回环 HTTP 服务。
 
@@ -79,4 +79,4 @@ python3 tools/wps_probe.py download --group-id <own-group-id> --file-id <own-fil
 
 ## 未覆盖能力
 
-快速上传成功路径、跨目录同时改名和真正的 Token 刷新仍未确认。大文件分片流程已观察并由适配器在 VPS 上回放成功；适配器现在会对普通上传和单个分片做有限重试，失败后重新获取签名地址。进程退出后的任意续传、取消/清理和分片覆盖仍待验证。WebDAV 的 COPY、锁、递归 PROPFIND、单范围下载和并发/磁盘保护已在适配器层实现；COPY 不代表 WPS 有服务端 COPY API。上游 `401` 会返回适配器 `503` 并带 `upstream_status`，服务只支持动态读取替换后的凭据，以及可选的管理员本地刷新助手，不会自动登录或调用未知刷新接口。
+快速上传成功路径、跨目录同时改名和进程退出后的分片续传仍未确认。大文件分片流程已观察并由适配器在 VPS 上回放成功；适配器现在会对普通上传和单个分片做有限重试，失败后重新获取签名地址。进程退出后的取消/清理和分片覆盖仍待验证。WebDAV 的 COPY、锁、递归 PROPFIND、单范围下载和并发/磁盘保护已在适配器层实现；COPY 不代表 WPS 有服务端 COPY API。上游 `401` 会先尝试 WPS SDK 的 `grant_token` 刷新并持久化轮换 Cookie；如果 `rtk` 缺失或已撤销，仍返回适配器 `503`。适配器不会自动执行交互式登录、SSO 或验证码。

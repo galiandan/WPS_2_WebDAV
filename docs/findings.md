@@ -125,7 +125,9 @@ query:
 | 会话位置 | L-01 请求通过 Cookie 携带会话上下文 | observed | 只记录字段名，不记录值；原始值已按安全要求作废 |
 | Authorization 头 | L-01 中未观察到 | observed | 不能据此推断写请求也不需要其他认证头 |
 | CSRF | 名为 `csrf` 的 Cookie 存在 | observed | 写请求是否需要对应 header/body 字段待验证 |
-| 刷新方式 | 未知 | - | - |
+| 刷新方式 | WPS 账号 SDK 使用 `POST /passport/secure/api/grant_token`，JSON 体为 `{"grant_type":"refresh_token"}` | observed | 公开 SDK 脚本中的请求形状；需要 `rtk` Cookie；本人的成功响应值不记录 |
+| 刷新票据 Cookie | 本机 Chrome Cookie 元数据显示 `rtk` 位于 `.kdocs.cn`、路径 `/passport/secure`，HttpOnly 且为持久 Cookie | observed | 只记录名称和属性，不记录值；普通云盘 API 请求可能不会携带此 Cookie |
+| 会话轮换 | WPS SDK 续期后依赖浏览器 Cookie 更新；适配器已持久化 WPS 响应中的 `Set-Cookie` | inferred + local prototype | 现有业务 HAR 未保留 `Set-Cookie` 值；仍需本人账号一次真实续期验收 |
 | 失败表现 | 未知 | - | - |
 
 ## 目录与对象模型
@@ -320,7 +322,9 @@ GET /3rd/drive/api/v5/files/batch/task/progress?taskuuid=<taskuuid>
 
 ## A-02 凭据续期边界
 
-目前本人账号的抓包只证明请求使用 Cookie 和写操作使用 CSRF 字段；没有提供可复现的刷新接口、refresh token 或无交互登录流程。因此适配器没有凭空增加 WPS 刷新 URL。当前实现为：每次上游请求重新读取 secret 文件；收到 `401` 时检查文件是否已被替换并重试一次；管理员还可以配置一个 root 管理的本地刷新助手，由该助手按自己的真实抓包流程原子更新文件。没有配置助手时，WPS 会话真正过期仍需要重新建立本人账号会话，服务会返回 `503` 和上游状态 `401`，而不是误报成普通成功或泄漏上游响应。
+本轮从公开的 WPS 账号 SDK `https://ac.wpscdn.cn/account/libs/js/kso-acct-sdk.min.563070dd.js` 中观察到 `checkKsoSid` 在会话 Cookie 条件满足时调用 `POST /passport/secure/api/grant_token`，请求体为 `{"grant_type":"refresh_token"}`；SDK 的账号域名推导规则对 `365.kdocs.cn` 得到 `account.kdocs.cn`。本机 Chrome Cookie 元数据还显示存在路径为 `/passport/secure` 的 HttpOnly 持久 Cookie `rtk`。这些观察只记录字段、路径和属性，不记录任何认证值。
+
+适配器 `0.3.0` 在上游 `401` 时先检查 secret 是否已被管理员替换；否则使用当前完整 Cookie 调用该刷新授权，并将响应 `Set-Cookie` 原子合并回 Cookie 文件，再重试原请求一次。WPS 正常响应中的 Set-Cookie 也会被持久化。没有 `rtk`、刷新票据已撤销或需要交互式登录时，服务返回 `503` 和上游状态 `401`；适配器不处理密码、SSO、验证码或风控。公开 SDK 代码证明了请求形状，但本人的真实续期成功响应仍需在 VPS 上做一次低频验收。
 
 ## 记录规则
 

@@ -8,7 +8,7 @@
 | --- | --- |
 | VPS 地址 | `<vps-host>` |
 | 对外端口 | `54321` |
-| 线上版本 | `0.2.0` |
+| 线上版本 | `0.3.0` |
 | 网页入口 | `http://<vps-host>:54321/` |
 | WebDAV 入口 | `http://<vps-host>:54321/dav/` |
 | REST 入口 | `http://<vps-host>:54321/api/v1/` |
@@ -17,9 +17,9 @@
 | WPS 企业空间 | 已配置为本人的测试空间和测试目录 |
 | 5005 端口 | 已停用，不再使用 |
 
-2026-09-03 已将本地 `0.2.0` 部署到 VPS，并安装低内存传输保护的 systemd drop-in。线上 `/healthz` 已确认返回 `0.2.0`；当前只有 54321 监听，5005 没有监听。业务读写、Range、COPY、LOCK 和 100 MiB 分片上传仍需要使用本人适配器账号进行一次完整验收，不能用未认证的健康检查代替。
+2026-09-03 已将 `0.3.0` 部署到 VPS。该版本增加了 WPS SDK `grant_token` 自动续期和 Set-Cookie 持久化；线上业务读写、Range、COPY、LOCK 和 100 MiB 分片上传仍需要使用本人适配器账号进行一次完整验收，不能用未认证的健康检查代替。
 
-本地代码已通过 44 项标准库测试：
+本地代码已通过 45 项标准库测试：
 
 ```bash
 cd <project-dir>
@@ -203,18 +203,28 @@ Lock-Token: <opaquelocktoken:由服务返回的令牌>
 
 大文件分片上传仍使用本人账号抓包确认的 WPS block/multipart 流程。当前增加的是同一请求内的失败重试：失败分片会重新申请签名地址并从该分片重传。进程退出后的跨请求续传、分片取消和清理接口仍没有被 WPS 抓包确认。
 
-## 8. Cookie、CSRF 和真正的自动续期
+## 8. Cookie、CSRF 和自动续期
 
-当前能确认的事实只有：WPS 网页请求使用 Cookie，会写请求携带 CSRF 字段；没有确认可复现的 refresh token、刷新 URL 或无交互登录流程。
+本轮从 WPS 账号 SDK 的公开脚本中确认了无交互续期请求：
 
-新版本的凭据行为：
+```text
+POST https://account.kdocs.cn/passport/secure/api/grant_token
+Content-Type: application/json
+
+{"grant_type":"refresh_token"}
+```
+
+该请求依赖浏览器的 `rtk` Cookie。浏览器 Cookie 元数据表明 `rtk` 的作用域为 `.kdocs.cn`、路径为 `/passport/secure`、HttpOnly 且为持久 Cookie；因此从普通云盘列表请求复制 Cookie 时可能看不到它，首次初始化必须从本人浏览器 Cookie 存储中补齐完整会话 Cookie。
+
+`0.3.0` 的凭据行为：
 
 1. 每次访问 WPS 前重新读取 `/etc/wps-adapter/secrets/wps-cookie` 和 `/etc/wps-adapter/secrets/wps-csrf`。
-2. 上游返回 `401` 时检查凭据文件是否已经被替换，并自动重试一次。
-3. 可以通过 `WPS_CREDENTIAL_REFRESH_COMMAND` 配置 root 管理的本地刷新助手；该助手必须按照真实抓包得到的流程更新两个文件，适配器不会替它猜测 WPS 登录协议。
-4. 没有刷新助手时，WPS 会话真正过期仍需要在本人浏览器重新登录，再原子替换 secret 文件。
+2. 正常 WPS 响应或刷新响应带 `Set-Cookie` 时，自动按 Cookie 名合并并以临时文件加重命名的方式持久化；`csrf` 同步更新到 CSRF 文件。
+3. 上游返回 `401` 时，先检查凭据文件是否已被手动替换；没有替换时调用上述 `grant_token`，然后用新的 Cookie 和 CSRF 重试原请求一次。
+4. `WPS_AUTO_REFRESH=false` 可关闭自动刷新；`WPS_ACCOUNT_BASE_URL` 可覆盖默认的 `https://account.kdocs.cn`。
+5. 没有 `rtk`、刷新票据已撤销或 WPS 要求交互式登录时，服务返回 `503`；适配器不会自动处理密码、SSO、验证码或风控。
 
-因此，“自动读新 Cookie 和恢复请求”已经具备；“适配器自己完成 WPS 登录并取得新会话”仍待新的真实抓包，不能宣称已经解决。
+这解决的是“已有浏览器会话的无交互续期和服务重启后的 Cookie 持久化”，不等于在 VPS 上实现首次登录。
 
 ## 9. 本次部署记录
 
@@ -223,8 +233,8 @@ Lock-Token: <opaquelocktoken:由服务返回的令牌>
 1. VPS 旧服务单元和环境配置已备份到 root 管理的回退目录；没有读取或打印 secret 内容。
 2. `src/`、`pyproject.toml`、`deploy/` 和文档已同步到 `/opt/wps-adapter`。
 3. `wps-adapter-hardening.conf` 已安装为 `/etc/systemd/system/wps-adapter.service.d/override.conf`；硬化参数文件已安装为 `/etc/wps-adapter/wps-adapter-hardening.env`。
-4. `check-config` 和远端 44 项标准库测试通过；本地共 44 项通过。
-5. `systemctl daemon-reload`、重启和 `/healthz` 检查通过，线上版本为 `0.2.0`。
+4. `check-config` 和远端 45 项标准库测试通过；本地共 45 项通过。
+5. `systemctl daemon-reload`、重启和 `/healthz` 检查通过，线上版本为 `0.3.0`。
 6. 未认证访问 WebDAV/REST 会返回 `401`；5005 没有监听。
 
 待完成：

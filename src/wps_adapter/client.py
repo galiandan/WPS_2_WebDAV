@@ -3,13 +3,15 @@
 The client deliberately keeps the WPS-specific surface small.  Credentials
 can be loaded from files so a long-running adapter can use a newly exported
 session without putting secrets on the command line or in the process
-environment.  No WPS refresh endpoint is assumed: a refresh hook is an
-explicit extension point and otherwise a 401 is returned to the caller.
+environment.  The WPS SDK's refresh-token grant is used after a 401 when a
+file-backed session includes the browser's refresh cookie; interactive login
+and SSO are intentionally outside this client.
 """
 
 from __future__ import annotations
 
 import base64
+import email.utils
 import json
 import os
 import re
@@ -21,8 +23,10 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from hashlib import md5, sha1, sha256
 from http.client import HTTPSConnection
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from typing import Any, BinaryIO, Protocol
 from urllib.error import HTTPError, URLError
@@ -98,16 +102,17 @@ class CredentialSource(Protocol):
 
     def refresh(self) -> bool: ...
 
+    def store_set_cookie_headers(self, headers: Any) -> bool: ...
+
 
 @dataclass(slots=True)
 class FileCredentialSource:
     """Read session values from local files on every request.
 
-    ``refresh`` can optionally invoke a locally configured helper.  The helper
-    is deliberately out of the WPS client: the WPS login/refresh protocol is
-    not assumed, and the helper must update the credential files atomically.
-    With no helper configured, refresh only detects files replaced by the
-    operator while the service is running.
+    ``refresh`` can optionally invoke a locally configured helper, or detect
+    files replaced by the operator while the service is running.  The WPS
+    SDK refresh-token grant is performed by :class:`WpsDriveClient`, which
+    persists any rotated Set-Cookie headers through this source.
     """
 
     cookie_path: str | None = None
@@ -136,6 +141,148 @@ class FileCredentialSource:
         credentials = self._snapshot()
         self._last = credentials
         return credentials
+
+    @staticmethod
+    def _header_values(headers: Any, name: str) -> tuple[str, ...]:
+        if headers is None:
+            return ()
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all(name)
+            if values:
+                if isinstance(values, str):
+                    return (values,)
+                return tuple(str(value) for value in values)
+        if isinstance(headers, Mapping):
+            for key, value in headers.items():
+                if str(key).lower() == name.lower():
+                    if isinstance(value, (list, tuple)):
+                        return tuple(str(item) for item in value)
+                    return (str(value),)
+        getter = getattr(headers, "get", None)
+        if callable(getter):
+            value = getter(name)
+            if value:
+                return (str(value),)
+        return ()
+
+    @staticmethod
+    def _cookie_map(cookie_header: str) -> tuple[dict[str, str], list[str]]:
+        values: dict[str, str] = {}
+        order: list[str] = []
+        for item in cookie_header.split(";"):
+            name, separator, value = item.strip().partition("=")
+            if not separator or not name or any(char in name for char in " \t\r\n"):
+                continue
+            existing = next(
+                (key for key in order if key.casefold() == name.casefold()),
+                None,
+            )
+            if existing is None:
+                order.append(name)
+                existing = name
+            values[existing] = value.strip()
+        return values, order
+
+    @staticmethod
+    def _cookie_expired(morsel: Any) -> bool:
+        max_age = str(morsel["max-age"] or "").strip()
+        if max_age:
+            try:
+                return int(max_age) <= 0
+            except ValueError:
+                pass
+        expires = str(morsel["expires"] or "").strip()
+        if expires:
+            try:
+                expiry = email.utils.parsedate_to_datetime(expires)
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                return expiry <= datetime.now(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return False
+
+    @staticmethod
+    def _write_atomic(path: str, value: str) -> None:
+        target = Path(path)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            dir=str(target.parent),
+            text=True,
+        )
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(value)
+                stream.write("\n")
+            os.replace(temporary, target)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+    def store_set_cookie_headers(self, headers: Any) -> bool:
+        """Persist WPS session-cookie rotation without exposing cookie values."""
+
+        if not self.cookie_path:
+            return False
+        set_cookie_headers = self._header_values(headers, "Set-Cookie")
+        if not set_cookie_headers:
+            return False
+
+        updates: dict[str, str | None] = {}
+        csrf_seen = False
+        csrf_value: str | None = None
+        for header in set_cookie_headers:
+            jar = SimpleCookie()
+            try:
+                jar.load(header)
+            except CookieError:
+                continue
+            for name, morsel in jar.items():
+                expired = self._cookie_expired(morsel)
+                updates[name] = None if expired else morsel.coded_value
+                if name.casefold() == "csrf":
+                    csrf_seen = True
+                    csrf_value = "" if expired else morsel.value
+        if not updates:
+            return False
+
+        with self._refresh_lock:
+            current = self._snapshot()
+            values, order = self._cookie_map(current.cookie)
+            positions = {name.casefold(): name for name in order}
+            for name, value in updates.items():
+                stored_name = positions.get(name.casefold())
+                if stored_name is None:
+                    stored_name = name
+                    positions[name.casefold()] = stored_name
+                    order.append(stored_name)
+                if value is None:
+                    values.pop(stored_name, None)
+                    order = [item for item in order if item != stored_name]
+                    positions.pop(name.casefold(), None)
+                else:
+                    values[stored_name] = value
+            new_cookie = "; ".join(
+                f"{name}={values[name]}" for name in order if name in values
+            )
+            cookie_changed = new_cookie != current.cookie
+            csrf_changed = (
+                csrf_seen
+                and self.csrf_token_path is not None
+                and (csrf_value or "") != current.csrf_token
+            )
+            if not cookie_changed and not csrf_changed:
+                return False
+            if cookie_changed:
+                self._write_atomic(self.cookie_path, new_cookie)
+            if csrf_changed and self.csrf_token_path is not None:
+                self._write_atomic(self.csrf_token_path, csrf_value or "")
+            self._last = self._snapshot()
+            return True
 
     def refresh(self) -> bool:
         with self._refresh_lock:
@@ -172,6 +319,9 @@ class StaticCredentialSource:
     def refresh(self) -> bool:
         return False
 
+    def store_set_cookie_headers(self, _headers: Any) -> bool:
+        return False
+
 
 class WpsApiError(RuntimeError):
     """An API or transport error without echoing response contents."""
@@ -194,6 +344,8 @@ class WpsClientConfig:
     csrf_token_file: str | None = None
     credential_source: CredentialSource | None = field(default=None, repr=False, compare=False)
     base_url: str = "https://365.kdocs.cn"
+    account_base_url: str | None = None
+    auto_refresh: bool = True
     referer: str | None = None
     origin: str | None = None
     cid: str | None = None
@@ -234,6 +386,8 @@ class WpsClientConfig:
                 else None
             ),
             base_url=os.environ.get("WPS_BASE_URL", "https://365.kdocs.cn"),
+            account_base_url=os.environ.get("WPS_ACCOUNT_BASE_URL") or None,
+            auto_refresh=_env_bool("WPS_AUTO_REFRESH", default=True),
             referer=os.environ.get("WPS_REFERER") or None,
             origin=os.environ.get("WPS_ORIGIN") or None,
             cid=os.environ.get("WPS_CID") or None,
@@ -370,7 +524,68 @@ class WpsDriveClient:
 
     def _refresh_credentials(self) -> bool:
         source = self.config.credential_source
-        return source.refresh() if source is not None else False
+        if source is not None and source.refresh():
+            return True
+        if not self.config.auto_refresh:
+            return False
+        return self._refresh_wps_session()
+
+    def _persist_set_cookie_headers(self, headers: Any) -> bool:
+        source = self.config.credential_source
+        if source is None:
+            return False
+        store = getattr(source, "store_set_cookie_headers", None)
+        if not callable(store):
+            return False
+        try:
+            return bool(store(headers))
+        except (OSError, WpsApiError):
+            return False
+
+    def _account_base_url(self) -> str:
+        base_url = self.config.account_base_url
+        if not base_url:
+            hostname = urlsplit(self.config.base_url).hostname
+            labels = hostname.split(".") if hostname else []
+            if len(labels) < 2:
+                raise WpsApiError("resolve account refresh URL")
+            base_url = "https://account." + ".".join(labels[-2:])
+        parts = urlsplit(base_url)
+        if parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment:
+            raise WpsApiError("resolve account refresh URL")
+        return base_url.rstrip("/")
+
+    def _refresh_wps_session(self) -> bool:
+        """Use the WPS SDK refresh-token grant and persist rotated cookies."""
+
+        credentials = self._credentials()
+        if not credentials.cookie:
+            return False
+        request = Request(
+            self._account_base_url() + "/passport/secure/api/grant_token",
+            data=b'{"grant_type":"refresh_token"}',
+            method="POST",
+        )
+        request.add_header("Accept", "application/json")
+        request.add_header("Content-Type", "application/json")
+        request.add_header("Cookie", credentials.cookie)
+        if self.config.referer:
+            request.add_header("Referer", self.config.referer)
+        if self.config.origin:
+            request.add_header("Origin", self.config.origin)
+        try:
+            response = self._opener.open(request, timeout=self.config.timeout)
+        except (HTTPError, URLError):
+            return False
+        try:
+            response_status = getattr(response, "status", 200)
+            if not isinstance(response_status, int) or response_status != 200:
+                return False
+            headers = response.headers
+            response.read()
+        finally:
+            response.close()
+        return self._persist_set_cookie_headers(headers)
 
     @staticmethod
     def _refresh_json_body(body: bytes | None, csrf_token: str) -> bytes | None:
@@ -419,10 +634,14 @@ class WpsDriveClient:
 
             try:
                 response = self._opener.open(request, timeout=self.config.timeout)
+                self._persist_set_cookie_headers(response.headers)
                 break
             except HTTPError as exc:
+                rotated = self._persist_set_cookie_headers(exc.headers)
                 exc.close()
-                if exc.code == 401 and attempt == 0 and self._refresh_credentials():
+                if exc.code == 401 and attempt == 0 and (
+                    rotated or self._refresh_credentials()
+                ):
                     credentials = self._credentials()
                     body = self._refresh_json_body(body, credentials.csrf_token)
                     continue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from email.message import Message
 import json
 import unittest
 from io import BytesIO
@@ -764,6 +765,66 @@ class ClientTests(unittest.TestCase):
                 json.loads(retried_request.data.decode("utf-8"))["csrfmiddlewaretoken"],
                 "csrf-second",
             )
+
+    def test_401_uses_wps_refresh_grant_and_persists_rotated_cookies(self) -> None:
+        with TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookie"
+            csrf_path = Path(directory) / "csrf"
+            cookie_path.write_text("sid=first; rtk=refresh-ticket", encoding="utf-8")
+            csrf_path.write_text("csrf-first", encoding="utf-8")
+            source = FileCredentialSource(
+                cookie_path=str(cookie_path),
+                csrf_token_path=str(csrf_path),
+            )
+            refresh_headers = Message()
+            refresh_headers.add_header("Set-Cookie", "sid=second; Path=/")
+            refresh_headers.add_header("Set-Cookie", "csrf=csrf-second; Path=/")
+
+            class RefreshGrantOpener:
+                def __init__(self) -> None:
+                    self.requests = []
+
+                def open(self, request, timeout: float) -> FakeResponse:
+                    self.requests.append((request, timeout))
+                    if len(self.requests) == 1:
+                        raise HTTPError(request.full_url, 401, "expired", {}, BytesIO())
+                    if len(self.requests) == 2:
+                        return FakeResponse(
+                            b'{"result":"ok"}',
+                            headers=refresh_headers,
+                        )
+                    return FakeResponse(
+                        b'{"files":[],"next_offset":-1,"result":"ok"}'
+                    )
+
+            opener = RefreshGrantOpener()
+            client = WpsDriveClient(
+                WpsClientConfig(
+                    group_id="group-1",
+                    credential_source=source,
+                ),
+                opener=opener,
+            )
+
+            client.list_entries("folder-1")
+
+            refresh_request = opener.requests[1][0]
+            self.assertEqual(
+                urlsplit(refresh_request.full_url).path,
+                "/passport/secure/api/grant_token",
+            )
+            self.assertEqual(
+                json.loads(refresh_request.data.decode("utf-8")),
+                {"grant_type": "refresh_token"},
+            )
+            retry_request = opener.requests[2][0]
+            self.assertIn("sid=second", retry_request.get_header("Cookie"))
+            self.assertIn("rtk=refresh-ticket", retry_request.get_header("Cookie"))
+            self.assertEqual(
+                cookie_path.read_text(encoding="utf-8").strip(),
+                "sid=second; rtk=refresh-ticket; csrf=csrf-second",
+            )
+            self.assertEqual(csrf_path.read_text(encoding="utf-8").strip(), "csrf-second")
 
 
 class CurlProbeTests(unittest.TestCase):

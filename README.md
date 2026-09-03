@@ -32,12 +32,12 @@ WPS 企业云盘 -> Adapter -> WebDAV / REST -> Windows / Linux / 手机 / NAS
 - REST 的列表、元数据、下载和上传接口。
 - REST 和 WebDAV 的删除接口。
 - Cookie/CSRF 从环境变量或本机 secret 文件读取。
-- Cookie 文件替换后的动态读取；`401` 时可检测文件变化并重试一次；可选调用管理员配置的本地刷新助手。
+- Cookie 文件替换后的动态读取；`401` 时先检测文件变化，否则调用 WPS SDK 使用的 `grant_token` 刷新流程，并原子保存轮换后的 Set-Cookie。
 - `/healthz`、适配器 Basic Auth、systemd 部署骨架。
 
 ## 尚未实现
 
-WPS 的跨目录同时改名、快速上传成功路径和真正的 Token 刷新协议尚未由本人账号的独立抓包确认，因此没有伪造 WPS 刷新 API。大文件分片协议已经从本人账号的 100 MiB 上传中观察并由 VPS 适配器真实回放成功；当前增加的是单个请求内的失败重试，不是进程重启后的无条件续传。跨目录同时改名及其他未确认的 WPS 操作会返回 `501`，不会猜测接口。COPY 是适配器层的下载/上传中继，不代表 WPS 提供了服务端 COPY。
+交互式登录、SSO、验证码和风控处理仍未放入适配器；首次部署需要本人账号的一份完整浏览器 Cookie，其中应包含 WPS 的持久刷新 Cookie `rtk`。如果该 Cookie 被撤销或不存在，适配器会返回明确的会话失效错误，而不会伪造登录成功。WPS 的跨目录同时改名、快速上传成功路径和进程重启后的分片续传仍未确认；其他未确认的 WPS 操作会返回 `501`。COPY 是适配器层的下载/上传中继，不代表 WPS 提供了服务端 COPY。
 
 ## 本地运行
 
@@ -105,6 +105,6 @@ tests/                         标准库单元测试
 
 ## 认证安全
 
-不要把 Cookie、CSRF、Basic Auth 密码、预签名对象存储 URL、完整 cURL 或原始 HAR 发到聊天、Issue 或 Git。推荐使用 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`；Cookie 失效时只在本机/VPS 替换文件。适配器不会把 WPS Cookie 转发给对象存储，也不会打印响应正文。
+不要把 Cookie、CSRF、Basic Auth 密码、预签名对象存储 URL、完整 cURL 或原始 HAR 发到聊天、Issue 或 Git。推荐使用 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`；首次初始化时要保存包含 `rtk` 的完整浏览器 Cookie，之后适配器会在本机/VPS secret store 中自动持久化 WPS 轮换的 Cookie。适配器不会把 WPS Cookie 转发给对象存储，也不会打印响应正文。
 
 已验证事实记录在 [docs/findings.md](docs/findings.md)，抓包工具说明在 [docs/01-capture-plan.md](docs/01-capture-plan.md)。
