@@ -1,0 +1,18 @@
+services:
+  wps-adapter:
+    # env_file supplies variables inside the container. Compose substitutes
+    # the host mapping below from the shell environment, so export
+    # ADAPTER_BIND and ADAPTER_PORT before running docker compose when using
+    # a non-default host port.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - /etc/wps-adapter/wps-adapter.env
+    environment:
+      ADAPTER_BIND: 0.0.0.0
+    ports:
+      - "${ADAPTER_BIND:-0.0.0.0}:${ADAPTER_PORT:-54321}:${ADAPTER_PORT:-54321}"
+    volumes:
+      - /etc/wps-adapter/secrets:/etc/wps-adapter/secrets:rw

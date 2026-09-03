@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+captures/
+artifacts/
+secrets/
+*.har
+*.har.gz
+*.pcap
+*.pcapng
+__pycache__/
+*.py[cod]

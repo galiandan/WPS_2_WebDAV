@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from wps_adapter.client import WpsCredentials
-from wps_adapter.__main__ import _prompt_login_target
+from wps_adapter.__main__ import _apply_adapter_port, _prompt_login_target
 from wps_adapter.login import (
     LoginError,
     credentials_from_cookies,
@@ -131,7 +131,7 @@ class LoginHelperTests(unittest.TestCase):
                 {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/passport/secure"},
                 {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
             ],
-            adapter_url="https://adapter.example",
+            adapter_url="https://adapter.example:18080",
             username="adapter",
             password="secret",
             connection_factory=factory,
@@ -139,6 +139,7 @@ class LoginHelperTests(unittest.TestCase):
 
         self.assertEqual(captured["method"], "POST")
         self.assertEqual(captured["path"], "/api/v1/session/import")
+        self.assertEqual(captured["port"], 18080)
         self.assertNotIn("secret", str(captured["path"]))
         self.assertEqual(
             captured["headers"]["Authorization"],  # type: ignore[index]
@@ -147,6 +148,16 @@ class LoginHelperTests(unittest.TestCase):
         body = json.loads(captured["body"].decode("utf-8"))  # type: ignore[union-attr]
         self.assertEqual(body["cookies"][0]["value"], "refresh")
         self.assertTrue(captured["closed"])
+
+    def test_adapter_port_is_added_when_url_omits_one(self) -> None:
+        self.assertEqual(
+            _apply_adapter_port("https://adapter.example", 18080),
+            "https://adapter.example:18080",
+        )
+        self.assertEqual(
+            _apply_adapter_port("https://adapter.example:9443", None),
+            "https://adapter.example:9443",
+        )
 
     def test_https_push_rejects_remote_plain_http(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh; csrf=csrf", csrf_token="csrf")
@@ -194,6 +205,24 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(target.ssh_port, 2222)
         self.assertTrue(target.ssh_password_auth)
         self.assertIsNone(target.ssh_identity)
+
+    def test_interactive_target_includes_custom_adapter_port(self) -> None:
+        with patch(
+            "builtins.input",
+            side_effect=["vps.example", "3", "18080", ""],
+        ):
+            target = _prompt_login_target()
+
+        self.assertEqual(target.adapter_url, "https://vps.example:18080")
+        self.assertEqual(target.adapter_port, 18080)
+
+    def test_interactive_target_rejects_conflicting_url_port(self) -> None:
+        with patch(
+            "builtins.input",
+            side_effect=["vps.example", "3", "18080", "https://vps.example:9443"],
+        ):
+            with self.assertRaisesRegex(LoginError, "端口输入不一致"):
+                _prompt_login_target()
 
 
 if __name__ == "__main__":

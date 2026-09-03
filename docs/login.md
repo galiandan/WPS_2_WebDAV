@@ -30,6 +30,7 @@ python3 wps_login.py
 ```bash
 python3 wps_login.py \
   --adapter-url https://<adapter-host> \
+  --adapter-port 18080 \
   --adapter-user <adapter-user>
 ```
 

@@ -5,6 +5,7 @@ import getpass
 import os
 import sys
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 from . import __version__
 from .client import WpsClientConfig, WpsDriveClient
@@ -90,6 +91,12 @@ def _parser() -> argparse.ArgumentParser:
         default=os.environ.get("WPS_ADAPTER_USER", ""),
         help="adapter Basic Auth username; the password is prompted securely",
     )
+    login.add_argument(
+        "--adapter-port",
+        type=int,
+        default=None,
+        help="HTTPS adapter port; use with --adapter-url when it has no port",
+    )
     login.add_argument("--adapter-timeout", type=float, default=30.0)
     login.add_argument(
         "--ssh-target",
@@ -117,6 +124,7 @@ def _parser() -> argparse.ArgumentParser:
 @dataclass(frozen=True, slots=True)
 class _LoginTarget:
     adapter_url: str = ""
+    adapter_port: int | None = None
     adapter_user: str = ""
     ssh_target: str = ""
     ssh_identity: str | None = None
@@ -175,9 +183,41 @@ def _prompt_login_target() -> _LoginTarget:
     host_for_url = host
     if ":" in host and not host.startswith("["):
         host_for_url = f"[{host}]"
-    default_url = f"https://{host_for_url}:54321"
-    adapter_url = input(f"适配器 HTTPS 地址 [{default_url}]: ").strip() or default_url
-    return _LoginTarget(adapter_url=adapter_url)
+    adapter_port = _prompt_port("适配器端口", 54321)
+    default_url = f"https://{host_for_url}:{adapter_port}"
+    entered_url = input(f"适配器 HTTPS 地址 [{default_url}]: ").strip()
+    adapter_url = entered_url or default_url
+    try:
+        explicit_port = urlsplit(adapter_url).port
+    except ValueError:
+        explicit_port = None
+    if entered_url and explicit_port is not None and explicit_port != adapter_port:
+        raise LoginError("适配器地址中的端口与端口输入不一致")
+    return _LoginTarget(
+        adapter_url=adapter_url,
+        adapter_port=adapter_port,
+    )
+
+
+def _apply_adapter_port(adapter_url: str, port: int | None) -> str:
+    if port is None:
+        return adapter_url
+    if not 1 <= port <= 65535:
+        raise LoginError("适配器端口必须在 1 到 65535 之间")
+    parts = urlsplit(adapter_url)
+    try:
+        existing_port = parts.port
+    except ValueError as exc:
+        raise LoginError("适配器地址中的端口无效") from exc
+    if existing_port is not None and existing_port != port:
+        raise LoginError("适配器地址中的端口与 --adapter-port 不一致")
+    if existing_port is not None:
+        return adapter_url
+    if not parts.hostname:
+        raise LoginError("适配器地址缺少主机名")
+    hostname = parts.hostname
+    netloc = f"[{hostname}]" if ":" in hostname else hostname
+    return urlunsplit((parts.scheme, f"{netloc}:{port}", parts.path, parts.query, parts.fragment))
 
 
 def _check_public_bind(bind: str, auth: BasicAuth) -> None:
@@ -197,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not args.adapter_url and not args.ssh_target and args.output_dir is None
                 else _LoginTarget(
                     adapter_url=args.adapter_url,
+                    adapter_port=args.adapter_port,
                     adapter_user=args.adapter_user,
                     ssh_target=args.ssh_target,
                     ssh_identity=args.ssh_identity,
@@ -204,7 +245,14 @@ def main(argv: list[str] | None = None) -> int:
                     ssh_password_auth=args.ssh_password_auth,
                 )
             )
-            adapter_url = interactive_target.adapter_url
+            adapter_url = (
+                _apply_adapter_port(
+                    interactive_target.adapter_url,
+                    interactive_target.adapter_port,
+                )
+                if interactive_target.adapter_url
+                else ""
+            )
             adapter_user = interactive_target.adapter_user
             adapter_password: str | None = None
             if adapter_url:

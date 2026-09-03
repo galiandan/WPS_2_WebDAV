@@ -1,6 +1,43 @@
 # Deployment
 
-本文说明如何在 Debian/Ubuntu 风格的 Linux VPS 上使用 systemd 部署适配器。不需要 Docker 或第三方 Python 包。示例中的 `<vps-host>`、`<vps-user>` 和路径都要替换为自己的值。
+本文说明如何在 Debian/Ubuntu 风格的 Linux VPS 上部署适配器。项目不需要第三方 Python 包；可以选择原生 systemd 或 Docker。示例中的 `<vps-host>`、`<vps-user>` 和路径都要替换为自己的值。
+
+## One-command install
+
+下面两个脚本都可以直接从 GitHub Raw 执行。首次运行会通过当前终端询问 WPS 群组 ID、适配器 Basic Auth 用户名/密码和监听端口；`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。
+
+原生 systemd：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
+  | sudo bash -s -- --port 18080
+```
+
+Docker：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
+  | sudo bash -s -- --port 18080
+```
+
+安装脚本会自动下载当前 `main` 分支代码，不要求 VPS 已安装 `git`。原生脚本需要 Python `3.11+` 和 systemd；Docker 脚本会在 Debian/Ubuntu 上安装 `docker.io`（如果尚未安装）。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。
+
+如果是从原生切换到 Docker，需要显式确认停用原生服务：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
+  | sudo bash -s -- --port 18080 --replace-native
+```
+
+建议先下载脚本检查内容，再在生产 VPS 执行 `curl | bash`；脚本只从 HTTPS GitHub 地址下载项目归档。
+
+手动使用 Docker Compose 时，`/etc/wps-adapter/wps-adapter.env` 只会注入容器，不能替代 Compose 的宿主端口变量。自定义端口时先执行：
+
+```bash
+export ADAPTER_BIND=0.0.0.0
+export ADAPTER_PORT=18080
+docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
+```
 
 ## 1. Prepare the host
 
@@ -57,10 +94,10 @@ WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
 ADAPTER_USERNAME_FILE=/etc/wps-adapter/secrets/adapter-username
 ADAPTER_PASSWORD_FILE=/etc/wps-adapter/secrets/adapter-password
 ADAPTER_BIND=127.0.0.1
-ADAPTER_PORT=54321
+ADAPTER_PORT=18080
 ```
 
-`WPS_ROOT_ID=0` 表示尝试企业空间根目录；也可以填自己测试目录的文件夹 ID。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
+`ADAPTER_PORT` 可以改成任意未被占用的端口；`WPS_ROOT_ID=0` 表示尝试企业空间根目录，也可以填自己测试目录的文件夹 ID。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
 
 检查配置不会访问 WPS：
 
@@ -85,7 +122,7 @@ sudo install -m 600 /opt/wps-adapter/deploy/wps-adapter-hardening.env \
 sudo systemctl daemon-reload
 sudo systemctl enable --now wps-adapter
 systemctl status wps-adapter --no-pager
-curl http://127.0.0.1:54321/healthz
+curl http://127.0.0.1:18080/healthz
 ```
 
 查看不包含 Cookie、Token、完整 URL 或文件内容的日志：
@@ -96,7 +133,7 @@ sudo journalctl -u wps-adapter -n 100 --no-pager
 
 ## 6. Reverse proxy
 
-让反向代理终止 TLS，并将请求转发到 `http://127.0.0.1:54321`。保留适配器 Basic Auth；不要在代理访问日志中记录 `Authorization` 头、查询参数或请求体。登录助手的 HTTPS 凭据导入也必须经过这条 TLS 入口。WebDAV 客户端使用：
+让反向代理终止 TLS，并将请求转发到 `http://127.0.0.1:<port>`。保留适配器 Basic Auth；不要在代理访问日志中记录 `Authorization` 头、查询参数或请求体。登录助手的 HTTPS 凭据导入也必须经过这条 TLS 入口。WebDAV 客户端使用：
 
 ```text
 https://<vps-host>/dav/

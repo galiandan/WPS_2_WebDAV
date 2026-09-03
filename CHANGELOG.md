@@ -2,6 +2,20 @@
 
 本项目遵循 Keep a Changelog 风格。版本号用于记录适配器行为变化，不代表 WPS 官方兼容性承诺。
 
+## [0.6.0] - 2026-09-03
+
+### Added
+
+- 新增 GitHub Raw 原生 systemd 一键安装脚本。
+- 新增 GitHub Raw Docker 一键安装脚本、Dockerfile 和 Compose 示例。
+- 原生、Docker 和 Python HTTPS 登录流程均支持自定义端口。
+- Python SSH 登录流程支持自定义 SSH 端口。
+
+### Security
+
+- 安装器升级时保留 `/etc/wps-adapter/secrets/`，不会清空已有 Cookie、CSRF 或适配器密码。
+- Docker 构建上下文排除 `.env`、secret、HAR 和抓包文件。
+
 ## [0.5.1] - 2026-09-03
 
 ### Added

@@ -6,7 +6,7 @@
 WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 ```
 
-> 当前版本为 `0.5.1` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
+> 当前版本为 `0.6.0` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
 
 ## Features
 
@@ -17,6 +17,7 @@ WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 - 适配器层的递归 `PROPFIND`、`COPY` 和短期写锁兼容能力。
 - Cookie/CSRF 文件动态读取；上游 `401` 时按已确认的 WPS SDK `grant_token` 流程尝试续期。
 - Python 登录助手：先询问 VPS 地址和连接方式，再在官方 WPS 页面登录并自动同步；支持 HTTPS、SSH 密钥、SSH 密码和本地文件输出。
+- 原生和 Docker 一键安装脚本，支持自定义监听端口。
 - 仅依赖 Python 标准库；不需要 Docker、Playwright 或浏览器插件。
 - 同源浏览器文件管理页面，入口为服务根路径 `/`。
 
@@ -47,6 +48,26 @@ cd WPS_2_WebDAV
 
 项目不要求安装第三方 Python 包。所有命令都可以通过 `PYTHONPATH=src` 直接运行；也可以按标准 Python 包方式执行 `python3 -m pip install -e .`。
 
+### One-command VPS install
+
+Debian/Ubuntu VPS 可以直接使用 GitHub Raw 安装脚本。脚本会询问 WPS 群组 ID、适配器 Basic Auth 和端口；适配器密码不会作为命令行参数出现。`--port` 可以替换默认端口：
+
+原生 systemd：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
+  | sudo bash -s -- --port 18080
+```
+
+Docker：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
+  | sudo bash -s -- --port 18080
+```
+
+安装脚本不需要 VPS 上有 `git`，升级时会保留 `/etc/wps-adapter/secrets/`。两种方式选一种，不要同时占用同一个端口。完整说明见 [`docs/deployment.md`](docs/deployment.md)。
+
 ### 2. Create configuration
 
 ```bash
@@ -73,16 +94,16 @@ set -a
 . ./.env
 set +a
 PYTHONPATH=src python3 -m wps_adapter check-config
-PYTHONPATH=src python3 -m wps_adapter serve --bind 127.0.0.1 --port 54321
+PYTHONPATH=src python3 -m wps_adapter serve --bind 127.0.0.1 --port 18080
 ```
 
-服务入口：
+服务入口（下面使用 `18080` 作为示例端口；实际以 `ADAPTER_PORT` 为准）：
 
 ```text
-Web UI:     http://127.0.0.1:54321/
-WebDAV:     http://127.0.0.1:54321/dav/
-REST:       http://127.0.0.1:54321/api/v1/
-Health:     http://127.0.0.1:54321/healthz
+Web UI:     http://127.0.0.1:18080/
+WebDAV:     http://127.0.0.1:18080/dav/
+REST:       http://127.0.0.1:18080/api/v1/
+Health:     http://127.0.0.1:18080/healthz
 ```
 
 ### 4. Bootstrap WPS login
@@ -100,6 +121,7 @@ python3 wps_login.py
 ```bash
 python3 wps_login.py \
   --adapter-url https://drive.example.com \
+  --adapter-port 18080 \
   --adapter-user your-adapter-user
 ```
 
@@ -137,7 +159,7 @@ curl 会提示输入适配器密码。不要把密码写进命令或提交到配
 WebDAV 根地址是：
 
 ```text
-http(s)://your-host:54321/dav/
+http(s)://your-host:<port>/dav/
 ```
 
 使用适配器 Basic Auth 登录。桌面同步软件、NAS、文件管理器和 Office 客户端的具体配置方式不同；先用 `PROPFIND`、小文件上传和小文件下载完成验收，再接入自动同步。
@@ -178,7 +200,7 @@ DELETE /api/v1/entries?path=/folder/file.txt
 | `WPS_MULTIPART_THRESHOLD` | 进入分片上传的文件大小阈值 |
 | `WPS_MAX_UPLOADS` / `WPS_MAX_DOWNLOADS` | 同时传输数量上限 |
 | `WPS_UPLOAD_MIN_FREE_BYTES` | 临时上传文件系统的最小保留空间 |
-| `ADAPTER_BIND` / `ADAPTER_PORT` | 服务监听地址和端口 |
+| `ADAPTER_BIND` / `ADAPTER_PORT` | 服务监听地址和端口，端口可自定义 |
 | `ADAPTER_USERNAME_FILE` / `ADAPTER_PASSWORD_FILE` | 适配器 Basic Auth 文件 |
 
 不要把 `WPS_COOKIE`、`WPS_CSRF_TOKEN`、`ADAPTER_PASSWORD` 等秘密值放在环境变量或 shell 历史中；优先使用权限为 `0600` 的文件。
@@ -222,7 +244,8 @@ src/wps_adapter/       核心客户端、存储、WebDAV/REST 服务和登录助
 wps_login.py           无需安装包的 Python 登录助手入口
 tests/                 标准库单元测试
 tools/                 HAR 摘要和只读探针
-deploy/                systemd 与资源保护模板
+deploy/                systemd、Docker 与资源保护模板
+scripts/               GitHub Raw 一键安装脚本
 docs/                  API、架构、部署、登录、集成和研究记录
 docs/research/         抓包方案、实验事实、范围约束和请求模板
 .github/workflows/     GitHub Actions 测试
