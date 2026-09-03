@@ -6,7 +6,7 @@
 WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 ```
 
-> 当前版本为 `0.4.0` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
+> 当前版本为 `0.5.0` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
 
 ## Features
 
@@ -16,7 +16,7 @@ WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 - 普通上传、覆盖更新和基于已观察 WPS 流程的大文件分片上传。
 - 适配器层的递归 `PROPFIND`、`COPY` 和短期写锁兼容能力。
 - Cookie/CSRF 文件动态读取；上游 `401` 时按已确认的 WPS SDK `grant_token` 流程尝试续期。
-- 本地隔离 Chrome 登录助手：在官方 WPS 页面登录后，通过 SSH 将会话安全同步到 VPS。
+- Python 登录助手：在官方 WPS 页面登录后，可通过 HTTPS 直接同步到 VPS；SSH 和本地文件输出仍可作为备用。
 - 仅依赖 Python 标准库；不需要 Docker、Playwright 或浏览器插件。
 - 同源浏览器文件管理页面，入口为服务根路径 `/`。
 
@@ -32,7 +32,7 @@ WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 
 - Python `3.11+`。
 - 运行服务只需要 Python 标准库。
-- 使用自动登录助手时，需要本机已有 Chrome/Chromium 和可用的 SSH 客户端。
+- 使用登录助手时，需要本机已有 Chrome/Chromium 和 Python `3.11+`；HTTPS 直接同步不需要 SSH。
 - WPS 企业云盘账号需要已经能在官方网页端正常登录和操作目标文件。
 
 ## Quick start
@@ -86,21 +86,39 @@ Health:     http://127.0.0.1:54321/healthz
 
 ### 4. Bootstrap WPS login
 
-适配器网页不能读取另一个域名的 HttpOnly Cookie，所以登录助手必须在账号所有者自己的电脑上运行。它会打开一个临时隔离的 Chrome 窗口；你只在官方 WPS 页面登录，看到云盘页面后回到终端按回车。
+适配器网页不能读取另一个域名的 HttpOnly Cookie，所以登录助手必须在账号所有者自己的电脑上运行。它会打开一个临时隔离的 Chrome 窗口；你只在官方 WPS 页面登录，脚本会自动检测到登录完成。
+
+公网直接同步需要已经配置 HTTPS 的适配器地址。脚本会提示输入适配器 Basic Auth 密码，密码不会显示，也不会写入命令行参数：
 
 ```bash
-PYTHONPATH=src python3 -m wps_adapter login \
+python3 wps_login.py
+```
+
+脚本会依次询问适配器 HTTPS 地址、适配器用户名和隐藏输入的适配器密码。也可以把地址和用户名作为参数：
+
+```bash
+python3 wps_login.py \
+  --adapter-url https://drive.example.com \
+  --adapter-user your-adapter-user
+```
+
+助手只选取匹配 WPS 云盘域名的 Cookie，要求存在 `rtk` 和 `csrf`，不显示 Cookie 值，并通过 HTTPS 的受 Basic Auth 保护接口写入 VPS secret 文件。登录结束后临时浏览器配置会删除。完整步骤见 [`docs/login.md`](docs/login.md)。
+
+如果适配器还没有 HTTPS 反向代理，可以继续使用 SSH 备用方式：
+
+```bash
+python3 wps_login.py \
   --ssh-target root@your-vps-host \
   --ssh-identity ~/.ssh/id_ed25519
 ```
 
-助手只选取匹配 WPS 云盘域名的 Cookie，要求存在 `rtk` 和 `csrf`，不显示 Cookie 值，并通过 SSH 标准输入写入远端 secret 文件。登录结束后临时浏览器配置会删除。完整步骤见 [`docs/login.md`](docs/login.md)。
+两种方式都不需要手动复制 Cookie，也不需要回到终端按回车。服务器保存的 `rtk` 会在上游会话过期时按已确认流程自动续期；只有 WPS 撤销刷新票据或要求重新登录时才需要再次运行助手。
 
 ### 5. Try the API
 
 ```bash
 curl -u your-adapter-user \
-  'http://127.0.0.1:54321/api/v1/entries?path=/'
+  'https://drive.example.com/api/v1/entries?path=/'
 ```
 
 curl 会提示输入适配器密码。不要把密码写进命令或提交到配置文件。
@@ -174,7 +192,7 @@ deploy/wps-adapter-hardening.env
 - 适配器的 `COPY` 是下载/上传中继，不代表 WPS 存在服务端 COPY API。
 - `LOCK` 是进程内短期兼容锁，服务重启后消失，不是 WPS 远端锁。
 - 失败后的跨进程分片续传、取消/清理、快速上传成功路径和部分跨目录改名场景仍未确认。
-- 服务器本身不会自动填写 WPS 密码，也不会处理 SSO、验证码或风控；需要重新登录时使用本地登录助手。
+- 服务器本身不会自动填写 WPS 密码，也不会处理 SSO、验证码或风控；需要重新登录时使用本地 Python 登录助手。
 
 ## Development
 
@@ -192,6 +210,7 @@ git diff --check
 
 ```text
 src/wps_adapter/       核心客户端、存储、WebDAV/REST 服务和登录助手
+wps_login.py           无需安装包的 Python 登录助手入口
 tests/                 标准库单元测试
 tools/                 HAR 摘要和只读探针
 deploy/                systemd 与资源保护模板

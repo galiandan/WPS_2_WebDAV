@@ -69,7 +69,7 @@ https://<adapter-host>/dav/
 
 ## Authentication lifecycle
 
-首次登录使用本地隔离 Chrome 助手，见 [`login.md`](login.md)。适配器服务本身不会代填 WPS 密码、SSO、验证码或风控。
+首次登录使用本地 Python 隔离 Chrome 助手，见 [`login.md`](login.md)。优先通过 HTTPS 直接同步；没有 HTTPS 时可以使用 SSH 备用方式。适配器服务本身不会代填 WPS 密码、SSO、验证码或风控。
 
 已有会话包含 `rtk` 时，服务在 WPS 返回 `401` 后会调用已确认的账号 SDK 刷新请求，并持久化轮换后的 `Set-Cookie`。如果刷新票据失效，重新运行登录助手即可；同步 secret 后无需重启服务。
 

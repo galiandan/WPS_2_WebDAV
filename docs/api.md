@@ -47,11 +47,27 @@ PUT  /api/v1/upload?path=/folder/file.txt&overwrite=true
 POST /api/v1/folders?path=/folder/new-folder
 DELETE /api/v1/entries?path=/folder/file.txt
 PATCH /api/v1/entries?path=/folder/file.txt
+POST  /api/v1/session/import
 ```
 
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
 
 其中 `GET entries`、`metadata`、`download`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到当前 WPS 原型；`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+
+### Importing a WPS session
+
+`POST /api/v1/session/import` 使用适配器自己的 Basic Auth，建议只通过 HTTPS 访问。它供本地 Python 登录助手使用，不供浏览器页面直接调用。请求体只接受从临时官方 WPS 登录窗口筛选出的 Cookie：
+
+```json
+{
+  "cookies": [
+    {"name": "rtk", "value": "<redacted>", "domain": ".kdocs.cn", "path": "/passport/secure"},
+    {"name": "csrf", "value": "<redacted>", "domain": "365.kdocs.cn", "path": "/"}
+  ]
+}
+```
+
+服务端会再次限制 WPS 域名、检查 `rtk`/`csrf`，然后更新配置的 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`。成功响应为 `200` JSON；凭据更新后不需要重启服务。远程明文 HTTP 不应使用此接口。
 
 ## 状态码
 
@@ -64,6 +80,6 @@ PATCH /api/v1/entries?path=/folder/file.txt
 - `501`: WPS 操作尚未确认/实现。
 - `507`: 达到适配器的磁盘、文件大小、复制条目或递归深度保护。
 - `502`: WPS 或对象存储请求失败；响应不会包含上游响应正文或签名 URL。
-- `503`: 由反向代理或外部健康检查自行产生，不是适配器的固定响应。
+- `503`: 由反向代理或外部健康检查自行产生；适配器的传输槽超时也会返回 `503`。
 
 `GET /healthz` 不访问 WPS，只返回进程健康状态。

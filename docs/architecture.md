@@ -29,11 +29,13 @@ WebDAV clients / REST clients / browser UI
 5. 文件上传和下载尽量通过流式中继完成；签名对象存储请求不会收到 WPS Cookie。
 6. 上游 `401` 时，文件凭据源优先检测管理员替换，然后按已观察的 SDK `grant_token` 流程尝试续期并重试一次。
 
+登录助手在本机临时 Chrome 中完成官方登录后，调用受 Basic Auth 保护的 `POST /api/v1/session/import`。该接口只更新服务端的两个凭据文件，不参与普通 WebDAV/REST 文件请求；后续请求和轮换 Cookie 仍由服务进程直接处理。
+
 ## Authentication boundaries
 
 - 适配器 Basic Auth 保护对外 REST/WebDAV/UI。
 - WPS Cookie 和 CSRF 只存放在本机或 VPS 的权限受限 secret 文件中。
-- 交互式登录由本地 `login` 助手启动官方 WPS 页面完成；服务器不代填密码、SSO、验证码或风控。
+- 交互式登录由本地 `wps_login.py` 助手启动官方 WPS 页面完成，并可通过 HTTPS 同步到服务；服务器不代填密码、SSO、验证码或风控。
 - `rtk` 是当前自动续期原型所需的 WPS 持久刷新 Cookie。没有它时，重新运行本地登录助手。
 
 ## Resource model

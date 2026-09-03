@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import sys
 
@@ -79,6 +80,17 @@ def _parser() -> argparse.ArgumentParser:
     login.add_argument("--domain-suffix", default=DEFAULT_COOKIE_DOMAIN_SUFFIX)
     login.add_argument("--wait-timeout", type=float, default=300.0)
     login.add_argument(
+        "--adapter-url",
+        default=os.environ.get("WPS_ADAPTER_URL", ""),
+        help="HTTPS adapter origin for direct credential sync",
+    )
+    login.add_argument(
+        "--adapter-user",
+        default=os.environ.get("WPS_ADAPTER_USER", ""),
+        help="adapter Basic Auth username; the password is prompted securely",
+    )
+    login.add_argument("--adapter-timeout", type=float, default=30.0)
+    login.add_argument(
         "--ssh-target",
         default=os.environ.get("WPS_ADAPTER_SSH_TARGET", ""),
         help="remote SSH target, for example root@203.0.113.10",
@@ -107,6 +119,17 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "login":
         try:
+            adapter_url = args.adapter_url
+            if not adapter_url and not args.ssh_target and args.output_dir is None:
+                adapter_url = input("适配器 HTTPS 地址（例如 https://drive.example.com）: ").strip()
+                if not adapter_url:
+                    raise LoginError("适配器地址不能为空")
+            adapter_user = args.adapter_user
+            adapter_password: str | None = None
+            if adapter_url:
+                if not adapter_user:
+                    adapter_user = input("适配器用户名: ").strip()
+                adapter_password = getpass.getpass("适配器密码（不会显示）: ")
             login_and_sync(
                 login_url=args.login_url,
                 browser=args.browser,
@@ -118,8 +141,15 @@ def main(argv: list[str] | None = None) -> int:
                 ssh_identity=args.ssh_identity,
                 output_dir=args.output_dir,
                 ssh_timeout=args.ssh_timeout,
+                adapter_url=adapter_url,
+                adapter_user=adapter_user,
+                adapter_password=adapter_password,
+                adapter_timeout=args.adapter_timeout,
             )
             return 0
+        except (EOFError, KeyboardInterrupt):
+            print("login failed: 已取消登录同步", file=sys.stderr)
+            return 1
         except (LoginError, OSError, ValueError) as exc:
             print(f"login failed: {exc}", file=sys.stderr)
             return 1

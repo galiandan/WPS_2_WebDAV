@@ -328,7 +328,7 @@ GET /3rd/drive/api/v5/files/batch/task/progress?taskuuid=<taskuuid>
 
 ## A-03 本地交互式登录引导
 
-普通适配器网页不能直接读取 `365.kdocs.cn` 的登录 Cookie：两个页面不同源，且关键的 `rtk` Cookie 为 HttpOnly。`0.4.0` 增加了本地 `python3 -m wps_adapter login` 助手。它使用 Chrome/Chromium 的本地 DevTools Protocol 启动临时隔离配置，用户在官方 WPS 页面完成登录后，助手读取浏览器会话中的 Cookie，只保留匹配云盘主机和 `kdocs.cn` 域名后缀的 Cookie，并要求同时存在 `rtk` 和 `csrf`。凭据通过 SSH 标准输入传输到远端 root 管理脚本，两个 secret 文件以临时文件加重命名方式更新；Cookie 值不进入命令参数、日志或仓库。此流程是本人账号的交互式引导，不代填密码，不绕过 SSO、验证码或风控。
+普通适配器网页不能直接读取 `365.kdocs.cn` 的登录 Cookie：两个页面不同源，且关键的 `rtk` Cookie 为 HttpOnly。`0.5.0` 的本地 `wps_login.py` 助手使用 Chrome/Chromium 的本地 DevTools Protocol 启动临时隔离配置，用户在官方 WPS 页面完成登录后，助手自动检测会话中的 Cookie，只保留匹配云盘主机和 `kdocs.cn` 域名后缀的 Cookie，并要求同时存在 `rtk` 和 `csrf`。优先通过受 Basic Auth 保护的 HTTPS 接口发送最小 Cookie 快照，SSH 标准输入仍可作为备用通道；两个 secret 文件以临时文件加重命名方式更新。Cookie 值不进入命令参数、日志或仓库。此流程是本人账号的交互式引导，不代填密码，不绕过 SSO、验证码或风控。
 
 ## 记录规则
 

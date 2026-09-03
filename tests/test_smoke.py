@@ -725,6 +725,25 @@ class ClientTests(unittest.TestCase):
                 WpsCredentials(cookie="sid=second", csrf_token="csrf-second"),
             )
 
+    def test_file_credentials_can_be_replaced_as_a_pair(self) -> None:
+        with TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookie"
+            csrf_path = Path(directory) / "csrf"
+            cookie_path.write_text("sid=first", encoding="utf-8")
+            csrf_path.write_text("csrf-first", encoding="utf-8")
+            source = FileCredentialSource(
+                cookie_path=str(cookie_path),
+                csrf_token_path=str(csrf_path),
+            )
+
+            self.assertTrue(
+                source.replace_credentials(
+                    WpsCredentials(cookie="sid=second; rtk=refresh", csrf_token="csrf-second")
+                )
+            )
+            self.assertEqual(cookie_path.read_text(encoding="utf-8").strip(), "sid=second; rtk=refresh")
+            self.assertEqual(csrf_path.read_text(encoding="utf-8").strip(), "csrf-second")
+
     def test_401_retry_replaces_cookie_and_json_csrf(self) -> None:
         with TemporaryDirectory() as directory:
             cookie_path = Path(directory) / "cookie"

@@ -104,6 +104,8 @@ class CredentialSource(Protocol):
 
     def store_set_cookie_headers(self, headers: Any) -> bool: ...
 
+    def replace_credentials(self, credentials: WpsCredentials) -> bool: ...
+
 
 @dataclass(slots=True)
 class FileCredentialSource:
@@ -206,6 +208,11 @@ class FileCredentialSource:
     @staticmethod
     def _write_atomic(path: str, value: str) -> None:
         target = Path(path)
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(target.parent, 0o700)
+        except OSError as exc:
+            raise WpsApiError("protect credential directory") from exc
         descriptor, temporary = tempfile.mkstemp(
             prefix=f".{target.name}.",
             dir=str(target.parent),
@@ -284,6 +291,33 @@ class FileCredentialSource:
             self._last = self._snapshot()
             return True
 
+    def replace_credentials(self, credentials: WpsCredentials) -> bool:
+        """Replace the credential pair after a local interactive login."""
+
+        if not self.cookie_path or not self.csrf_token_path:
+            return False
+        if not credentials.cookie or not credentials.csrf_token:
+            return False
+        with self._refresh_lock:
+            current = self._snapshot()
+            if current == credentials:
+                self._last = current
+                return True
+            try:
+                self._write_atomic(self.cookie_path, credentials.cookie)
+                self._write_atomic(self.csrf_token_path, credentials.csrf_token)
+            except Exception:
+                # Keep a failed import from leaving one half of the pair newer
+                # than the other.  The original error remains the useful one.
+                try:
+                    self._write_atomic(self.cookie_path, current.cookie)
+                    self._write_atomic(self.csrf_token_path, current.csrf_token)
+                except Exception:
+                    pass
+                raise
+            self._last = credentials
+            return True
+
     def refresh(self) -> bool:
         with self._refresh_lock:
             before = self._last or self._snapshot()
@@ -320,6 +354,9 @@ class StaticCredentialSource:
         return False
 
     def store_set_cookie_headers(self, _headers: Any) -> bool:
+        return False
+
+    def replace_credentials(self, _credentials: WpsCredentials) -> bool:
         return False
 
 

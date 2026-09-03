@@ -5,7 +5,8 @@ origin and the important session cookies are HttpOnly.  This module uses the
 Chrome DevTools Protocol only with a temporary, isolated browser profile.  A
 person completes the login in the official WPS page, then the helper reads
 the cookies Chrome itself has stored and sends the minimum useful snapshot to
-the adapter host over SSH.
+the adapter host over HTTPS.  SSH and local-file targets remain available as
+fallbacks.
 
 No WPS password is handled by this process and no cookie value is printed.
 The server-side adapter continues to use its existing ``rtk`` refresh flow
@@ -15,6 +16,7 @@ after this one-time bootstrap.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import os
 import secrets
@@ -25,8 +27,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlsplit
@@ -302,6 +305,142 @@ def push_credentials_over_ssh(
         )
 
 
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip("[]").casefold()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _adapter_url_parts(adapter_url: str) -> tuple[str, str, int | None]:
+    if not isinstance(adapter_url, str) or not adapter_url:
+        raise LoginError("适配器地址不能为空")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in adapter_url):
+        raise LoginError("适配器地址不能包含控制字符")
+    parts = urlsplit(adapter_url)
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise LoginError("适配器地址中的端口无效") from exc
+    host = parts.hostname
+    if (
+        parts.scheme not in {"https", "http"}
+        or not host
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+        or parts.path not in {"", "/"}
+    ):
+        raise LoginError("适配器地址应为不带路径、账号或查询参数的 HTTPS 地址")
+    if parts.scheme != "https" and not _is_loopback_host(host):
+        raise LoginError("远程适配器必须使用 HTTPS；HTTP 只允许本机地址")
+    return parts.scheme, host, port
+
+
+def _validate_adapter_auth(username: str, password: str) -> None:
+    if not isinstance(username, str) or not username or ":" in username:
+        raise LoginError("适配器用户名不能为空且不能包含冒号")
+    if not isinstance(password, str) or not password:
+        raise LoginError("适配器密码不能为空")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in username + password):
+        raise LoginError("适配器账号或密码不能包含控制字符")
+
+
+def _cookie_payload(cookies: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
+    payload: list[dict[str, str]] = []
+    for raw_cookie in cookies:
+        if not isinstance(raw_cookie, Mapping):
+            continue
+        name = raw_cookie.get("name")
+        value = raw_cookie.get("value")
+        if not isinstance(name, str) or not isinstance(value, str):
+            continue
+        item = {"name": name, "value": value}
+        for field_name in ("domain", "path"):
+            field_value = raw_cookie.get(field_name)
+            if isinstance(field_value, str):
+                item[field_name] = field_value
+        payload.append(item)
+    if not payload:
+        raise LoginError("没有可同步的 WPS Cookie")
+    if len(payload) > 256:
+        raise LoginError("WPS Cookie 数量异常")
+    return payload
+
+
+def push_credentials_over_https(
+    credentials: WpsCredentials,
+    *,
+    cookies: Sequence[Mapping[str, object]],
+    adapter_url: str,
+    username: str,
+    password: str,
+    timeout: float = 30.0,
+    connection_factory: Callable[[str, int | None, float], object] | None = None,
+) -> None:
+    """Send a selected WPS cookie snapshot to the authenticated adapter.
+
+    The adapter URL is never redirected and remote HTTP is rejected.  The
+    password is used only to construct the in-memory Basic Auth header.
+    """
+
+    scheme, host, port = _adapter_url_parts(adapter_url)
+    _validate_adapter_auth(username, password)
+    if timeout <= 0:
+        raise LoginError("适配器同步超时时间必须为正数")
+    if not credentials.cookie or not credentials.csrf_token:
+        raise LoginError("WPS 登录凭据不完整")
+    body = json.dumps(
+        {"cookies": _cookie_payload(cookies)},
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    authorization = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    if connection_factory is None:
+        connection_factory = (
+            HTTPSConnection if scheme == "https" else HTTPConnection
+        )
+    try:
+        connection = connection_factory(host, port, timeout)
+    except (OSError, TypeError) as exc:
+        raise LoginError("无法连接适配器") from exc
+    response_status: int | None = None
+    try:
+        try:
+            connection.request(  # type: ignore[attr-defined]
+                "POST",
+                "/api/v1/session/import",
+                body=body,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Basic {authorization}",
+                    "Connection": "close",
+                },
+            )
+            response = connection.getresponse()  # type: ignore[attr-defined]
+            response_status = getattr(response, "status", None)
+            response.read()
+        except (OSError, TimeoutError) as exc:
+            raise LoginError("HTTPS 同步凭据失败，请检查地址和网络") from exc
+    finally:
+        try:
+            connection.close()  # type: ignore[attr-defined]
+        except OSError:
+            pass
+
+    if response_status == 401:
+        raise LoginError("适配器认证失败，请检查适配器账号和密码")
+    if response_status == 404:
+        raise LoginError("适配器没有凭据导入接口，请先更新 VPS 上的适配器")
+    if not isinstance(response_status, int) or not 200 <= response_status < 300:
+        raise LoginError(f"适配器拒绝了凭据同步（HTTP {response_status or 'unknown'}）")
+
+
 class _WebSocket:
     """Tiny client for the local CDP WebSocket, using only the stdlib."""
 
@@ -522,34 +661,6 @@ def _cdp_page_url(port: int, *, timeout: float) -> str:
     raise LoginError("等待 Chrome 登录窗口超时" + suffix)
 
 
-def _wait_for_enter(timeout: float) -> None:
-    """Wait for Enter without leaving a headless helper blocked forever."""
-
-    if not sys.stdin.isatty():
-        try:
-            input()
-        except EOFError as exc:
-            raise LoginError("登录助手需要在终端中运行") from exc
-        return
-    if sys.platform == "win32":
-        import msvcrt
-
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if msvcrt.kbhit():
-                character = msvcrt.getwch()
-                if character in {"\r", "\n"}:
-                    return
-            time.sleep(0.1)
-        raise LoginError("等待登录完成超时")
-    import select
-
-    ready, _, _ = select.select([sys.stdin], [], [], timeout)
-    if not ready:
-        raise LoginError("等待登录完成超时")
-    sys.stdin.readline()
-
-
 @dataclass
 class ChromeLoginSession:
     """A temporary visible Chrome profile controlled through local CDP."""
@@ -626,6 +737,44 @@ class ChromeLoginSession:
         self.close()
 
 
+def wait_for_login_credentials(
+    session: ChromeLoginSession,
+    *,
+    login_url: str,
+    domain_suffix: str,
+    timeout: float,
+) -> tuple[WpsCredentials, tuple[str, ...], list[Mapping[str, object]]]:
+    """Poll the isolated browser until the WPS refresh session is available."""
+
+    if timeout <= 0:
+        raise LoginError("登录等待时间必须为正数")
+    deadline = time.monotonic() + timeout
+    last_error: LoginError | None = None
+    while True:
+        try:
+            all_cookies = session.cookies()
+            selected = _select_cookies(
+                all_cookies,
+                host=_host_from_url(login_url),
+                domain_suffix=domain_suffix,
+            )
+            credentials, names = credentials_from_cookies(
+                selected,
+                base_url=login_url,
+                domain_suffix=domain_suffix,
+            )
+            return credentials, names, selected
+        except LoginError as exc:
+            last_error = exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = "请确认已在官方 WPS 页面完成登录，并且账号允许自动续期"
+            if last_error is not None and "没有 rtk" in str(last_error):
+                detail = "登录成功但没有找到 rtk，请确认已进入云盘页面后重试"
+            raise LoginError("等待 WPS 登录完成超时；" + detail) from last_error
+        time.sleep(min(0.5, remaining))
+
+
 def login_and_sync(
     *,
     login_url: str = DEFAULT_LOGIN_URL,
@@ -638,27 +787,37 @@ def login_and_sync(
     ssh_identity: str | None = None,
     output_dir: str | None = None,
     ssh_timeout: float = 30.0,
+    adapter_url: str = "",
+    adapter_user: str = "",
+    adapter_password: str | None = None,
+    adapter_timeout: float = 30.0,
 ) -> tuple[str, ...]:
     """Open WPS, wait for a human login, then sync a safe credential snapshot."""
 
-    if bool(ssh_target) == bool(output_dir):
-        raise LoginError("请在 --ssh-target 和 --output-dir 中选择一个同步目标")
+    target_count = sum(bool(target) for target in (ssh_target, output_dir, adapter_url))
+    if target_count != 1:
+        raise LoginError("请在 --adapter-url、--ssh-target 和 --output-dir 中选择一个同步目标")
     if wait_timeout <= 0:
         raise LoginError("登录等待时间必须为正数")
     if output_dir is not None and not Path(output_dir).is_absolute():
         raise LoginError("本地凭据目录必须是绝对路径")
+    if adapter_url:
+        _adapter_url_parts(adapter_url)
+        _validate_adapter_auth(adapter_user, adapter_password or "")
+        if adapter_timeout <= 0:
+            raise LoginError("适配器同步超时时间必须为正数")
     with ChromeLoginSession(login_url=login_url, browser=browser) as session:
         print("WPS 登录窗口已打开。请只在这个官方 WPS 窗口中完成登录。", flush=True)
-        print("登录成功并看到云盘页面后，回到此终端按回车继续。", flush=True)
+        print("完成登录后脚本会自动检测，无需回到终端操作。", flush=True)
         try:
-            _wait_for_enter(wait_timeout)
-        except (EOFError, KeyboardInterrupt) as exc:
+            credentials, names, selected_cookies = wait_for_login_credentials(
+                session,
+                login_url=login_url,
+                domain_suffix=domain_suffix,
+                timeout=wait_timeout,
+            )
+        except KeyboardInterrupt as exc:
             raise LoginError("已取消登录同步") from exc
-        credentials, names = credentials_from_cookies(
-            session.cookies(),
-            base_url=login_url,
-            domain_suffix=domain_suffix,
-        )
 
     print(
         f"已获取 {len(names)} 个 WPS Cookie（包含 rtk 和 csrf）；Cookie 值不会显示。",
@@ -674,6 +833,16 @@ def login_and_sync(
             timeout=ssh_timeout,
         )
         print("已通过 SSH 更新 VPS 凭据，适配器下次请求会读取新会话。", flush=True)
+    elif adapter_url:
+        push_credentials_over_https(
+            credentials,
+            cookies=selected_cookies,
+            adapter_url=adapter_url,
+            username=adapter_user,
+            password=adapter_password or "",
+            timeout=adapter_timeout,
+        )
+        print("已通过 HTTPS 更新适配器凭据，服务无需重启。", flush=True)
     else:
         cookie_path, csrf_path = write_local_credentials(credentials, output_dir=output_dir or "")
         print(f"已写入本地凭据文件：{cookie_path}、{csrf_path}", flush=True)

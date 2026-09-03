@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 
 from . import __version__
 from .client import WpsApiError
+from .login import credentials_from_cookies
 from .provider import (
     AlreadyExistsError,
     AmbiguousPathError,
@@ -462,10 +463,13 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                 break
             remaining -= len(chunk)
 
-    def _json_body(self) -> dict[str, Any] | None:
+    def _json_body(self, *, max_length: int | None = None) -> dict[str, Any] | None:
         length = self._content_length(required=True)
         if length is None:
             return None
+        if max_length is not None and length > max_length:
+            self._discard_body()
+            raise ValueError("request body is too large")
         body = self.rfile.read(length)
         if len(body) != length:
             raise ValueError("request body is shorter than Content-Length")
@@ -992,6 +996,32 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         else:
             self._send_error(HTTPStatus.NOT_FOUND, "unknown REST route", rest=True)
 
+    def _do_rest_session_import(self) -> None:
+        payload = self._json_body(max_length=512 * 1024)
+        if payload is None:
+            return
+        raw_cookies = payload.get("cookies")
+        if not isinstance(raw_cookies, list) or not raw_cookies:
+            raise ValueError("JSON field 'cookies' must be a non-empty array")
+        if len(raw_cookies) > 256:
+            raise ValueError("too many cookies")
+        credentials, names = credentials_from_cookies(
+            raw_cookies,
+            base_url=getattr(
+                self.application.storage.client.config,
+                "base_url",
+                "https://365.kdocs.cn",
+            ),
+        )
+        source = getattr(self.application.storage.client.config, "credential_source", None)
+        replace_credentials = getattr(source, "replace_credentials", None)
+        if not callable(replace_credentials) or not replace_credentials(credentials):
+            raise WpsApiError("store imported credentials")
+        self._send_json(
+            HTTPStatus.OK,
+            {"status": "ok", "cookie_count": len(names)},
+        )
+
     def _do_rest_put(self, route: str, query: dict[str, list[str]]) -> None:
         if route not in {"upload", "files"}:
             self._discard_body()
@@ -1020,6 +1050,9 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.CREATED, {"path": path, "entry": self._entry_json(entry)})
 
     def _do_rest_post(self, route: str, query: dict[str, list[str]]) -> None:
+        if route == "session/import":
+            self._do_rest_session_import()
+            return
         if route not in {"folders", "folder"}:
             self._discard_body()
             self._send_error(HTTPStatus.NOT_FOUND, "unknown REST route", rest=True)

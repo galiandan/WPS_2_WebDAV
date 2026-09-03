@@ -8,6 +8,7 @@ from http.client import HTTPConnection
 from io import BytesIO
 from types import SimpleNamespace
 
+from wps_adapter.client import WpsCredentials
 from wps_adapter.provider import (
     EntryNotFoundError,
     InvalidPathError,
@@ -98,6 +99,15 @@ class FakeStorage:
         self.copied_paths.append((source, destination, depth, overwrite))
         name = destination.rstrip("/").rsplit("/", 1)[-1]
         return RemoteEntry(id="copy-1", name=name, kind="file", parent_id="root", size=11)
+
+
+class ImportCredentialSource:
+    def __init__(self) -> None:
+        self.credentials = WpsCredentials()
+
+    def replace_credentials(self, credentials: WpsCredentials) -> bool:
+        self.credentials = credentials
+        return True
 
 
 class ServerTests(unittest.TestCase):
@@ -279,6 +289,43 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(headers["Content-Range"], "bytes 6-10/11")
         self.assertEqual(headers["Content-Length"], "5")
         self.assertEqual(body, b"world")
+
+    def test_session_import_uses_basic_auth_and_replaces_credentials(self) -> None:
+        source = ImportCredentialSource()
+        self.storage.client.config.credential_source = source
+        self.storage.client.config.base_url = "https://365.kdocs.cn"
+        self.server.application.auth = BasicAuth(username="adapter", password="secret")
+        payload = json.dumps(
+            {
+                "cookies": [
+                    {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/passport/secure"},
+                    {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
+                ]
+            }
+        ).encode("utf-8")
+
+        status, _headers, _body = self.request(
+            "POST",
+            "/api/v1/session/import",
+        )
+        self.assertEqual(status, 401)
+
+        authorization = "Basic " + base64.b64encode(b"adapter:secret").decode("ascii")
+        status, headers, body = self.request(
+            "POST",
+            "/api/v1/session/import",
+            body=payload,
+            headers={
+                "Authorization": authorization,
+                "Content-Length": str(len(payload)),
+                "Content-Type": "application/json",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(json.loads(body)["cookie_count"], 2)
+        self.assertIn("rtk=refresh", source.credentials.cookie)
+        self.assertEqual(source.credentials.csrf_token, "csrf")
 
     def test_rest_list_and_basic_auth(self) -> None:
         status, _headers, body = self.request("GET", "/api/v1/entries?path=%2F")

@@ -35,7 +35,7 @@ sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-u
 sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-password
 ```
 
-优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。它会在官方 WPS 页面完成交互式登录，然后通过 SSH 写入 `wps-cookie` 和 `wps-csrf`；不需要把 Cookie 粘贴进命令行。
+优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。公网部署并配置 HTTPS 反向代理后，助手可以通过受 Basic Auth 保护的接口直接写入 `wps-cookie` 和 `wps-csrf`；没有 HTTPS 时仍可使用 SSH 备用方式。不需要把 Cookie 粘贴进命令行。
 
 适配器 Basic Auth 的用户名和密码分别写入 `adapter-username`、`adapter-password`。这些文件只允许服务用户读取。不要把 WPS 密码、Cookie 或 Basic Auth 密码放入 `.env`、Git、Issue 或聊天。
 
@@ -96,7 +96,7 @@ sudo journalctl -u wps-adapter -n 100 --no-pager
 
 ## 6. Reverse proxy
 
-让反向代理终止 TLS，并将请求转发到 `http://127.0.0.1:54321`。保留适配器 Basic Auth；不要在代理访问日志中记录 `Authorization` 头或查询参数。WebDAV 客户端使用：
+让反向代理终止 TLS，并将请求转发到 `http://127.0.0.1:54321`。保留适配器 Basic Auth；不要在代理访问日志中记录 `Authorization` 头、查询参数或请求体。登录助手的 HTTPS 凭据导入也必须经过这条 TLS 入口。WebDAV 客户端使用：
 
 ```text
 https://<vps-host>/dav/
@@ -119,4 +119,4 @@ sudo cp /etc/wps-adapter/wps-adapter.env \
 
 ## 8. Session expiry
 
-服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手。服务无需因凭据同步而重启。
+服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手，通过 HTTPS 导入或 SSH 备用方式更新凭据。服务无需因凭据同步而重启。
