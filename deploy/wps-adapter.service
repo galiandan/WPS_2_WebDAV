@@ -1,0 +1,24 @@
+[Unit]
+Description=WPS enterprise cloud drive WebDAV adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/wps-adapter
+EnvironmentFile=-/etc/wps-adapter/wps-adapter.env
+Environment=PYTHONPATH=/opt/wps-adapter/src
+ExecStart=/usr/bin/python3 -m wps_adapter serve
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/wps-adapter/secrets
+
+[Install]
+WantedBy=multi-user.target

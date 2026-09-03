@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# HAR/HTTP captures can contain cookies, bearer tokens, signed URLs, and file data.
+captures/
+artifacts/
+*.har
+*.har.gz
+*.pcap
+*.pcapng
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/

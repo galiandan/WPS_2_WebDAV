@@ -1,0 +1,1390 @@
+"""Client for the WPS operations confirmed by browser captures.
+
+The client deliberately keeps the WPS-specific surface small.  Credentials
+can be loaded from files so a long-running adapter can use a newly exported
+session without putting secrets on the command line or in the process
+environment.  No WPS refresh endpoint is assumed: a refresh hook is an
+explicit extension point and otherwise a 401 is returned to the caller.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from hashlib import md5, sha1, sha256
+from http.client import HTTPSConnection
+from pathlib import Path
+from typing import Any, BinaryIO, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import Request, build_opener
+from xml.etree import ElementTree
+
+from .provider import InsufficientStorageError, RemoteEntry, UnsupportedOperationError
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _csrf_from_cookie(cookie: str) -> str:
+    for item in cookie.split(";"):
+        name, separator, value = item.strip().partition("=")
+        if separator and name.strip().lower() == "csrf":
+            return value.strip()
+    return ""
+
+
+class _Response(Protocol):
+    headers: Any
+
+    def read(self, size: int = -1) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
+class _Opener(Protocol):
+    def open(self, request: Request, timeout: float) -> _Response: ...
+
+
+class _HttpsConnection(Protocol):
+    def putrequest(self, method: str, url: str) -> None: ...
+
+    def putheader(self, header: str, value: str) -> None: ...
+
+    def endheaders(self) -> None: ...
+
+    def send(self, data: bytes) -> None: ...
+
+    def getresponse(self) -> Any: ...
+
+    def close(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class WpsCredentials:
+    """A point-in-time credential snapshot.
+
+    Values are intentionally excluded from ``repr`` so accidental diagnostic
+    output cannot reveal the browser session.
+    """
+
+    cookie: str = field(default="", repr=False)
+    csrf_token: str = field(default="", repr=False)
+
+
+class CredentialSource(Protocol):
+    """Source for credentials and an optional, explicitly implemented refresh."""
+
+    def get(self) -> WpsCredentials: ...
+
+    def refresh(self) -> bool: ...
+
+
+@dataclass(slots=True)
+class FileCredentialSource:
+    """Read session values from local files on every request.
+
+    ``refresh`` can optionally invoke a locally configured helper.  The helper
+    is deliberately out of the WPS client: the WPS login/refresh protocol is
+    not assumed, and the helper must update the credential files atomically.
+    With no helper configured, refresh only detects files replaced by the
+    operator while the service is running.
+    """
+
+    cookie_path: str | None = None
+    csrf_token_path: str | None = None
+    refresh_command: tuple[str, ...] = ()
+    refresh_timeout: float = 30.0
+    _last: WpsCredentials | None = field(default=None, init=False, repr=False)
+    _refresh_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    @staticmethod
+    def _read(path: str | None) -> str:
+        if not path:
+            return ""
+        try:
+            return Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise WpsApiError("read credential file") from exc
+
+    def _snapshot(self) -> WpsCredentials:
+        return WpsCredentials(
+            cookie=self._read(self.cookie_path),
+            csrf_token=self._read(self.csrf_token_path),
+        )
+
+    def get(self) -> WpsCredentials:
+        credentials = self._snapshot()
+        self._last = credentials
+        return credentials
+
+    def refresh(self) -> bool:
+        with self._refresh_lock:
+            before = self._last or self._snapshot()
+            if self.refresh_command:
+                if self.refresh_timeout <= 0:
+                    raise ValueError("refresh_timeout must be positive")
+                try:
+                    completed = subprocess.run(
+                        list(self.refresh_command),
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=self.refresh_timeout,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    return False
+                if completed.returncode != 0:
+                    return False
+            current = self._snapshot()
+            self._last = current
+            return bool(current.cookie) and current != before
+
+
+@dataclass(slots=True)
+class StaticCredentialSource:
+    """Small adapter useful for embedding and tests."""
+
+    credentials: WpsCredentials
+
+    def get(self) -> WpsCredentials:
+        return self.credentials
+
+    def refresh(self) -> bool:
+        return False
+
+
+class WpsApiError(RuntimeError):
+    """An API or transport error without echoing response contents."""
+
+    def __init__(self, operation: str, *, status: int | None = None) -> None:
+        self.operation = operation
+        self.status = status
+        suffix = f" (HTTP {status})" if status is not None else ""
+        super().__init__(f"WPS operation failed: {operation}{suffix}")
+
+
+@dataclass(frozen=True, slots=True)
+class WpsClientConfig:
+    """Connection settings; cookie values are deliberately excluded from repr."""
+
+    group_id: str
+    cookie: str = field(default="", repr=False)
+    csrf_token: str = field(default="", repr=False)
+    cookie_file: str | None = None
+    csrf_token_file: str | None = None
+    credential_source: CredentialSource | None = field(default=None, repr=False, compare=False)
+    base_url: str = "https://365.kdocs.cn"
+    referer: str | None = None
+    origin: str | None = None
+    cid: str | None = None
+    timeout: float = 30.0
+    upload_spool_memory: int = 8 * 1024 * 1024
+    stream_chunk_size: int = 1024 * 1024
+    multipart_threshold: int = 50 * 1024 * 1024
+    multipart_part_size: int = 10 * 1024 * 1024
+    enable_range: bool = True
+    upload_spool_dir: str | None = None
+    upload_min_free_bytes: int = 512 * 1024 * 1024
+    max_upload_bytes: int = 0
+    upload_retries: int = 2
+    upload_retry_delay: float = 0.5
+    credential_refresh_command: tuple[str, ...] = ()
+    credential_refresh_timeout: float = 30.0
+
+    @classmethod
+    def from_env(cls) -> "WpsClientConfig":
+        refresh_command_text = os.environ.get("WPS_CREDENTIAL_REFRESH_COMMAND", "").strip()
+        refresh_command = tuple(shlex.split(refresh_command_text)) if refresh_command_text else ()
+        cookie_file = os.environ.get("WPS_COOKIE_FILE") or None
+        csrf_token_file = os.environ.get("WPS_CSRF_TOKEN_FILE") or None
+        return cls(
+            group_id=os.environ.get("WPS_GROUP_ID", ""),
+            cookie=os.environ.get("WPS_COOKIE", ""),
+            csrf_token=os.environ.get("WPS_CSRF_TOKEN", ""),
+            cookie_file=cookie_file,
+            csrf_token_file=csrf_token_file,
+            credential_source=(
+                FileCredentialSource(
+                    cookie_path=cookie_file,
+                    csrf_token_path=csrf_token_file,
+                    refresh_command=refresh_command,
+                    refresh_timeout=float(os.environ.get("WPS_CREDENTIAL_REFRESH_TIMEOUT", "30")),
+                )
+                if cookie_file or csrf_token_file or refresh_command
+                else None
+            ),
+            base_url=os.environ.get("WPS_BASE_URL", "https://365.kdocs.cn"),
+            referer=os.environ.get("WPS_REFERER") or None,
+            origin=os.environ.get("WPS_ORIGIN") or None,
+            cid=os.environ.get("WPS_CID") or None,
+            timeout=float(os.environ.get("WPS_TIMEOUT", "30")),
+            upload_spool_memory=int(os.environ.get("WPS_UPLOAD_SPOOL_MEMORY", str(8 * 1024 * 1024))),
+            stream_chunk_size=int(os.environ.get("WPS_STREAM_CHUNK_SIZE", str(1024 * 1024))),
+            multipart_threshold=int(os.environ.get("WPS_MULTIPART_THRESHOLD", str(50 * 1024 * 1024))),
+            multipart_part_size=int(os.environ.get("WPS_MULTIPART_PART_SIZE", str(10 * 1024 * 1024))),
+            enable_range=_env_bool("WPS_ENABLE_RANGE", default=True),
+            upload_spool_dir=os.environ.get("WPS_UPLOAD_SPOOL_DIR") or None,
+            upload_min_free_bytes=int(
+                os.environ.get("WPS_UPLOAD_MIN_FREE_BYTES", str(512 * 1024 * 1024))
+            ),
+            max_upload_bytes=int(os.environ.get("WPS_MAX_UPLOAD_BYTES", "0")),
+            upload_retries=int(os.environ.get("WPS_UPLOAD_RETRIES", "2")),
+            upload_retry_delay=float(os.environ.get("WPS_UPLOAD_RETRY_DELAY", "0.5")),
+            credential_refresh_command=refresh_command,
+            credential_refresh_timeout=float(
+                os.environ.get("WPS_CREDENTIAL_REFRESH_TIMEOUT", "30")
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ListPage:
+    entries: tuple[RemoteEntry, ...]
+    next_offset: int | None
+    next_filter: str | None
+    result: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UploadOptions:
+    """Captured-shape defaults for the normal upload fallback.
+
+    The endpoint and field names are observed; defaults for optional control
+    fields remain provisional until a second successful replay confirms them.
+    """
+
+    parent_path: tuple[str, ...] = ()
+    req_by_internal: bool = False
+    client_stores: str = ""
+    startswithfilename: str = ""
+    successactionstatus: int = 200
+    file_id: int = 0
+    with_rapid: bool = True
+    tried_store: tuple[str, ...] = ()
+    is_up_new_ver: bool = False
+
+
+@dataclass(slots=True)
+class DownloadStream:
+    """A streaming object-storage response returned by the download API."""
+
+    response: _Response
+    status: str | None
+    content_type: str | None
+    content_length: int | None
+    http_status: int = 200
+    content_range: str | None = None
+    _on_close: Callable[[], None] | None = field(default=None, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    def read(self, size: int = -1) -> bytes:
+        return self.response.read(size)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.response.close()
+        finally:
+            if self._on_close is not None:
+                self._on_close()
+
+    def __enter__(self) -> "DownloadStream":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_value: Any, _traceback: Any) -> None:
+        self.close()
+
+
+class WpsDriveClient:
+    """Client for observed list, download, and normal-upload endpoints."""
+
+    def __init__(
+        self,
+        config: WpsClientConfig,
+        *,
+        opener: _Opener | None = None,
+        https_connection_factory: Callable[[str, int | None, float], _HttpsConnection] | None = None,
+    ) -> None:
+        if not config.group_id:
+            raise ValueError("group_id is required")
+        self.config = config
+        self._opener = opener or build_opener()
+        self._https_connection_factory = https_connection_factory or (
+            lambda host, port, timeout: HTTPSConnection(host, port=port, timeout=timeout)
+        )
+
+    def _credentials(self) -> WpsCredentials:
+        if self.config.credential_source is not None:
+            credentials = self.config.credential_source.get()
+            if not credentials.cookie and self.config.cookie:
+                credentials = WpsCredentials(
+                    cookie=self.config.cookie,
+                    csrf_token=credentials.csrf_token,
+                )
+            if not credentials.csrf_token and self.config.csrf_token:
+                credentials = WpsCredentials(
+                    cookie=credentials.cookie,
+                    csrf_token=self.config.csrf_token,
+                )
+        else:
+            credentials = WpsCredentials(
+                cookie=(
+                    Path(self.config.cookie_file).read_text(encoding="utf-8").strip()
+                    if self.config.cookie_file
+                    else self.config.cookie
+                ),
+                csrf_token=(
+                    Path(self.config.csrf_token_file).read_text(encoding="utf-8").strip()
+                    if self.config.csrf_token_file
+                    else self.config.csrf_token
+                ),
+            )
+        if not credentials.csrf_token:
+            credentials = WpsCredentials(
+                cookie=credentials.cookie,
+                csrf_token=_csrf_from_cookie(credentials.cookie),
+            )
+        return credentials
+
+    def _refresh_credentials(self) -> bool:
+        source = self.config.credential_source
+        return source.refresh() if source is not None else False
+
+    def _url(self, path: str, query: Sequence[tuple[str, str]] = ()) -> str:
+        url = self.config.base_url.rstrip("/") + "/" + path.lstrip("/")
+        encoded_query = urlencode(query)
+        return f"{url}?{encoded_query}" if encoded_query else url
+
+    def _request_json(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        query: Sequence[tuple[str, str]] = (),
+        body: bytes | None = None,
+    ) -> dict[str, Any]:
+        url = self._url(path, query)
+        credentials = self._credentials()
+        response = None
+        for attempt in range(2):
+            request = Request(url, data=body, method=method)
+            request.add_header("Accept", "*/*")
+            if body is not None:
+                request.add_header("Content-Type", "application/json")
+            if credentials.cookie:
+                request.add_header("Cookie", credentials.cookie)
+            if self.config.referer:
+                request.add_header("Referer", self.config.referer)
+            if self.config.origin:
+                request.add_header("Origin", self.config.origin)
+
+            try:
+                response = self._opener.open(request, timeout=self.config.timeout)
+                break
+            except HTTPError as exc:
+                exc.close()
+                if exc.code == 401 and attempt == 0 and self._refresh_credentials():
+                    credentials = self._credentials()
+                    continue
+                raise WpsApiError(path, status=exc.code) from None
+            except URLError as exc:
+                raise WpsApiError(path) from exc
+
+        if response is None:
+            raise WpsApiError(path, status=401)
+
+        try:
+            payload = response.read()
+        finally:
+            response.close()
+
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WpsApiError(path) from exc
+        if not isinstance(decoded, dict):
+            raise WpsApiError(path)
+        return decoded
+
+    @staticmethod
+    def _bool(value: bool) -> str:
+        return "true" if value else "false"
+
+    @staticmethod
+    def _json_id(value: str) -> int | str:
+        return int(value) if value.isdecimal() else value
+
+    @staticmethod
+    def _entry_from_item(item: Mapping[str, Any]) -> RemoteEntry:
+        if item.get("id") is None:
+            raise WpsApiError("normalize file metadata")
+        kind = item.get("ftype")
+        normalized_kind = kind if isinstance(kind, str) and kind in {"file", "folder"} else "unknown"
+        return RemoteEntry(
+            id=str(item["id"]),
+            name=str(item.get("fname", "")),
+            kind=normalized_kind,
+            parent_id=str(item["parentid"]) if item.get("parentid") is not None else None,
+            size=item.get("fsize")
+            if isinstance(item.get("fsize"), int) and not isinstance(item.get("fsize"), bool)
+            else None,
+            modified_at=str(item["mtime"]) if item.get("mtime") is not None else None,
+            etag=str(item["fsha"]) if item.get("fsha") is not None else None,
+            link_id=str(item["link_id"]) if item.get("link_id") else None,
+        )
+
+    def list_entries(
+        self,
+        parent_id: str,
+        *,
+        offset: int = 0,
+        count: int = 20,
+        orderby: str = "mtime",
+        order: str = "desc",
+        linkgroup: bool | None = None,
+        include: str | None = None,
+        with_link: bool | None = None,
+        review_pic_thumbnail: bool | None = None,
+        with_sharefolder_type: bool | None = None,
+    ) -> ListPage:
+        """List a remote folder using the captured v5 endpoint shape."""
+
+        query: list[tuple[str, str]] = [
+            ("parentid", parent_id),
+            ("offset", str(offset)),
+            ("count", str(count)),
+            ("orderby", orderby),
+            ("order", order),
+        ]
+        optional = (
+            ("linkgroup", linkgroup),
+            ("include", include),
+            ("with_link", with_link),
+            ("review_pic_thumbnail", review_pic_thumbnail),
+            ("with_sharefolder_type", with_sharefolder_type),
+        )
+        for name, value in optional:
+            if value is None:
+                continue
+            query.append((name, self._bool(value) if isinstance(value, bool) else str(value)))
+
+        payload = self._request_json(
+            f"/3rd/drive/api/v5/groups/{quote(self.config.group_id, safe='')}/files",
+            query=query,
+        )
+        raw_entries = payload.get("files", [])
+        if not isinstance(raw_entries, list):
+            raise WpsApiError("list files")
+
+        entries = []
+        for item in raw_entries:
+            if not isinstance(item, Mapping) or item.get("id") is None:
+                continue
+            entries.append(self._entry_from_item(item))
+
+        next_offset = payload.get("next_offset")
+        if not isinstance(next_offset, int):
+            next_offset = None
+        next_filter = payload.get("next_filter")
+        if not isinstance(next_filter, str):
+            next_filter = None
+        result = payload.get("result")
+        if not isinstance(result, str):
+            result = None
+        if result not in {None, "ok"}:
+            raise WpsApiError("list files")
+        return ListPage(tuple(entries), next_offset, next_filter, result)
+
+    def iter_entries(
+        self,
+        parent_id: str,
+        *,
+        count: int = 100,
+        orderby: str = "mtime",
+        order: str = "desc",
+        linkgroup: bool | None = None,
+        include: str | None = None,
+        with_link: bool | None = None,
+        review_pic_thumbnail: bool | None = None,
+        with_sharefolder_type: bool | None = None,
+    ) -> Sequence[RemoteEntry]:
+        """Fetch all pages while guarding against a broken repeated cursor."""
+
+        if count <= 0:
+            raise ValueError("count must be positive")
+        entries: list[RemoteEntry] = []
+        offset = 0
+        seen_offsets: set[int] = set()
+        while True:
+            page = self.list_entries(
+                parent_id,
+                offset=offset,
+                count=count,
+                orderby=orderby,
+                order=order,
+                linkgroup=linkgroup,
+                include=include,
+                with_link=with_link,
+                review_pic_thumbnail=review_pic_thumbnail,
+                with_sharefolder_type=with_sharefolder_type,
+            )
+            entries.extend(page.entries)
+            next_offset = page.next_offset
+            if next_offset is None or next_offset < 0 or next_offset in seen_offsets:
+                return tuple(entries)
+            seen_offsets.add(next_offset)
+            if next_offset <= offset:
+                return tuple(entries)
+            offset = next_offset
+
+    def _csrf(self, csrf_token: str | None) -> str:
+        token = csrf_token or self._credentials().csrf_token
+        if not token:
+            raise ValueError("csrf_token is required for write operation")
+        return token
+
+    @staticmethod
+    def _normalise_etag(value: str) -> str:
+        return value.strip().strip('"')
+
+    def _check_upload_budget(self, total: int) -> None:
+        """Reject an upload before its temporary spool can exhaust the host."""
+
+        if total < 0:
+            raise ValueError("upload size must not be negative")
+        if self.config.max_upload_bytes < 0:
+            raise ValueError("max_upload_bytes must not be negative")
+        if self.config.upload_min_free_bytes < 0:
+            raise ValueError("upload_min_free_bytes must not be negative")
+        if self.config.max_upload_bytes and total > self.config.max_upload_bytes:
+            raise InsufficientStorageError("upload exceeds the configured size limit")
+
+        # SpooledTemporaryFile rolls the complete buffer onto disk once it
+        # crosses max_size, so reserve the complete upload rather than only
+        # the bytes beyond the in-memory threshold.
+        if total <= self.config.upload_spool_memory:
+            return
+        spool_dir = self.config.upload_spool_dir or tempfile.gettempdir()
+        try:
+            free_bytes = shutil.disk_usage(spool_dir).free
+        except OSError as exc:
+            raise InsufficientStorageError("upload spool directory is unavailable") from exc
+        required = total + self.config.upload_min_free_bytes
+        if free_bytes < required:
+            raise InsufficientStorageError("not enough free space for the upload spool")
+
+    def _retry_delay(self, attempt: int) -> None:
+        if attempt and self.config.upload_retry_delay:
+            time.sleep(self.config.upload_retry_delay * (2 ** (attempt - 1)))
+
+    def _signed_target(self, signed_url: str, operation: str) -> tuple[str, int | None, str]:
+        parts = urlsplit(signed_url)
+        if parts.scheme != "https" or not parts.hostname:
+            raise WpsApiError(operation)
+        target = parts.path or "/"
+        if parts.query:
+            target += "?" + parts.query
+        return parts.hostname, parts.port, target
+
+    def _put_signed_object(self, signed_url: str, source: BinaryIO, size: int) -> tuple[str | None, str | None]:
+        host, port, target = self._signed_target(signed_url, "resolve object upload URL")
+        connection = self._https_connection_factory(host, port, self.config.timeout)
+        try:
+            connection.putrequest("PUT", target)
+            connection.putheader("Content-Type", "application/octet-stream")
+            connection.putheader("Content-Length", str(size))
+            connection.endheaders()
+            while True:
+                chunk = source.read(self.config.stream_chunk_size)
+                if not chunk:
+                    break
+                connection.send(chunk)
+            response = connection.getresponse()
+            response_headers = {
+                str(name).lower(): str(value)
+                for name, value in response.getheaders()
+            }
+            response.read()
+            if response.status != 200:
+                raise WpsApiError("object upload", status=response.status)
+            return response_headers.get("etag"), response_headers.get("x-obs-save-key")
+        finally:
+            connection.close()
+
+    def _put_signed_part(
+        self,
+        signed_url: str,
+        data: bytes,
+        *,
+        content_md5: str,
+    ) -> str:
+        host, port, target = self._signed_target(signed_url, "resolve multipart part URL")
+        connection = self._https_connection_factory(host, port, self.config.timeout)
+        try:
+            connection.putrequest("PUT", target)
+            connection.putheader("Content-MD5", content_md5)
+            connection.putheader("Content-Type", "application/octet-stream")
+            connection.putheader("Content-Length", str(len(data)))
+            connection.endheaders()
+            for offset in range(0, len(data), self.config.stream_chunk_size):
+                connection.send(data[offset : offset + self.config.stream_chunk_size])
+            response = connection.getresponse()
+            response_headers = {
+                str(name).lower(): str(value)
+                for name, value in response.getheaders()
+            }
+            response.read()
+            if response.status != 200:
+                raise WpsApiError("multipart part upload", status=response.status)
+            etag = response_headers.get("etag")
+            if not etag:
+                raise WpsApiError("multipart part response missing ETag")
+            return self._normalise_etag(etag)
+        finally:
+            connection.close()
+
+    def _post_signed_data(
+        self,
+        signed_url: str,
+        body: bytes,
+        *,
+        content_type: str,
+    ) -> bytes:
+        host, port, target = self._signed_target(signed_url, "resolve multipart merge URL")
+        connection = self._https_connection_factory(host, port, self.config.timeout)
+        try:
+            connection.putrequest("POST", target)
+            connection.putheader("Content-Type", content_type)
+            connection.putheader("Content-Length", str(len(body)))
+            connection.endheaders()
+            for offset in range(0, len(body), self.config.stream_chunk_size):
+                connection.send(body[offset : offset + self.config.stream_chunk_size])
+            response = connection.getresponse()
+            response_body = response.read()
+            if response.status != 200:
+                raise WpsApiError("multipart merge", status=response.status)
+            return response_body
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _multipart_etag(response_body: bytes) -> str:
+        try:
+            root = ElementTree.fromstring(response_body)
+        except (ElementTree.ParseError, UnicodeDecodeError) as exc:
+            raise WpsApiError("parse multipart merge response") from exc
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] == "ETag" and element.text:
+                return WpsDriveClient._normalise_etag(element.text)
+        raise WpsApiError("multipart merge response missing ETag")
+
+    def create_folder(
+        self,
+        parent_id: str,
+        name: str,
+        *,
+        csrf_token: str | None = None,
+    ) -> RemoteEntry:
+        """Create a folder using the request captured from the WPS UI."""
+
+        if not name or "/" in name or "\\" in name:
+            raise ValueError("name must be one remote folder name")
+        csrf = self._csrf(csrf_token)
+        body = {
+            "groupid": self._json_id(self.config.group_id),
+            "parentid": self._json_id(parent_id),
+            "name": name,
+            "owner": True,
+            "parsed": True,
+            "csrfmiddlewaretoken": csrf,
+        }
+        payload = self._request_json(
+            "/3rd/drive/api/v5/files/folder",
+            method="POST",
+            body=json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+        )
+        if payload.get("result") not in {None, "ok"}:
+            raise WpsApiError("create folder")
+        return self._entry_from_item(payload)
+
+    def rename(
+        self,
+        file_id: str,
+        name: str,
+        *,
+        csrf_token: str | None = None,
+    ) -> RemoteEntry:
+        """Rename one file or folder using the confirmed v3 endpoint."""
+
+        if not file_id:
+            raise ValueError("file_id is required")
+        if not name or "/" in name or "\\" in name:
+            raise ValueError("name must be one remote entry name")
+        csrf = self._csrf(csrf_token)
+        body = {
+            "fname": name,
+            "csrfmiddlewaretoken": csrf,
+        }
+        payload = self._request_json(
+            f"/3rd/drive/api/v3/groups/{quote(self.config.group_id, safe='')}/files/"
+            f"{quote(str(file_id), safe='')}",
+            method="PUT",
+            body=json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+        )
+        if payload.get("result") not in {None, "ok"}:
+            raise WpsApiError("rename file")
+        return self._entry_from_item(payload)
+
+    def _wait_for_task(
+        self,
+        task_uuid: str,
+        *,
+        operation: str,
+        poll_interval: float,
+        poll_timeout: float,
+    ) -> None:
+        deadline = time.monotonic() + poll_timeout
+        while True:
+            progress = self._request_json(
+                "/3rd/drive/api/v5/files/batch/task/progress",
+                query=(("taskuuid", task_uuid),),
+            )
+            if progress.get("result") not in {None, "ok"}:
+                raise WpsApiError(f"{operation} progress")
+            status = progress.get("status")
+            failed_list = progress.get("failed_list")
+            if progress.get("finish") == 1 or status == "success":
+                if failed_list not in (None, []):
+                    raise WpsApiError(operation, status=409)
+                return
+            if status in {"failed", "error"}:
+                raise WpsApiError(f"{operation} task")
+            if time.monotonic() >= deadline:
+                raise WpsApiError(f"{operation} task timeout")
+            if poll_interval:
+                time.sleep(poll_interval)
+
+    def move(
+        self,
+        file_id: str,
+        source_parent_id: str,
+        destination_parent_id: str,
+        *,
+        destination_group_id: str | None = None,
+        csrf_token: str | None = None,
+        option: Mapping[str, Any] | None = None,
+        poll_interval: float = 0.5,
+        poll_timeout: float = 60.0,
+    ) -> None:
+        """Move one entry and wait for the observed task to finish."""
+
+        if not file_id:
+            raise ValueError("file_id is required")
+        if not source_parent_id or not destination_parent_id:
+            raise ValueError("source and destination parent IDs are required")
+        if poll_interval < 0:
+            raise ValueError("poll_interval must not be negative")
+        if poll_timeout <= 0:
+            raise ValueError("poll_timeout must be positive")
+        csrf = self._csrf(csrf_token)
+        body = {
+            "groupid": self._json_id(self.config.group_id),
+            "parentid": self._json_id(source_parent_id),
+            "dst_groupid": self._json_id(destination_group_id or self.config.group_id),
+            "dst_parentid": self._json_id(destination_parent_id),
+            "fileids": [self._json_id(file_id)],
+            "option": dict(option or {}),
+            "csrfmiddlewaretoken": csrf,
+        }
+        task = self._request_json(
+            "/3rd/drive/api/v5/files/batch/task/move",
+            method="POST",
+            body=json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+        )
+        if task.get("result") not in {None, "ok"}:
+            raise WpsApiError("move file")
+        task_uuid = task.get("taskuuid")
+        if not isinstance(task_uuid, str) or not task_uuid:
+            raise WpsApiError("move file task")
+        self._wait_for_task(
+            task_uuid,
+            operation="move file",
+            poll_interval=poll_interval,
+            poll_timeout=poll_timeout,
+        )
+
+    def delete(
+        self,
+        file_id: str,
+        *,
+        csrf_token: str | None = None,
+        poll_interval: float = 0.5,
+        poll_timeout: float = 60.0,
+    ) -> None:
+        """Delete one file or folder and wait for the observed task to finish."""
+
+        if not file_id:
+            raise ValueError("file_id is required")
+        if poll_interval < 0:
+            raise ValueError("poll_interval must not be negative")
+        if poll_timeout <= 0:
+            raise ValueError("poll_timeout must be positive")
+        csrf = self._csrf(csrf_token)
+        body = {
+            "fileids": [self._json_id(file_id)],
+            "groupid": self._json_id(self.config.group_id),
+            "csrfmiddlewaretoken": csrf,
+        }
+        task = self._request_json(
+            "/3rd/drive/api/v5/files/batch/task/delete",
+            method="POST",
+            body=json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+        )
+        if task.get("result") not in {None, "ok"}:
+            raise WpsApiError("delete file")
+        task_uuid = task.get("taskuuid")
+        if not isinstance(task_uuid, str) or not task_uuid:
+            raise WpsApiError("delete file task")
+
+        self._wait_for_task(
+            task_uuid,
+            operation="delete file",
+            poll_interval=poll_interval,
+            poll_timeout=poll_timeout,
+        )
+
+    def _multipart_part_size(self, total: int, limit: Mapping[str, Any]) -> int:
+        try:
+            min_size = int(limit["min_part_size"])
+            max_size = int(limit["max_part_size"])
+            max_parts = int(limit["max_parts"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise WpsApiError("parse multipart limits") from exc
+        if min_size <= 0 or max_size < min_size or max_parts <= 0:
+            raise WpsApiError("invalid multipart limits")
+        if self.config.multipart_part_size <= 0:
+            raise ValueError("multipart_part_size must be positive")
+        part_size = max(self.config.multipart_part_size, min_size)
+        part_size = max(part_size, (total + max_parts - 1) // max_parts)
+        if part_size > max_size:
+            raise WpsApiError("file exceeds multipart size limits")
+        return part_size
+
+    def _multipart_upload(
+        self,
+        spool: BinaryIO,
+        *,
+        total: int,
+        name: str,
+        parent_id: str,
+        sha1_hex: str,
+        options: UploadOptions,
+        csrf: str,
+    ) -> RemoteEntry:
+        """Upload a large file through the captured block/multipart flow."""
+
+        group_text = str(self.config.group_id)
+        parent_text = str(parent_id)
+        init_body = {
+            "with_rapid": options.with_rapid,
+            "hash": sha1_hex,
+            "size": total,
+            "group_id": group_text,
+            "name": name,
+            "parent_id": parent_text,
+            "tried_store": list(options.tried_store),
+            "csrfmiddlewaretoken": csrf,
+        }
+        init_payload = self._request_json(
+            "/3rd/drive/api/v5/files/upload/block",
+            method="POST",
+            body=json.dumps(init_body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+        )
+        if init_payload.get("result") not in {None, "ok"}:
+            raise WpsApiError("initialize multipart upload")
+        upload_id = init_payload.get("upload_id")
+        key = init_payload.get("key")
+        store = init_payload.get("store")
+        limit = init_payload.get("limit")
+        if not isinstance(upload_id, str) or not upload_id:
+            raise WpsApiError("multipart initialization missing upload ID")
+        if not isinstance(key, str) or not key:
+            raise WpsApiError("multipart initialization missing key")
+        if not isinstance(store, str) or not store:
+            raise WpsApiError("multipart initialization missing store")
+        if not isinstance(limit, Mapping):
+            raise WpsApiError("multipart initialization missing limits")
+        part_size = self._multipart_part_size(total, limit)
+        part_infos: list[dict[str, int | str]] = []
+
+        spool.seek(0)
+        part_number = 1
+        while True:
+            data = spool.read(part_size)
+            if not data:
+                break
+            if not isinstance(data, bytes):
+                raise TypeError("upload spool must return bytes")
+            part_md5_hex = md5(data).hexdigest()
+            last_error: Exception | None = None
+            for attempt in range(self.config.upload_retries + 1):
+                try:
+                    block_body = {
+                        "key": key,
+                        "md5": part_md5_hex,
+                        "part_number": part_number,
+                        "part_size": len(data),
+                        "req_by_internal": options.req_by_internal,
+                        "store": store,
+                        "upload_id": upload_id,
+                        "csrfmiddlewaretoken": csrf,
+                    }
+                    block_payload = self._request_json(
+                        "/3rd/drive/api/v5/files/upload/block",
+                        method="PUT",
+                        body=json.dumps(
+                            block_body, ensure_ascii=True, separators=(",", ":")
+                        ).encode("utf-8"),
+                    )
+                    if block_payload.get("result") not in {None, "ok"}:
+                        raise WpsApiError("get multipart part URL")
+                    part_url = block_payload.get("url")
+                    method = block_payload.get("method")
+                    request_info = block_payload.get("request")
+                    response_info = block_payload.get("response")
+                    if method != "PUT" or not isinstance(part_url, str):
+                        raise WpsApiError("invalid multipart part instruction")
+                    if not isinstance(request_info, Mapping) or request_info.get("body_type") != "file":
+                        raise WpsApiError("invalid multipart part request instruction")
+                    if not isinstance(response_info, Mapping):
+                        raise WpsApiError("invalid multipart part response instruction")
+                    expected_codes = response_info.get("expect_code", [200])
+                    if not isinstance(expected_codes, list) or not expected_codes or expected_codes[0] != 200:
+                        raise WpsApiError("unsupported multipart part status")
+                    part_headers = request_info.get("headers")
+                    if not isinstance(part_headers, Mapping):
+                        raise WpsApiError("multipart part headers missing")
+                    content_md5 = part_headers.get("Content-MD5") or part_headers.get("content-md5")
+                    content_type = part_headers.get("Content-Type") or part_headers.get("content-type")
+                    expected_md5 = base64.b64encode(bytes.fromhex(part_md5_hex)).decode("ascii")
+                    if content_md5 != expected_md5 or content_type != "application/octet-stream":
+                        raise WpsApiError("multipart part headers do not match content")
+                    etag = self._put_signed_part(part_url, data, content_md5=content_md5)
+                    break
+                except (OSError, WpsApiError) as exc:
+                    last_error = exc
+                    if attempt >= self.config.upload_retries:
+                        raise
+                    self._retry_delay(attempt + 1)
+            else:
+                raise last_error or WpsApiError("multipart part upload")
+            part_infos.append({"etag": etag, "part_number": part_number})
+            part_number += 1
+
+        merge_body = {
+            "key": key,
+            "req_by_internal": options.req_by_internal,
+            "store": store,
+            "part_infos": part_infos,
+            "upload_id": upload_id,
+            "csrfmiddlewaretoken": csrf,
+        }
+        merge_payload = self._request_json(
+            "/3rd/drive/api/v5/files/upload/block/merge",
+            method="POST",
+            body=json.dumps(merge_body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+        )
+        if merge_payload.get("result") not in {None, "ok"}:
+            raise WpsApiError("prepare multipart merge")
+        merge_url = merge_payload.get("url")
+        merge_method = merge_payload.get("method")
+        merge_request = merge_payload.get("request")
+        merge_response = merge_payload.get("response")
+        merge_body_data = merge_request.get("body_data") if isinstance(merge_request, Mapping) else None
+        merge_headers = merge_request.get("headers") if isinstance(merge_request, Mapping) else None
+        if merge_method != "POST" or not isinstance(merge_url, str):
+            raise WpsApiError("invalid multipart merge instruction")
+        if not isinstance(merge_request, Mapping) or merge_request.get("body_type") != "data":
+            raise WpsApiError("invalid multipart merge request instruction")
+        if not isinstance(merge_body_data, str) or not isinstance(merge_headers, Mapping):
+            raise WpsApiError("multipart merge body is missing")
+        merge_content_type = merge_headers.get("Content-Type") or merge_headers.get("content-type")
+        if merge_content_type != "application/xml":
+            raise WpsApiError("unsupported multipart merge content type")
+        if not isinstance(merge_response, Mapping):
+            raise WpsApiError("invalid multipart merge response instruction")
+        expected_codes = merge_response.get("expect_code", [200])
+        if not isinstance(expected_codes, list) or not expected_codes or expected_codes[0] != 200:
+            raise WpsApiError("unsupported multipart merge status")
+        merged_body = self._post_signed_data(
+            merge_url,
+            merge_body_data.encode("utf-8"),
+            content_type=merge_content_type,
+        )
+        merged_etag = self._multipart_etag(merged_body)
+
+        file_body = {
+            "key": key,
+            "groupid": group_text,
+            "parentid": parent_text,
+            "name": name,
+            "parent_path": list(options.parent_path),
+            "sha1": sha1_hex,
+            "size": total,
+            "store": store,
+            "etag": merged_etag,
+            "isUpNewVer": options.is_up_new_ver,
+            "apiErrorInfo": None,
+            "csrfmiddlewaretoken": csrf,
+        }
+        final_payload = self._request_json(
+            "/3rd/drive/api/v5/files/file",
+            method="POST",
+            body=json.dumps(file_body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+        )
+        if final_payload.get("result") not in {None, "ok"}:
+            raise WpsApiError("register multipart file")
+        return self._entry_from_item(final_payload)
+
+    def upload(
+        self,
+        parent_id: str,
+        name: str,
+        source: BinaryIO,
+        *,
+        size: int | None = None,
+        content_type: str | None = None,
+        csrf_token: str | None = None,
+        options: UploadOptions | None = None,
+        overwrite: bool = False,
+    ) -> RemoteEntry:
+        """Upload through the observed normal-upload fallback.
+
+        The source is spooled temporarily because WPS asks for checksums before
+        returning the signed object-storage URL. The spool is closed and
+        removed when this method returns or raises.
+        """
+
+        if not name or "/" in name or "\\" in name:
+            raise ValueError("name must be one remote file name")
+        if self.config.stream_chunk_size <= 0:
+            raise ValueError("stream_chunk_size must be positive")
+        if self.config.upload_spool_memory < 0:
+            raise ValueError("upload_spool_memory must not be negative")
+        if self.config.upload_min_free_bytes < 0:
+            raise ValueError("upload_min_free_bytes must not be negative")
+        if self.config.max_upload_bytes < 0:
+            raise ValueError("max_upload_bytes must not be negative")
+        if self.config.upload_retries < 0:
+            raise ValueError("upload_retries must not be negative")
+        if self.config.upload_retry_delay < 0:
+            raise ValueError("upload_retry_delay must not be negative")
+        if self.config.multipart_threshold <= 0:
+            raise ValueError("multipart_threshold must be positive")
+        if self.config.multipart_part_size <= 0:
+            raise ValueError("multipart_part_size must be positive")
+        if size is not None:
+            self._check_upload_budget(size)
+        options = options or UploadOptions()
+        if overwrite:
+            options = UploadOptions(
+                parent_path=options.parent_path,
+                req_by_internal=options.req_by_internal,
+                client_stores=options.client_stores or "ks3,ks3sh",
+                startswithfilename=options.startswithfilename or name,
+                successactionstatus=201,
+                file_id=options.file_id,
+                with_rapid=options.with_rapid,
+                tried_store=options.tried_store or ("ks3,ks3sh",),
+                is_up_new_ver=options.is_up_new_ver,
+            )
+        csrf = self._csrf(csrf_token)
+        content_type = content_type or "application/octet-stream"
+
+        hasher_md5 = md5()
+        hasher_sha1 = sha1()
+        hasher_sha256 = sha256()
+        total = 0
+        spool_dir = self.config.upload_spool_dir or tempfile.gettempdir()
+        with tempfile.SpooledTemporaryFile(
+            max_size=self.config.upload_spool_memory,
+            mode="w+b",
+            dir=spool_dir,
+        ) as spool:
+            while True:
+                chunk = source.read(self.config.stream_chunk_size)
+                if not chunk:
+                    break
+                if not isinstance(chunk, bytes):
+                    raise TypeError("source must return bytes")
+                self._check_upload_budget(total + len(chunk))
+                spool.write(chunk)
+                hasher_md5.update(chunk)
+                hasher_sha1.update(chunk)
+                hasher_sha256.update(chunk)
+                total += len(chunk)
+            if size is not None and size != total:
+                raise ValueError(f"source size mismatch: expected {size}, read {total}")
+
+            md5_hex = hasher_md5.hexdigest()
+            sha1_hex = hasher_sha1.hexdigest()
+            sha256_hex = hasher_sha256.hexdigest()
+            group_value = self._json_id(self.config.group_id)
+            parent_value = self._json_id(parent_id)
+
+            try:
+                pre_check = self._request_json(
+                    "/3rd/drive/api/v5/files/upload/pre_check",
+                    query=(
+                        ("file_name", name),
+                        ("group_id", str(group_value)),
+                        ("parent_id", str(parent_value)),
+                    ),
+                )
+            except WpsApiError as exc:
+                if not (overwrite and exc.status == 403):
+                    raise
+                pre_check = {"result": "ok"}
+            if pre_check.get("result") not in {None, "ok"}:
+                raise WpsApiError("upload pre-check")
+
+            if total >= self.config.multipart_threshold:
+                if overwrite:
+                    raise UnsupportedOperationError(
+                        "multipart overwrite is disabled until independently verified"
+                    )
+                return self._multipart_upload(
+                    spool,
+                    total=total,
+                    name=name,
+                    parent_id=parent_id,
+                    sha1_hex=sha1_hex,
+                    options=options,
+                    csrf=csrf,
+                )
+
+            create_body = {
+                "groupid": group_value,
+                "parentid": parent_value,
+                "parent_path": list(options.parent_path),
+                "size": total,
+                "name": name,
+                "req_by_internal": options.req_by_internal,
+                "client_stores": options.client_stores,
+                "contenttype": content_type,
+                "startswithfilename": options.startswithfilename,
+                "successactionstatus": options.successactionstatus,
+                "group_id": group_value,
+                "parent_id": parent_value,
+                "file_id": options.file_id,
+                "with_rapid": options.with_rapid,
+                "tried_store": list(options.tried_store),
+                "sha256": sha256_hex,
+                "csrfmiddlewaretoken": csrf,
+            }
+            if overwrite:
+                create_body["md5"] = md5_hex
+            def create_upload_instruction() -> tuple[dict[str, Any], str]:
+                result = self._request_json(
+                    "/3rd/drive/api/v5/files/upload/create_update",
+                    method="PUT",
+                    body=json.dumps(
+                        create_body, ensure_ascii=True, separators=(",", ":")
+                    ).encode("utf-8"),
+                )
+                url = result.get("url")
+                if not isinstance(url, str):
+                    raise WpsApiError("create upload URL")
+                response_meta = result.get("response")
+                expected_codes = (
+                    response_meta.get("expect_code", [200])
+                    if isinstance(response_meta, Mapping)
+                    else [200]
+                )
+                expected_code = (
+                    expected_codes[0]
+                    if isinstance(expected_codes, list) and expected_codes
+                    else 200
+                )
+                if expected_code != 200:
+                    raise WpsApiError("unsupported object upload status")
+                return result, url
+
+            create_result, signed_url = create_upload_instruction()
+            last_error: Exception | None = None
+            etag: str | None = None
+            for attempt in range(self.config.upload_retries + 1):
+                try:
+                    spool.seek(0)
+                    etag, save_key = self._put_signed_object(signed_url, spool, total)
+                    break
+                except (OSError, WpsApiError) as exc:
+                    last_error = exc
+                    if attempt >= self.config.upload_retries:
+                        raise
+                    self._retry_delay(attempt + 1)
+                    create_result, signed_url = create_upload_instruction()
+            else:
+                raise last_error or WpsApiError("object upload")
+            if etag is None:
+                raise WpsApiError("object upload response missing ETag")
+
+            file_body = {
+                "key": sha1_hex,
+                "groupid": group_value,
+                "parentid": parent_value,
+                "name": name,
+                "parent_path": list(options.parent_path),
+                "sha1": sha1_hex,
+                "size": total,
+                "store": create_result.get("store", ""),
+                "etag": etag,
+                "isUpNewVer": options.is_up_new_ver,
+                "apiErrorInfo": None,
+                "csrfmiddlewaretoken": csrf,
+            }
+            final_payload = self._request_json(
+                "/3rd/drive/api/v5/files/file",
+                method="POST",
+                body=json.dumps(file_body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+            )
+            if final_payload.get("result") not in {None, "ok"}:
+                raise WpsApiError("register uploaded file")
+            return self._entry_from_item(final_payload)
+
+    def open_download(
+        self,
+        file_id: str,
+        *,
+        offset: int = 0,
+        length: int | None = None,
+        checksums: Sequence[str] = ("md5", "sha1", "sha224", "sha256", "sha384", "sha512"),
+        get_direct_external_download_url: bool | None = None,
+        cid: str | None = None,
+    ) -> DownloadStream:
+        """Resolve and open a download stream without forwarding WPS cookies.
+
+        Browser captures show two behaviors: some files return a signed URL
+        when the direct-download flag is omitted, while others require the
+        flag to be ``true``. The default follows the browser request and
+        retries the observed 403 variant with the flag enabled.
+        """
+
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+        if length is not None and length <= 0:
+            raise ValueError("length must be positive")
+        if (offset or length is not None) and not self.config.enable_range:
+            raise WpsApiError("range download is disabled until independently verified")
+
+        if cid is None:
+            cid = self.config.cid
+        path = f"/api/v3/office/file/{quote(str(file_id), safe='')}/download"
+
+        def resolve(direct: bool | None) -> dict[str, Any]:
+            query: list[tuple[str, str]] = [("support_checksums", ",".join(checksums))]
+            if direct is not None:
+                query.append(("get_direct_external_download_url", self._bool(direct)))
+            if cid is not None:
+                query.append(("cid", cid))
+            return self._request_json(path, query=query)
+
+        try:
+            payload = resolve(get_direct_external_download_url)
+        except WpsApiError as exc:
+            if get_direct_external_download_url is None and exc.status == 403:
+                payload = resolve(True)
+            else:
+                raise
+        download_url = payload.get("download_url") or payload.get("url")
+        if not isinstance(download_url, str) or not download_url.startswith("https://"):
+            raise WpsApiError("resolve download URL")
+
+        # The returned URL is already signed. Sending the WPS Cookie to the
+        # object-storage host is unnecessary and increases credential exposure.
+        range_requested = bool(offset or length is not None)
+        request = Request(download_url, method="GET")
+        request.add_header("Accept", "*/*")
+        if range_requested:
+            end = "" if length is None else str(offset + length - 1)
+            request.add_header("Range", f"bytes={offset}-{end}")
+        try:
+            response = self._opener.open(request, timeout=self.config.timeout)
+        except HTTPError as exc:
+            raise WpsApiError("object download", status=exc.code) from None
+        except URLError as exc:
+            raise WpsApiError("object download") from exc
+
+        response_status = getattr(response, "status", 200)
+        if not isinstance(response_status, int):
+            response_status = 200
+        if range_requested and response_status != 206:
+            response.close()
+            raise WpsApiError("range download was not honored", status=response_status)
+        headers = response.headers
+        content_type = headers.get("Content-Type") if headers is not None else None
+        content_length = None
+        if headers is not None:
+            try:
+                content_length = int(headers.get("Content-Length", ""))
+            except (TypeError, ValueError):
+                pass
+        content_range = headers.get("Content-Range") if headers is not None else None
+        status = payload.get("status") if isinstance(payload.get("status"), str) else None
+        return DownloadStream(
+            response,
+            status,
+            content_type,
+            content_length,
+            http_status=response_status,
+            content_range=content_range,
+        )
+
+    def download_to(
+        self,
+        file_id: str,
+        destination: BinaryIO,
+        *,
+        chunk_size: int = 1024 * 1024,
+        checksums: Sequence[str] = ("md5", "sha1", "sha224", "sha256", "sha384", "sha512"),
+        get_direct_external_download_url: bool | None = None,
+        cid: str | None = None,
+    ) -> int:
+        """Stream a file into an existing binary destination and return bytes written."""
+
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        with self.open_download(
+            file_id,
+            checksums=checksums,
+            get_direct_external_download_url=get_direct_external_download_url,
+            cid=cid,
+        ) as stream:
+            total = 0
+            while True:
+                chunk = stream.read(chunk_size)
+                if not chunk:
+                    return total
+                destination.write(chunk)
+                total += len(chunk)
