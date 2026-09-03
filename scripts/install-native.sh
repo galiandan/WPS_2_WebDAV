@@ -15,6 +15,7 @@ BIND_ARG=""
 GROUP_ID_ARG=""
 ROOT_ID_ARG=""
 ADAPTER_USER_ARG=""
+RUN_USER_ARG=""
 
 die() {
     printf '安装失败：%s\n' "$*" >&2
@@ -31,6 +32,7 @@ usage() {
   --group-id ID       WPS 企业群组 ID
   --root-id ID        WPS 根目录 ID，默认 0
   --adapter-user USER 适配器 Basic Auth 用户名
+  --run-user USER     服务运行用户，默认执行 sudo 的当前用户
   --help              显示帮助
 
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
@@ -69,6 +71,12 @@ while (($# > 0)); do
             shift 2
             ;;
         --adapter-user=*) ADAPTER_USER_ARG="${1#*=}"; shift ;;
+        --run-user)
+            (($# >= 2)) || die "--run-user 缺少参数"
+            RUN_USER_ARG="$2"
+            shift 2
+            ;;
+        --run-user=*) RUN_USER_ARG="${1#*=}"; shift ;;
         --help|-h) usage; exit 0 ;;
         *) die "未知参数：$1" ;;
     esac
@@ -88,6 +96,17 @@ fi
 command -v systemctl >/dev/null 2>&1 || die "当前系统没有 systemctl，不适合原生 systemd 部署"
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
     || die "需要 Python 3.11 或更高版本"
+
+if [[ -n "$RUN_USER_ARG" ]]; then
+    RUN_USER="$RUN_USER_ARG"
+elif [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    RUN_USER="$SUDO_USER"
+else
+    RUN_USER="${USER:-root}"
+fi
+[[ "$RUN_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] || die "服务运行用户格式不正确"
+id "$RUN_USER" >/dev/null 2>&1 || die "服务运行用户不存在：$RUN_USER"
+RUN_GROUP="$(id -gn "$RUN_USER")"
 
 TTY="/dev/tty"
 ask_value() {
@@ -160,7 +179,8 @@ validate_safe_value() {
     [[ -n "$value" && "$value" =~ ^[A-Za-z0-9._-]+$ ]] || die "$label 格式不正确"
 }
 
-install -d -o root -g root -m 700 "$ETC_DIR" "$SECRET_DIR" "$APP_DIR"
+install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$ETC_DIR" "$SECRET_DIR"
+install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 755 "$APP_DIR"
 
 OLD_PORT="$(read_env_value ADAPTER_PORT || true)"
 OLD_BIND="$(read_env_value ADAPTER_BIND || true)"
@@ -197,12 +217,23 @@ USER_FILE="${OLD_USER_FILE:-$SECRET_DIR/adapter-username}"
 PASSWORD_FILE="${OLD_PASSWORD_FILE:-$SECRET_DIR/adapter-password}"
 for secret_path in "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
     [[ "$secret_path" == /* ]] || die "secret 文件路径必须是绝对路径"
+    [[ "$secret_path" == "$SECRET_DIR"/* ]] || die "secret 文件必须位于 $SECRET_DIR 目录内"
 done
-install -d -o root -g root -m 700 "$(dirname "$COOKIE_FILE")" "$(dirname "$CSRF_FILE")" \
+install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$(dirname "$COOKIE_FILE")" "$(dirname "$CSRF_FILE")" \
     "$(dirname "$USER_FILE")" "$(dirname "$PASSWORD_FILE")"
-[[ -e "$COOKIE_FILE" ]] || install -o root -g root -m 600 /dev/null "$COOKIE_FILE"
-[[ -e "$CSRF_FILE" ]] || install -o root -g root -m 600 /dev/null "$CSRF_FILE"
-chmod 600 "$COOKIE_FILE" "$CSRF_FILE"
+ensure_secret_file() {
+    local secret_path="$1"
+    if [[ -L "$secret_path" || ( -e "$secret_path" && ! -f "$secret_path" ) ]]; then
+        die "secret 路径必须是普通文件且不能是符号链接：$secret_path"
+    fi
+    [[ -e "$secret_path" ]] || install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 /dev/null "$secret_path"
+    chown "$RUN_USER:$RUN_GROUP" "$secret_path"
+    chmod 600 "$secret_path"
+}
+ensure_secret_file "$COOKIE_FILE"
+ensure_secret_file "$CSRF_FILE"
+ensure_secret_file "$USER_FILE"
+ensure_secret_file "$PASSWORD_FILE"
 
 if [[ ! -s "$USER_FILE" ]]; then
     ADAPTER_USER="$ADAPTER_USER_ARG"
@@ -213,6 +244,7 @@ if [[ ! -s "$USER_FILE" ]]; then
     [[ "$ADAPTER_USER" =~ ^[^[:space:]:]+$ ]] || die "适配器用户名格式不正确"
     umask 077
     printf '%s\n' "$ADAPTER_USER" >"$USER_FILE"
+    chown "$RUN_USER:$RUN_GROUP" "$USER_FILE"
     chmod 600 "$USER_FILE"
 fi
 
@@ -221,6 +253,7 @@ if [[ ! -s "$PASSWORD_FILE" ]]; then
     [[ -n "$REPLY" ]] || die "适配器密码不能为空"
     umask 077
     printf '%s\n' "$REPLY" >"$PASSWORD_FILE"
+    chown "$RUN_USER:$RUN_GROUP" "$PASSWORD_FILE"
     chmod 600 "$PASSWORD_FILE"
 fi
 
@@ -245,11 +278,18 @@ set_env_value ADAPTER_USERNAME_FILE "$USER_FILE"
 set_env_value ADAPTER_PASSWORD_FILE "$PASSWORD_FILE"
 set_env_value ADAPTER_BIND "$BIND"
 set_env_value ADAPTER_PORT "$PORT"
+chown "$RUN_USER:$RUN_GROUP" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
 cp -a "$SOURCE_DIR/." "$APP_DIR/"
-install -o root -g root -m 644 "$SOURCE_DIR/deploy/wps-adapter.service" \
-    /etc/systemd/system/wps-adapter.service
+chown -R "$RUN_USER:$RUN_GROUP" "$APP_DIR"
+UNIT_FILE="$TMP_DIR/wps-adapter.service"
+awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" '
+    /^User=/ { print "User=" run_user; next }
+    /^Group=/ { print "Group=" run_group; next }
+    { print }
+' "$SOURCE_DIR/deploy/wps-adapter.service" >"$UNIT_FILE"
+install -o root -g root -m 644 "$UNIT_FILE" /etc/systemd/system/wps-adapter.service
 install -d -m 755 /etc/systemd/system/wps-adapter.service.d
 install -o root -g root -m 644 "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" \
     /etc/systemd/system/wps-adapter.service.d/override.conf
@@ -271,5 +311,6 @@ printf '\n原生部署完成。\n'
 printf '监听端口：%s\n' "$PORT"
 printf 'WebDAV： http://<VPS地址>:%s/dav/\n' "$PORT"
 printf '网页：   http://<VPS地址>:%s/\n' "$PORT"
+printf '运行用户：%s\n' "$RUN_USER"
 printf '凭据目录：%s（不会被升级覆盖）\n' "$SECRET_DIR"
 printf '下一步：在自己的电脑运行仓库中的 python3 wps_login.py 完成 WPS 登录。\n'

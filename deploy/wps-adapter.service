@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# The one-command installer replaces these values with the invoking user's
+# account. Keep root only when this template is used manually.
 User=root
 Group=root
 WorkingDirectory=/opt/wps-adapter

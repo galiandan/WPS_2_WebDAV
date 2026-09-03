@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,6 +15,7 @@ from wps_adapter.client import WpsCredentials
 from wps_adapter.__main__ import _apply_adapter_port, _prompt_login_target
 from wps_adapter.login import (
     LoginError,
+    _REMOTE_WRITE_SCRIPT,
     credentials_from_cookies,
     login_and_sync,
     push_credentials_over_ssh,
@@ -101,6 +104,37 @@ class LoginHelperTests(unittest.TestCase):
         self.assertIn("PreferredAuthentications=password,keyboard-interactive", command)
         self.assertIsNone(run.call_args.kwargs["stderr"])
 
+    def test_remote_ssh_writer_preserves_existing_secret_owner(self) -> None:
+        with TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "wps-cookie"
+            csrf_path = Path(directory) / "wps-csrf"
+            cookie_path.write_text("old-cookie\n", encoding="utf-8")
+            csrf_path.write_text("old-csrf\n", encoding="utf-8")
+            before = os.stat(cookie_path)
+            payload = json.dumps(
+                {
+                    "cookie_path": str(cookie_path),
+                    "csrf_path": str(csrf_path),
+                    "cookie": "new-cookie",
+                    "csrf": "new-csrf",
+                }
+            ).encode("utf-8")
+
+            completed = subprocess.run(
+                [sys.executable, "-c", _REMOTE_WRITE_SCRIPT],
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            after = os.stat(cookie_path)
+            self.assertEqual(after.st_uid, before.st_uid)
+            self.assertEqual(after.st_gid, before.st_gid)
+            self.assertEqual(cookie_path.read_text(encoding="utf-8").strip(), "new-cookie")
+            self.assertEqual(csrf_path.read_text(encoding="utf-8").strip(), "new-csrf")
+
     def test_https_push_uses_basic_auth_and_fixed_path(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh; csrf=csrf", csrf_token="csrf")
         captured: dict[str, object] = {}
@@ -161,7 +195,7 @@ class LoginHelperTests(unittest.TestCase):
 
     def test_https_push_rejects_remote_plain_http(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh; csrf=csrf", csrf_token="csrf")
-        with self.assertRaisesRegex(LoginError, "必须使用 HTTPS"):
+        with self.assertRaisesRegex(LoginError, "allow-http"):
             push_credentials_over_https(
                 credentials,
                 cookies=[{"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/"}],
@@ -169,6 +203,47 @@ class LoginHelperTests(unittest.TestCase):
                 username="adapter",
                 password="secret",
             )
+
+    def test_http_push_works_when_explicitly_allowed(self) -> None:
+        credentials = WpsCredentials(cookie="rtk=refresh; csrf=csrf", csrf_token="csrf")
+        captured: dict[str, object] = {}
+
+        class Response:
+            status = 200
+
+            def read(self) -> bytes:
+                return b'{"status":"ok"}'
+
+        class Connection:
+            def request(self, method, path, *, body, headers) -> None:
+                captured.update(method=method, path=path, body=body, headers=headers)
+
+            def getresponse(self) -> Response:
+                return Response()
+
+            def close(self) -> None:
+                captured["closed"] = True
+
+        def factory(host, port, timeout):
+            captured.update(host=host, port=port, timeout=timeout)
+            return Connection()
+
+        push_credentials_over_https(
+            credentials,
+            cookies=[
+                {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/"},
+                {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
+            ],
+            adapter_url="http://adapter.example:18080",
+            username="adapter",
+            password="secret",
+            allow_insecure_http=True,
+            connection_factory=factory,
+        )
+
+        self.assertEqual(captured["host"], "adapter.example")
+        self.assertEqual(captured["port"], 18080)
+        self.assertTrue(captured["closed"])
 
     def test_login_cookie_detection_does_not_require_enter(self) -> None:
         class Session:
@@ -213,7 +288,7 @@ class LoginHelperTests(unittest.TestCase):
         ):
             target = _prompt_login_target()
 
-        self.assertEqual(target.adapter_url, "https://vps.example:18080")
+        self.assertEqual(target.adapter_url, "http://vps.example:18080")
         self.assertEqual(target.adapter_port, 18080)
 
     def test_interactive_target_rejects_conflicting_url_port(self) -> None:

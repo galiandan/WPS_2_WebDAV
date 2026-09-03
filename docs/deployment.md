@@ -4,7 +4,7 @@
 
 ## One-command install
 
-下面两个脚本都可以直接从 GitHub Raw 执行。首次运行会通过当前终端询问 WPS 群组 ID、适配器 Basic Auth 用户名/密码和监听端口；`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。
+下面两个脚本都可以直接从 GitHub Raw 执行。首次运行会通过当前终端询问 WPS 群组 ID、适配器 Basic Auth 用户名/密码和监听端口；`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
 
 原生 systemd：
 
@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts
   | sudo bash -s -- --port 18080
 ```
 
-安装脚本会自动下载当前 `main` 分支代码，不要求 VPS 已安装 `git`。原生脚本需要 Python `3.11+` 和 systemd；Docker 脚本会在 Debian/Ubuntu 上安装 `docker.io`（如果尚未安装）。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。
+安装脚本会自动下载当前 `main` 分支代码，不要求 VPS 已安装 `git`。原生脚本需要 Python `3.11+` 和 systemd；Docker 脚本会在 Debian/Ubuntu 上安装 `docker.io`（如果尚未安装）。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭证文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
 
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
@@ -36,12 +36,14 @@ curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts
 ```bash
 export ADAPTER_BIND=0.0.0.0
 export ADAPTER_PORT=18080
+export WPS_ADAPTER_UID="$(id -u)"
+export WPS_ADAPTER_GID="$(id -g)"
 docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 ```
 
 ## 1. Prepare the host
 
-建议使用专用低权限系统用户运行服务；当前模板默认使用 root 以降低首次部署复杂度。公网部署必须配置 HTTPS 反向代理，不能把带 Basic Auth 的纯 HTTP 端口直接暴露给互联网。
+建议使用普通系统用户运行服务；一键脚本默认使用执行 `sudo` 的当前用户。公网部署优先配置 HTTPS 反向代理；没有域名或证书时也可以使用 HTTP，但只适合可信网络，因为认证信息和文件内容会明文传输。
 
 确认主机满足：
 
@@ -60,19 +62,23 @@ cd /opt/wps-adapter
 PYTHONPATH=src python3 -m wps_adapter --version
 ```
 
-升级时先备份 systemd 单元和非秘密配置，再更新代码。不要用仓库文件覆盖 `/etc/wps-adapter/secrets/`。
+升级时先备份 systemd 单元和非秘密配置，再更新代码。不要用仓库文件覆盖 `/etc/wps-adapter/secrets/`。手工安装 systemd 单元时，请把 `User=` 和 `Group=` 改为实际服务用户；一键安装脚本会自动完成这一步。
 
 ## 3. Create secret files
 
+手工部署时先确定服务用户；下面示例使用当前登录用户。一键安装器会自动完成同样的所有者和权限设置：
+
 ```bash
-sudo install -d -o root -g root -m 700 /etc/wps-adapter/secrets
-sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/wps-cookie
-sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/wps-csrf
-sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-username
-sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-password
+SERVICE_USER="$(id -un)"
+SERVICE_GROUP="$(id -gn)"
+sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 700 /etc/wps-adapter/secrets
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-cookie
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-csrf
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/adapter-username
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/adapter-password
 ```
 
-优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。公网部署并配置 HTTPS 反向代理后，助手可以通过受 Basic Auth 保护的接口直接写入 `wps-cookie` 和 `wps-csrf`；没有 HTTPS 时仍可使用 SSH 备用方式。不需要把 Cookie 粘贴进命令行。
+优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。配置 HTTPS 反向代理后，助手可以通过受 Basic Auth 保护的接口直接写入 `wps-cookie` 和 `wps-csrf`；没有 HTTPS 时可以确认风险后使用 HTTP，或使用 SSH 备用方式。不需要把 Cookie 粘贴进命令行。
 
 适配器 Basic Auth 的用户名和密码分别写入 `adapter-username`、`adapter-password`。这些文件只允许服务用户读取。不要把 WPS 密码、Cookie 或 Basic Auth 密码放入 `.env`、Git、Issue 或聊天。
 
@@ -156,4 +162,4 @@ sudo cp /etc/wps-adapter/wps-adapter.env \
 
 ## 8. Session expiry
 
-服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手，通过 HTTPS 导入或 SSH 备用方式更新凭据。服务无需因凭据同步而重启。
+服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手，通过 HTTPS、确认过风险的 HTTP 或 SSH 方式更新凭据。服务无需因凭据同步而重启。

@@ -35,7 +35,7 @@ WebDAV clients / REST clients / browser UI
 
 - 适配器 Basic Auth 保护对外 REST/WebDAV/UI。
 - WPS Cookie 和 CSRF 只存放在本机或 VPS 的权限受限 secret 文件中。
-- 交互式登录由本地 `wps_login.py` 助手启动官方 WPS 页面完成，并可通过 HTTPS 同步到服务；服务器不代填密码、SSO、验证码或风控。
+- 交互式登录由本地 `wps_login.py` 助手启动官方 WPS 页面完成，并可通过 HTTP/HTTPS 同步到服务；远程 HTTP 需要用户确认风险；服务器不代填密码、SSO、验证码或风控。
 - `rtk` 是当前自动续期原型所需的 WPS 持久刷新 Cookie。没有它时，重新运行本地登录助手。
 
 ## Resource model

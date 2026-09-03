@@ -2,6 +2,15 @@
 
 本项目遵循 Keep a Changelog 风格。版本号用于记录适配器行为变化，不代表 WPS 官方兼容性承诺。
 
+## [0.7.0] - 2026-09-03
+
+### Changed
+
+- HTTP/HTTPS 登录同步均可用；远程 HTTP 默认要求确认或 `--allow-http`。
+- Native 和 Docker 安装器默认使用执行 `sudo` 的当前用户，并统一保护凭证文件权限。
+- Docker 安装器从正确的 `deploy/Dockerfile` 构建，切换前完成构建，失败时尝试恢复原服务/容器。
+- Docker 容器增加项目归属标记、当前用户 UID/GID 和能力限制，不再强制删除未知同名容器。
+
 ## [0.6.0] - 2026-09-03
 
 ### Added

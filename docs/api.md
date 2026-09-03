@@ -56,7 +56,7 @@ POST  /api/v1/session/import
 
 ### Importing a WPS session
 
-`POST /api/v1/session/import` 使用适配器自己的 Basic Auth，建议只通过 HTTPS 访问。它供本地 Python 登录助手使用，不供浏览器页面直接调用。请求体只接受从临时官方 WPS 登录窗口筛选出的 Cookie：
+`POST /api/v1/session/import` 使用适配器自己的 Basic Auth，建议通过 HTTPS 访问；没有域名或证书时也可以在可信网络使用 HTTP。它供本地 Python 登录助手使用，不供浏览器页面直接调用。请求体只接受从临时官方 WPS 登录窗口筛选出的 Cookie：
 
 ```json
 {
@@ -67,7 +67,7 @@ POST  /api/v1/session/import
 }
 ```
 
-服务端会再次限制 WPS 域名、检查 `rtk`/`csrf`，然后更新配置的 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`。成功响应为 `200` JSON；凭据更新后不需要重启服务。远程明文 HTTP 不应使用此接口。
+服务端会再次限制 WPS 域名、检查 `rtk`/`csrf`，然后更新配置的 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`。成功响应为 `200` JSON；凭据更新后不需要重启服务。通过 HTTP 访问时，Cookie 和 Basic Auth 会明文传输。
 
 ## 状态码
 

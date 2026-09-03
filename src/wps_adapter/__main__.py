@@ -15,6 +15,7 @@ from .login import (
     DEFAULT_REMOTE_COOKIE_PATH,
     DEFAULT_REMOTE_CSRF_PATH,
     LoginError,
+    is_remote_http_url,
     login_and_sync,
 )
 from .server import AdapterApplication, BasicAuth, create_server
@@ -84,7 +85,7 @@ def _parser() -> argparse.ArgumentParser:
     login.add_argument(
         "--adapter-url",
         default=os.environ.get("WPS_ADAPTER_URL", ""),
-        help="HTTPS adapter origin for direct credential sync",
+        help="HTTP or HTTPS adapter origin for direct credential sync",
     )
     login.add_argument(
         "--adapter-user",
@@ -95,7 +96,12 @@ def _parser() -> argparse.ArgumentParser:
         "--adapter-port",
         type=int,
         default=None,
-        help="HTTPS adapter port; use with --adapter-url when it has no port",
+        help="adapter port; use with --adapter-url when it has no port",
+    )
+    login.add_argument(
+        "--allow-http",
+        action="store_true",
+        help="allow sending the WPS session to a remote adapter over HTTP",
     )
     login.add_argument("--adapter-timeout", type=float, default=30.0)
     login.add_argument(
@@ -153,7 +159,7 @@ def _prompt_login_target() -> _LoginTarget:
     print("选择连接方式：")
     print("  1) SSH 私钥")
     print("  2) SSH 密码")
-    print("  3) HTTPS 适配器接口")
+    print("  3) HTTP/HTTPS 适配器接口")
     while True:
         choice = input("连接方式 [1]: ").strip() or "1"
         if choice in {"1", "2", "3"}:
@@ -184,8 +190,8 @@ def _prompt_login_target() -> _LoginTarget:
     if ":" in host and not host.startswith("["):
         host_for_url = f"[{host}]"
     adapter_port = _prompt_port("适配器端口", 54321)
-    default_url = f"https://{host_for_url}:{adapter_port}"
-    entered_url = input(f"适配器 HTTPS 地址 [{default_url}]: ").strip()
+    default_url = f"http://{host_for_url}:{adapter_port}"
+    entered_url = input(f"适配器 HTTP/HTTPS 地址 [{default_url}]: ").strip()
     adapter_url = entered_url or default_url
     try:
         explicit_port = urlsplit(adapter_url).port
@@ -253,6 +259,17 @@ def main(argv: list[str] | None = None) -> int:
                 if interactive_target.adapter_url
                 else ""
             )
+            allow_insecure_http = args.allow_http
+            if adapter_url and is_remote_http_url(adapter_url):
+                print(
+                    "警告：HTTP 不加密，WPS Cookie、Basic Auth 和文件请求可能被窃听。",
+                    flush=True,
+                )
+                if not allow_insecure_http:
+                    confirmation = input("仍然通过 HTTP 发送 Cookie？ [y/N]: ").strip().casefold()
+                    if confirmation not in {"y", "yes"}:
+                        raise LoginError("已取消明文 HTTP 凭据同步；如确认风险可使用 --allow-http")
+                    allow_insecure_http = True
             adapter_user = interactive_target.adapter_user
             adapter_password: str | None = None
             if adapter_url:
@@ -276,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
                 adapter_user=adapter_user,
                 adapter_password=adapter_password,
                 adapter_timeout=args.adapter_timeout,
+                allow_insecure_http=allow_insecure_http,
             )
             return 0
         except (EOFError, KeyboardInterrupt):

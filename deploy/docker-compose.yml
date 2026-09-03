@@ -7,7 +7,15 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        APP_UID: "${WPS_ADAPTER_UID:-1000}"
+        APP_GID: "${WPS_ADAPTER_GID:-1000}"
     restart: unless-stopped
+    user: "${WPS_ADAPTER_UID:-1000}:${WPS_ADAPTER_GID:-1000}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - /etc/wps-adapter/wps-adapter.env
     environment:

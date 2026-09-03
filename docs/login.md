@@ -7,9 +7,9 @@
 - Python `3.11+`。
 - Chrome 或 Chromium。
 - 已下载本仓库源码。
-- 选择 SSH 连接方式时，还需要系统自带的 `ssh` 命令；选择 HTTPS 时不需要 SSH。
+- 选择 SSH 连接方式时，还需要系统自带的 `ssh` 命令；选择 HTTP/HTTPS 时不需要 SSH。
 
-HTTPS 直接同步不需要 SSH。公网适配器必须有 HTTPS 反向代理；登录助手会拒绝把 Cookie 发到远程明文 HTTP。当前只有本机回环地址允许 HTTP 测试。
+HTTP/HTTPS 直接同步不需要 SSH。远程 HTTPS 是推荐方式；没有域名或证书时，远程 HTTP 也可以使用，但必须在向导中确认风险，或在命令行加 `--allow-http`。HTTP 会明文传输 Cookie、Basic Auth 和文件请求。
 
 ## Interactive flow
 
@@ -23,9 +23,9 @@ python3 wps_login.py
 
 1. SSH 私钥：输入 SSH 用户名、端口和私钥路径。
 2. SSH 密码：输入 SSH 用户名和端口；登录完成后由系统 `ssh` 提示密码。
-3. HTTPS：输入适配器 HTTPS 地址、Basic Auth 用户名和隐藏输入的密码。
+3. HTTP/HTTPS：输入适配器地址、Basic Auth 用户名和隐藏输入的密码。
 
-也可以把 HTTPS 地址和用户名直接作为参数：
+也可以把 HTTP/HTTPS 地址和用户名直接作为参数：
 
 ```bash
 python3 wps_login.py \
@@ -34,19 +34,28 @@ python3 wps_login.py \
   --adapter-user <adapter-user>
 ```
 
+没有域名或证书时：
+
+```bash
+python3 wps_login.py \
+  --adapter-url http://<vps-host>:18080 \
+  --adapter-user <adapter-user> \
+  --allow-http
+```
+
 脚本会先提示输入适配器 Basic Auth 密码，密码不会显示。随后它会打开一个临时隔离的 Chrome 窗口：
 
 1. 只在官方 WPS 页面登录自己的账号。
 2. 正常完成学校 SSO、扫码、验证码或二次验证。
 3. 登录完成并出现有效会话后，脚本自动检测，不需要回终端按回车。
-4. 脚本只保留匹配 WPS 云盘域名的 Cookie，并通过 HTTPS 发送到适配器。
+4. 脚本只保留匹配 WPS 云盘域名的 Cookie，并通过 HTTP 或 HTTPS 发送到适配器。
 5. 适配器原子更新 `wps-cookie` 和 `wps-csrf`，服务无需重启。
 
 脚本不会显示 Cookie 值，也不会把 Cookie 放入命令参数、URL、日志或仓库。临时浏览器配置在流程结束后删除。
 
 ## SSH fallback
 
-如果 VPS 暂时没有 HTTPS 反向代理，可以继续通过 SSH 标准输入同步：
+如果 VPS 暂时没有 HTTPS 反向代理，可以确认 HTTP 风险后直接同步，也可以继续通过 SSH 标准输入同步：
 
 ```bash
 ssh -F /dev/null -i ~/.ssh/id_ed25519 <vps-user>@<vps-host> exit
@@ -56,7 +65,7 @@ python3 wps_login.py \
   --ssh-identity ~/.ssh/id_ed25519
 ```
 
-第一次连接时，只有在确认目标地址属于自己服务器后才接受主机指纹。SSH 方式也不会把 Cookie 放入命令参数。
+第一次连接时，只有在确认目标地址属于自己服务器后才接受主机指纹。SSH 方式也不会把 Cookie 放入命令参数；建议使用安装器选择的服务用户连接，若使用 root，助手会尽量保留已有凭证文件的所有者。
 
 ## Local output
 
@@ -104,9 +113,9 @@ python3 wps_login.py \
 
 确认临时窗口中已经完成官方 WPS 登录并进入云盘，而不是停留在登录页或只打开分享链接。某些账号登录完成后需要等待几秒，脚本会自动继续等待。
 
-### HTTPS 同步失败
+### HTTP/HTTPS 同步失败
 
-确认适配器地址使用 `https://` 且证书有效，确认适配器 Basic Auth 账号和密码正确，并确认 VPS 已部署当前版本的 `/api/v1/session/import` 接口。不要通过 HTTP 上传 Cookie，也不要把 Cookie 粘贴到聊天或命令行。
+确认适配器地址、端口、Basic Auth 账号和密码正确，并确认 VPS 已部署当前版本的 `/api/v1/session/import` 接口。HTTP 模式需要加 `--allow-http` 或在向导中确认风险；不要把 Cookie 粘贴到聊天或命令行。
 
 ### SSH 同步失败
 

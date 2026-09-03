@@ -5,8 +5,8 @@ origin and the important session cookies are HttpOnly.  This module uses the
 Chrome DevTools Protocol only with a temporary, isolated browser profile.  A
 person completes the login in the official WPS page, then the helper reads
 the cookies Chrome itself has stored and sends the minimum useful snapshot to
-the adapter host over HTTPS.  SSH and local-file targets remain available as
-fallbacks.
+the adapter host over HTTP or HTTPS.  Remote HTTP requires explicit opt-in.
+SSH and local-file targets remain available as fallbacks.
 
 No WPS password is handled by this process and no cookie value is printed.
 The server-side adapter continues to use its existing ``rtk`` refresh flow
@@ -214,9 +214,16 @@ def atomic_write(path, value):
     directory = os.path.dirname(target)
     os.makedirs(directory, mode=0o700, exist_ok=True)
     os.chmod(directory, 0o700)
+    previous_stat = None
+    try:
+        previous_stat = os.stat(target, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
     fd, temporary = tempfile.mkstemp(prefix="." + os.path.basename(target) + ".", dir=directory, text=True)
     try:
         os.fchmod(fd, 0o600)
+        if previous_stat is not None and hasattr(os, "fchown"):
+            os.fchown(fd, previous_stat.st_uid, previous_stat.st_gid)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             fd = -1
             stream.write(value)
@@ -332,7 +339,11 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
-def _adapter_url_parts(adapter_url: str) -> tuple[str, str, int | None]:
+def _adapter_url_parts(
+    adapter_url: str,
+    *,
+    allow_insecure_http: bool = False,
+) -> tuple[str, str, int | None]:
     if not isinstance(adapter_url, str) or not adapter_url:
         raise LoginError("适配器地址不能为空")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in adapter_url):
@@ -352,10 +363,21 @@ def _adapter_url_parts(adapter_url: str) -> tuple[str, str, int | None]:
         or parts.fragment
         or parts.path not in {"", "/"}
     ):
-        raise LoginError("适配器地址应为不带路径、账号或查询参数的 HTTPS 地址")
-    if parts.scheme != "https" and not _is_loopback_host(host):
-        raise LoginError("远程适配器必须使用 HTTPS；HTTP 只允许本机地址")
+        raise LoginError("适配器地址应为不带路径、账号或查询参数的 HTTP 或 HTTPS 地址")
+    if (
+        parts.scheme == "http"
+        and not _is_loopback_host(host)
+        and not allow_insecure_http
+    ):
+        raise LoginError("远程 HTTP 会明文传输凭据；确认后请使用 --allow-http")
     return parts.scheme, host, port
+
+
+def is_remote_http_url(adapter_url: str) -> bool:
+    """Return whether an adapter URL sends credentials over remote HTTP."""
+
+    scheme, host, _ = _adapter_url_parts(adapter_url, allow_insecure_http=True)
+    return scheme == "http" and not _is_loopback_host(host)
 
 
 def _validate_adapter_auth(username: str, password: str) -> None:
@@ -397,15 +419,20 @@ def push_credentials_over_https(
     username: str,
     password: str,
     timeout: float = 30.0,
+    allow_insecure_http: bool = False,
     connection_factory: Callable[[str, int | None, float], object] | None = None,
 ) -> None:
     """Send a selected WPS cookie snapshot to the authenticated adapter.
 
-    The adapter URL is never redirected and remote HTTP is rejected.  The
-    password is used only to construct the in-memory Basic Auth header.
+    The adapter URL is never redirected. Remote HTTP is available only when
+    explicitly enabled by the caller. The password is used only to construct
+    the in-memory Basic Auth header.
     """
 
-    scheme, host, port = _adapter_url_parts(adapter_url)
+    scheme, host, port = _adapter_url_parts(
+        adapter_url,
+        allow_insecure_http=allow_insecure_http,
+    )
     _validate_adapter_auth(username, password)
     if timeout <= 0:
         raise LoginError("适配器同步超时时间必须为正数")
@@ -443,7 +470,7 @@ def push_credentials_over_https(
             response_status = getattr(response, "status", None)
             response.read()
         except (OSError, TimeoutError) as exc:
-            raise LoginError("HTTPS 同步凭据失败，请检查地址和网络") from exc
+            raise LoginError("适配器同步凭据失败，请检查地址和网络") from exc
     finally:
         try:
             connection.close()  # type: ignore[attr-defined]
@@ -810,6 +837,7 @@ def login_and_sync(
     adapter_user: str = "",
     adapter_password: str | None = None,
     adapter_timeout: float = 30.0,
+    allow_insecure_http: bool = False,
 ) -> tuple[str, ...]:
     """Open WPS, wait for a human login, then sync a safe credential snapshot."""
 
@@ -821,7 +849,10 @@ def login_and_sync(
     if output_dir is not None and not Path(output_dir).is_absolute():
         raise LoginError("本地凭据目录必须是绝对路径")
     if adapter_url:
-        _adapter_url_parts(adapter_url)
+        _adapter_url_parts(
+            adapter_url,
+            allow_insecure_http=allow_insecure_http,
+        )
         _validate_adapter_auth(adapter_user, adapter_password or "")
         if adapter_timeout <= 0:
             raise LoginError("适配器同步超时时间必须为正数")
@@ -862,8 +893,10 @@ def login_and_sync(
             username=adapter_user,
             password=adapter_password or "",
             timeout=adapter_timeout,
+            allow_insecure_http=allow_insecure_http,
         )
-        print("已通过 HTTPS 更新适配器凭据，服务无需重启。", flush=True)
+        scheme = urlsplit(adapter_url).scheme.upper()
+        print(f"已通过 {scheme} 更新适配器凭据，服务无需重启。", flush=True)
     else:
         cookie_path, csrf_path = write_local_credentials(credentials, output_dir=output_dir or "")
         print(f"已写入本地凭据文件：{cookie_path}、{csrf_path}", flush=True)

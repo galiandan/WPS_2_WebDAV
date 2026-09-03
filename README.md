@@ -6,7 +6,7 @@
 WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 ```
 
-> 当前版本为 `0.6.0` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
+> 当前版本为 `0.7.0` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
 
 ## Features
 
@@ -16,7 +16,7 @@ WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 - 普通上传、覆盖更新和基于已观察 WPS 流程的大文件分片上传。
 - 适配器层的递归 `PROPFIND`、`COPY` 和短期写锁兼容能力。
 - Cookie/CSRF 文件动态读取；上游 `401` 时按已确认的 WPS SDK `grant_token` 流程尝试续期。
-- Python 登录助手：先询问 VPS 地址和连接方式，再在官方 WPS 页面登录并自动同步；支持 HTTPS、SSH 密钥、SSH 密码和本地文件输出。
+- Python 登录助手：先询问 VPS 地址和连接方式，再在官方 WPS 页面登录并自动同步；支持 HTTP/HTTPS、SSH 密钥、SSH 密码和本地文件输出。
 - 原生和 Docker 一键安装脚本，支持自定义监听端口。
 - 仅依赖 Python 标准库；不需要 Docker、Playwright 或浏览器插件。
 - 同源浏览器文件管理页面，入口为服务根路径 `/`。
@@ -26,15 +26,15 @@ WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 - 这是第三方实验性适配器，不是 WPS 官方客户端或官方 SDK。
 - 只在自己的账号、企业空间和测试文件上使用；不要扫描 ID、重放他人请求或扩大权限。
 - Cookie、`rtk`、CSRF、refresh token、签名 URL、Basic Auth 密码和原始 HAR 都属于敏感信息，不能提交到 GitHub、Issue、聊天或日志。
-- 生产环境不要直接用 HTTP 暴露公网。请在 HTTPS 反向代理后使用，并关闭代理访问日志中的认证信息。
-- 当前 systemd 示例以 root 运行以简化部署；正式环境建议改为专用低权限用户，并仅允许其访问 secret 目录。
+- 生产环境优先使用 HTTPS 反向代理，并关闭代理访问日志中的认证信息。没有域名或证书时可以使用 HTTP，但 Cookie、Basic Auth 和文件内容会明文传输，应仅用于可信网络。
+- 一键安装器默认让服务使用执行 `sudo` 的当前用户；如果直接以 root 执行，服务也会以 root 运行。正式环境应使用普通用户或显式指定 `--run-user`。
 
 ## Requirements
 
 - Python `3.11+`。
 - 运行服务只需要 Python 标准库。
-- 使用登录助手时，需要本机已有 Chrome/Chromium 和 Python `3.11+`；HTTPS 直接同步不需要 SSH。
-- 选择 SSH 登录方式时，需要系统自带的 `ssh` 命令；选择 HTTPS 时不需要 SSH。
+- 使用登录助手时，需要本机已有 Chrome/Chromium 和 Python `3.11+`；HTTP/HTTPS 直接同步不需要 SSH。
+- 选择 SSH 登录方式时，需要系统自带的 `ssh` 命令；选择 HTTP/HTTPS 时不需要 SSH。
 - WPS 企业云盘账号需要已经能在官方网页端正常登录和操作目标文件。
 
 ## Quick start
@@ -50,7 +50,7 @@ cd WPS_2_WebDAV
 
 ### One-command VPS install
 
-Debian/Ubuntu VPS 可以直接使用 GitHub Raw 安装脚本。脚本会询问 WPS 群组 ID、适配器 Basic Auth 和端口；适配器密码不会作为命令行参数出现。`--port` 可以替换默认端口：
+Debian/Ubuntu VPS 可以直接使用 GitHub Raw 安装脚本。脚本会询问 WPS 群组 ID、适配器 Basic Auth 和端口；适配器密码不会作为命令行参数出现。服务默认使用执行 `sudo` 的当前用户，`--port` 可以替换默认端口：
 
 原生 systemd：
 
@@ -110,13 +110,13 @@ Health:     http://127.0.0.1:18080/healthz
 
 适配器网页不能读取另一个域名的 HttpOnly Cookie，所以登录助手必须在账号所有者自己的电脑上运行。它会打开一个临时隔离的 Chrome 窗口；你只在官方 WPS 页面登录，脚本会自动检测到登录完成。
 
-登录助手支持 SSH 密钥、SSH 密码和 HTTPS 三种连接方式。直接运行向导即可；公网 HTTPS 同步需要已经配置 HTTPS 的适配器地址。所有密码都不会显示，也不会写入命令行参数：
+登录助手支持 SSH 密钥、SSH 密码和 HTTP/HTTPS 三种连接方式。直接运行向导即可；远程 HTTP 会先显示明文风险并要求确认。所有密码都不会显示，也不会写入命令行参数：
 
 ```bash
 python3 wps_login.py
 ```
 
-脚本会先询问 VPS 地址和连接方式。选择 HTTPS 时，再询问适配器用户名和隐藏输入的适配器密码；选择 SSH 密码时，系统 `ssh` 会在传输凭据时自己提示密码。也可以把地址和连接参数作为命令行参数：
+脚本会先询问 VPS 地址和连接方式。选择 HTTP/HTTPS 时，再询问适配器用户名和隐藏输入的适配器密码；选择远程 HTTP 时会要求确认明文风险；选择 SSH 密码时，系统 `ssh` 会在传输凭据时自己提示密码。也可以把地址和连接参数作为命令行参数：
 
 ```bash
 python3 wps_login.py \
@@ -125,7 +125,16 @@ python3 wps_login.py \
   --adapter-user your-adapter-user
 ```
 
-助手只选取匹配 WPS 云盘域名的 Cookie，要求存在 `rtk` 和 `csrf`，不显示 Cookie 值，并通过 HTTPS 的受 Basic Auth 保护接口写入 VPS secret 文件。登录结束后临时浏览器配置会删除。完整步骤见 [`docs/login.md`](docs/login.md)。
+没有域名或证书时可以显式允许远程 HTTP：
+
+```bash
+python3 wps_login.py \
+  --adapter-url http://<vps-host>:18080 \
+  --adapter-user your-adapter-user \
+  --allow-http
+```
+
+助手只选取匹配 WPS 云盘域名的 Cookie，要求存在 `rtk` 和 `csrf`，不显示 Cookie 值，并通过受 Basic Auth 保护的接口写入 VPS secret 文件。登录结束后临时浏览器配置会删除。完整步骤见 [`docs/login.md`](docs/login.md)。
 
 如果适配器还没有 HTTPS 反向代理，可以继续使用 SSH 备用方式：
 
@@ -215,7 +224,7 @@ deploy/wps-adapter-hardening.conf
 deploy/wps-adapter-hardening.env
 ```
 
-通用 VPS 安装和升级步骤见 [`docs/deployment.md`](docs/deployment.md)。部署前先完成本地测试，并使用 HTTPS 反向代理保护公网流量。
+通用 VPS 安装和升级步骤见 [`docs/deployment.md`](docs/deployment.md)。部署前先完成本地测试；公网优先使用 HTTPS 反向代理，可信内网也可以直接使用 HTTP。
 
 ## Current limitations
 
@@ -224,6 +233,7 @@ deploy/wps-adapter-hardening.env
 - `LOCK` 是进程内短期兼容锁，服务重启后消失，不是 WPS 远端锁。
 - 失败后的跨进程分片续传、取消/清理、快速上传成功路径和部分跨目录改名场景仍未确认。
 - 服务器本身不会自动填写 WPS 密码，也不会处理 SSO、验证码或风控；需要重新登录时使用本地 Python 登录助手。
+- Docker 和 Native 安装器会保护已有服务/容器；Docker 构建或健康检查失败时不会主动删除不属于本项目的同名容器。
 
 ## Development
 
