@@ -15,6 +15,7 @@
 - WebDAV 和 REST 删除，REST 重命名，WebDAV 同目录重命名，以及保留原名的跨目录移动。
 - 远端路径到 WPS 文件夹 ID 的解析，以及带 TTL 的元数据缓存。
 - `/healthz`、适配器 Basic Auth 和 systemd 单元模板。
+- 本地 `login` 助手：使用临时隔离 Chrome 打开 WPS 官方页面，完成本人登录后通过 SSH 同步包含 `rtk`/`csrf` 的凭据。
 
 上传代码仍属于实验性实现：普通上传、覆盖更新和大文件分片均已有真实回放；大文件分片已在 VPS 上用本人账号的 100 MiB 专用测试文件完成上传和下载校验。失败续传、分片覆盖和 WPS 刷新成功响应的真实账号验收仍待完成。
 
@@ -30,7 +31,9 @@
 
 ## 凭据原则
 
-Cookie 和 CSRF 值只能在运行适配器的本机/VPS secret store 中提供，不能写入仓库、命令行参数、日志或 HAR。首次部署需要完整浏览器 Cookie（包括 `rtk`）；适配器可以自动续期 WPS 会话，但不负责交互式登录、SSO 或验证码。
+Cookie 和 CSRF 值只能在运行适配器的本机/VPS secret store 中提供，不能写入仓库、命令行参数、日志或 HAR。首次部署可以使用本地 `login` 助手自动同步完整浏览器会话（包括 `rtk`）；适配器可以自动续期 WPS 会话，但密码、SSO、验证码和风控仍由官方 WPS 页面处理。
+
+网页端不能直接嵌入并读取 WPS 登录态：不同源策略和 HttpOnly Cookie 会阻止适配器页面取得凭据。`login` 助手因此在账号所有者的电脑上启动一个临时 Chrome 配置，用户在官方 WPS 窗口中登录，按回车后助手只选取匹配 `365.kdocs.cn` 的 WPS Cookie，再通过 SSH 写入远端 secret 文件。
 
 调用 `WpsDriveClient` 的列表、下载、上传、创建目录、删除、重命名和移动方法才会访问网络；`python -m wps_adapter check-config` 不访问网络。测试使用本地假响应和回环 HTTP 服务。
 
@@ -79,4 +82,4 @@ python3 tools/wps_probe.py download --group-id <own-group-id> --file-id <own-fil
 
 ## 未覆盖能力
 
-快速上传成功路径、跨目录同时改名和进程退出后的分片续传仍未确认。大文件分片流程已观察并由适配器在 VPS 上回放成功；适配器现在会对普通上传和单个分片做有限重试，失败后重新获取签名地址。进程退出后的取消/清理和分片覆盖仍待验证。WebDAV 的 COPY、锁、递归 PROPFIND、单范围下载和并发/磁盘保护已在适配器层实现；COPY 不代表 WPS 有服务端 COPY API。上游 `401` 会先尝试 WPS SDK 的 `grant_token` 刷新并持久化轮换 Cookie；如果 `rtk` 缺失或已撤销，仍返回适配器 `503`。适配器不会自动执行交互式登录、SSO 或验证码。
+快速上传成功路径、跨目录同时改名和进程退出后的分片续传仍未确认。大文件分片流程已观察并由适配器在 VPS 上回放成功；适配器现在会对普通上传和单个分片做有限重试，失败后重新获取签名地址。进程退出后的取消/清理和分片覆盖仍待验证。WebDAV 的 COPY、锁、递归 PROPFIND、单范围下载和并发/磁盘保护已在适配器层实现；COPY 不代表 WPS 有服务端 COPY API。上游 `401` 会先尝试 WPS SDK 的 `grant_token` 刷新并持久化轮换 Cookie；如果 `rtk` 缺失或已撤销，可从账号所有者的电脑运行 `python3 -m wps_adapter login` 重新建立会话。适配器不会自动代填密码或处理 SSO、验证码和风控。

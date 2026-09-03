@@ -324,7 +324,11 @@ GET /3rd/drive/api/v5/files/batch/task/progress?taskuuid=<taskuuid>
 
 本轮从公开的 WPS 账号 SDK `https://ac.wpscdn.cn/account/libs/js/kso-acct-sdk.min.563070dd.js` 中观察到 `checkKsoSid` 在会话 Cookie 条件满足时调用 `POST /passport/secure/api/grant_token`，请求体为 `{"grant_type":"refresh_token"}`；SDK 的账号域名推导规则对 `365.kdocs.cn` 得到 `account.kdocs.cn`。本机 Chrome Cookie 元数据还显示存在路径为 `/passport/secure` 的 HttpOnly 持久 Cookie `rtk`。这些观察只记录字段、路径和属性，不记录任何认证值。
 
-适配器 `0.3.0` 在上游 `401` 时先检查 secret 是否已被管理员替换；否则使用当前完整 Cookie 调用该刷新授权，并将响应 `Set-Cookie` 原子合并回 Cookie 文件，再重试原请求一次。WPS 正常响应中的 Set-Cookie 也会被持久化。没有 `rtk`、刷新票据已撤销或需要交互式登录时，服务返回 `503` 和上游状态 `401`；适配器不处理密码、SSO、验证码或风控。公开 SDK 代码证明了请求形状，但本人的真实续期成功响应仍需在 VPS 上做一次低频验收。
+适配器 `0.4.0` 在上游 `401` 时先检查 secret 是否已被管理员替换；否则使用当前完整 Cookie 调用该刷新授权，并将响应 `Set-Cookie` 原子合并回 Cookie 文件，再重试原请求一次。WPS 正常响应中的 Set-Cookie 也会被持久化。没有 `rtk`、刷新票据已撤销或需要交互式登录时，服务返回 `503` 和上游状态 `401`；适配器不处理密码、SSO、验证码或风控。公开 SDK 代码证明了请求形状，但本人的真实续期成功响应仍需在 VPS 上做一次低频验收。
+
+## A-03 本地交互式登录引导
+
+普通适配器网页不能直接读取 `365.kdocs.cn` 的登录 Cookie：两个页面不同源，且关键的 `rtk` Cookie 为 HttpOnly。`0.4.0` 增加了本地 `python3 -m wps_adapter login` 助手。它使用 Chrome/Chromium 的本地 DevTools Protocol 启动临时隔离配置，用户在官方 WPS 页面完成登录后，助手读取浏览器会话中的 Cookie，只保留匹配云盘主机和 `kdocs.cn` 域名后缀的 Cookie，并要求同时存在 `rtk` 和 `csrf`。凭据通过 SSH 标准输入传输到远端 root 管理脚本，两个 secret 文件以临时文件加重命名方式更新；Cookie 值不进入命令参数、日志或仓库。此流程是本人账号的交互式引导，不代填密码，不绕过 SSO、验证码或风控。
 
 ## 记录规则
 

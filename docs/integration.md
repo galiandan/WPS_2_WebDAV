@@ -8,7 +8,7 @@
 | --- | --- |
 | VPS 地址 | `<vps-host>` |
 | 对外端口 | `54321` |
-| 线上版本 | `0.3.0` |
+| 线上版本 | `0.4.0` |
 | 网页入口 | `http://<vps-host>:54321/` |
 | WebDAV 入口 | `http://<vps-host>:54321/dav/` |
 | REST 入口 | `http://<vps-host>:54321/api/v1/` |
@@ -17,9 +17,9 @@
 | WPS 企业空间 | 已配置为本人的测试空间和测试目录 |
 | 5005 端口 | 已停用，不再使用 |
 
-2026-09-03 已将 `0.3.0` 部署到 VPS。该版本增加了 WPS SDK `grant_token` 自动续期和 Set-Cookie 持久化；线上业务读写、Range、COPY、LOCK 和 100 MiB 分片上传仍需要使用本人适配器账号进行一次完整验收，不能用未认证的健康检查代替。
+2026-09-03 已将 `0.4.0` 部署到 VPS。该版本增加了本地 Chrome 登录助手、WPS SDK `grant_token` 自动续期和 Set-Cookie 持久化；线上业务读写、Range、COPY、LOCK 和 100 MiB 分片上传仍需要使用本人适配器账号进行一次完整验收，不能用未认证的健康检查代替。
 
-本地代码已通过 45 项标准库测试：
+本地代码已通过 50 项标准库测试：
 
 ```bash
 cd <project-dir>
@@ -41,6 +41,21 @@ curl -u <adapter-user> 'http://<vps-host>:54321/api/v1/entries?path=/'
 ```bash
 curl 'http://<vps-host>:54321/healthz'
 ```
+
+### 2.1 一键建立 WPS 会话
+
+适配器网页不能直接读取 WPS 登录 Cookie：两个网页不同源，而且 `rtk` 是 HttpOnly Cookie。请在账号所有者自己的电脑上、项目目录中运行下面的命令；它会启动一个临时隔离的 Chrome 窗口，打开官方 WPS 页面。用户只在该窗口中完成登录，看到云盘页面后回到终端按回车，助手会通过 SSH 将凭据写入 VPS：
+
+```bash
+cd <project-dir>
+PYTHONPATH=src python3 -m wps_adapter login \
+  --ssh-target <vps-user>@<vps-host> \
+  --ssh-identity ~/.ssh/id_ed25519
+```
+
+运行前先确保本机已安装 Chrome/Chromium，并且已经手动确认过 VPS 的 SSH 主机指纹。助手不需要 Playwright、浏览器插件或 VPS 图形界面，不会显示 Cookie 值，也不会把 WPS 密码发送给适配器。它只保留匹配 WPS 云盘域名的 Cookie，并要求同时存在 `rtk` 和 `csrf`；同步完成后服务无需重启，下一次请求就会读取新会话。
+
+如果只想把凭据写入本机某个受保护目录，可把 `--ssh-target` 改为 `--output-dir /absolute/path`；两个选项不能同时使用。
 
 ## 3. REST 接口
 
@@ -216,7 +231,7 @@ Content-Type: application/json
 
 该请求依赖浏览器的 `rtk` Cookie。浏览器 Cookie 元数据表明 `rtk` 的作用域为 `.kdocs.cn`、路径为 `/passport/secure`、HttpOnly 且为持久 Cookie；因此从普通云盘列表请求复制 Cookie 时可能看不到它，首次初始化必须从本人浏览器 Cookie 存储中补齐完整会话 Cookie。
 
-`0.3.0` 的凭据行为：
+`0.4.0` 的凭据行为：
 
 1. 每次访问 WPS 前重新读取 `/etc/wps-adapter/secrets/wps-cookie` 和 `/etc/wps-adapter/secrets/wps-csrf`。
 2. 正常 WPS 响应或刷新响应带 `Set-Cookie` 时，自动按 Cookie 名合并并以临时文件加重命名的方式持久化；`csrf` 同步更新到 CSRF 文件。
@@ -224,7 +239,7 @@ Content-Type: application/json
 4. `WPS_AUTO_REFRESH=false` 可关闭自动刷新；`WPS_ACCOUNT_BASE_URL` 可覆盖默认的 `https://account.kdocs.cn`。
 5. 没有 `rtk`、刷新票据已撤销或 WPS 要求交互式登录时，服务返回 `503`；适配器不会自动处理密码、SSO、验证码或风控。
 
-这解决的是“已有浏览器会话的无交互续期和服务重启后的 Cookie 持久化”，不等于在 VPS 上实现首次登录。
+这解决的是“在账号所有者本机完成一次官方登录后自动同步，以及已有浏览器会话的无交互续期和服务重启后的 Cookie 持久化”；适配器服务器本身不执行密码登录、SSO、验证码或风控。
 
 ## 9. 本次部署记录
 
@@ -233,8 +248,8 @@ Content-Type: application/json
 1. VPS 旧服务单元和环境配置已备份到 root 管理的回退目录；没有读取或打印 secret 内容。
 2. `src/`、`pyproject.toml`、`deploy/` 和文档已同步到 `/opt/wps-adapter`。
 3. `wps-adapter-hardening.conf` 已安装为 `/etc/systemd/system/wps-adapter.service.d/override.conf`；硬化参数文件已安装为 `/etc/wps-adapter/wps-adapter-hardening.env`。
-4. `check-config` 和远端 45 项标准库测试通过；本地共 45 项通过。
-5. `systemctl daemon-reload`、重启和 `/healthz` 检查通过，线上版本为 `0.3.0`。
+4. `check-config` 和远端 50 项标准库测试通过；本地共 50 项通过。
+5. `systemctl daemon-reload`、重启和 `/healthz` 检查通过，线上版本为 `0.4.0`。
 6. 未认证访问 WebDAV/REST 会返回 `401`；5005 没有监听。
 
 待完成：

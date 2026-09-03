@@ -6,6 +6,14 @@ import sys
 
 from . import __version__
 from .client import WpsClientConfig, WpsDriveClient
+from .login import (
+    DEFAULT_COOKIE_DOMAIN_SUFFIX,
+    DEFAULT_LOGIN_URL,
+    DEFAULT_REMOTE_COOKIE_PATH,
+    DEFAULT_REMOTE_CSRF_PATH,
+    LoginError,
+    login_and_sync,
+)
 from .server import AdapterApplication, BasicAuth, create_server
 from .storage import WpsStorage
 
@@ -62,6 +70,28 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--bind", default=os.environ.get("ADAPTER_BIND", "127.0.0.1"))
     serve.add_argument("--port", type=int, default=_env_int("ADAPTER_PORT", 54321))
     subparsers.add_parser("check-config", help="validate configuration without network calls")
+    login = subparsers.add_parser(
+        "login",
+        help="open an isolated local WPS login window and sync its session",
+    )
+    login.add_argument("--login-url", default=DEFAULT_LOGIN_URL)
+    login.add_argument("--browser", default=None, help="local Chrome/Chromium executable")
+    login.add_argument("--domain-suffix", default=DEFAULT_COOKIE_DOMAIN_SUFFIX)
+    login.add_argument("--wait-timeout", type=float, default=300.0)
+    login.add_argument(
+        "--ssh-target",
+        default=os.environ.get("WPS_ADAPTER_SSH_TARGET", ""),
+        help="remote SSH target, for example root@203.0.113.10",
+    )
+    login.add_argument("--ssh-identity", default=None)
+    login.add_argument("--ssh-cookie-path", default=DEFAULT_REMOTE_COOKIE_PATH)
+    login.add_argument("--ssh-csrf-path", default=DEFAULT_REMOTE_CSRF_PATH)
+    login.add_argument("--ssh-timeout", type=float, default=30.0)
+    login.add_argument(
+        "--output-dir",
+        default=None,
+        help="write wps-cookie and wps-csrf to this local absolute directory",
+    )
     return parser
 
 
@@ -75,6 +105,24 @@ def _check_public_bind(bind: str, auth: BasicAuth) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "login":
+        try:
+            login_and_sync(
+                login_url=args.login_url,
+                browser=args.browser,
+                domain_suffix=args.domain_suffix,
+                wait_timeout=args.wait_timeout,
+                ssh_target=args.ssh_target,
+                ssh_cookie_path=args.ssh_cookie_path,
+                ssh_csrf_path=args.ssh_csrf_path,
+                ssh_identity=args.ssh_identity,
+                output_dir=args.output_dir,
+                ssh_timeout=args.ssh_timeout,
+            )
+            return 0
+        except (LoginError, OSError, ValueError) as exc:
+            print(f"login failed: {exc}", file=sys.stderr)
+            return 1
     try:
         application = _application()
         if args.command == "check-config":

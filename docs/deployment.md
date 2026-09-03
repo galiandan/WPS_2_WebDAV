@@ -1,6 +1,6 @@
 # VPS 部署
 
-当前 VPS `<vps-host>:54321` 已运行 `0.3.0`。本页保留可重复执行的安装/升级步骤；重复部署前先备份 systemd 单元和非秘密配置，并且不要覆盖 `/etc/wps-adapter/secrets/`。
+当前 VPS `<vps-host>:54321` 已运行 `0.4.0`。本页保留可重复执行的安装/升级步骤；重复部署前先备份 systemd 单元和非秘密配置，并且不要覆盖 `/etc/wps-adapter/secrets/`。
 
 程序只用 Python 标准库，不需要 Docker 或额外 Python 包。下面以 Debian/Ubuntu 风格系统和 `/opt/wps-adapter` 为例；命令中的路径可以按实际目录调整。
 
@@ -27,9 +27,9 @@ sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-u
 sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-password
 ```
 
-把值输入这些文件时不要放进 shell 历史，也不要发到聊天或 Git。首次完整 Cookie 初始化后，服务会在上游 `401` 时调用已确认的 WPS `POST /passport/secure/api/grant_token` 刷新流程，并把返回的 Set-Cookie 原子保存回文件；如果 `rtk` 已失效，则需要重新建立本人浏览器会话。
+不要再手工复制 Cookie 时把值放进 shell 历史或聊天。推荐在账号所有者自己的电脑上运行本地登录助手：它会打开隔离的官方 WPS 登录页，登录完成后通过 SSH 安全写入这两个文件。服务随后会在上游 `401` 时调用已确认的 WPS `POST /passport/secure/api/grant_token` 刷新流程，并把返回的 Set-Cookie 原子保存回文件；如果 `rtk` 已失效，则重新运行登录助手。
 
-如果未来需要接入企业自有的会话建立脚本，仍可以把它的绝对路径写入 `WPS_CREDENTIAL_REFRESH_COMMAND` 作为 WPS 刷新失败后的外部兜底。服务只会在上游 `401` 时调用一次该命令，标准输出和错误输出会被丢弃；命令必须由 root 管理，并以临时文件加重命名的方式原子替换两个 secret。当前不会自动登录、绕过 SSO 或处理验证码。
+如果企业环境需要自有的会话建立脚本，仍可以把它的绝对路径写入 `WPS_CREDENTIAL_REFRESH_COMMAND` 作为 WPS 刷新失败后的外部兜底。服务只会在上游 `401` 时调用一次该命令，标准输出和错误输出会被丢弃；命令必须由 root 管理，并以临时文件加重命名的方式原子替换两个 secret。当前不会代填密码、绕过 SSO 或处理验证码。
 
 service 单元对 `/etc/wps-adapter/secrets` 保留了写权限，专门用于上述 root 管理的刷新助手原子替换凭据；如果未配置刷新助手，适配器本身不会主动写入这些文件。
 
@@ -83,4 +83,13 @@ curl http://127.0.0.1:54321/api/v1/entries?path=/
 
 ## 6. 认证失效
 
-如果返回 `503` 且 `upstream_status` 是 `401`，说明 WPS 会话和 `rtk` 刷新票据都失效或被撤销。适配器已先自动尝试 WPS SDK 刷新；仍然失败时，重新在本机浏览器建立本人账号会话，确认新的完整 Cookie 包含 `rtk`，然后只更新 VPS 上的 secret 文件。当前项目没有实现交互式登录、SSO 或验证码流程。
+如果返回 `503` 且 `upstream_status` 是 `401`，说明 WPS 会话和 `rtk` 刷新票据都失效或被撤销。适配器已先自动尝试 WPS SDK 刷新；仍然失败时，在账号所有者自己的电脑上执行：
+
+```bash
+cd <project-dir>
+PYTHONPATH=src python3 -m wps_adapter login \
+  --ssh-target <vps-user>@<vps-host> \
+  --ssh-identity ~/.ssh/id_ed25519
+```
+
+登录助手要求本机存在 Chrome/Chromium，并且 SSH 主机指纹已经提前确认。它不需要 VPS 安装图形界面、Playwright 或浏览器插件；只在官方 WPS 窗口中登录，不会把 WPS 密码发送给适配器。

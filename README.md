@@ -33,11 +33,12 @@ WPS 企业云盘 -> Adapter -> WebDAV / REST -> Windows / Linux / 手机 / NAS
 - REST 和 WebDAV 的删除接口。
 - Cookie/CSRF 从环境变量或本机 secret 文件读取。
 - Cookie 文件替换后的动态读取；`401` 时先检测文件变化，否则调用 WPS SDK 使用的 `grant_token` 刷新流程，并原子保存轮换后的 Set-Cookie。
+- 本地一次性登录助手：打开隔离的 WPS 官方登录窗口，读取 Chrome 会话中的 `rtk`/`csrf`，通过 SSH 原子同步到 VPS；不需要 Playwright 或浏览器插件。
 - `/healthz`、适配器 Basic Auth、systemd 部署骨架。
 
 ## 尚未实现
 
-交互式登录、SSO、验证码和风控处理仍未放入适配器；首次部署需要本人账号的一份完整浏览器 Cookie，其中应包含 WPS 的持久刷新 Cookie `rtk`。如果该 Cookie 被撤销或不存在，适配器会返回明确的会话失效错误，而不会伪造登录成功。WPS 的跨目录同时改名、快速上传成功路径和进程重启后的分片续传仍未确认；其他未确认的 WPS 操作会返回 `501`。COPY 是适配器层的下载/上传中继，不代表 WPS 提供了服务端 COPY。
+适配器服务器本身不执行密码登录、SSO、验证码或风控；这些步骤由本地 Chrome 官方页面完成。`login` 助手只负责读取登录完成后的本地浏览器会话并通过 SSH 同步，首次登录或会话被撤销时需要本人重新操作。WPS 的跨目录同时改名、快速上传成功路径和进程重启后的分片续传仍未确认；其他未确认的 WPS 操作会返回 `501`。COPY 是适配器层的下载/上传中继，不代表 WPS 提供了服务端 COPY。
 
 ## 本地运行
 
@@ -66,7 +67,7 @@ REST:   http://127.0.0.1:54321/api/v1/
 健康检查: http://127.0.0.1:54321/healthz
 ```
 
-详细接口、VPS 安装和后续验收步骤见 [docs/api.md](docs/api.md)、[docs/deployment.md](docs/deployment.md) 和 [docs/integration.md](docs/integration.md)。
+详细接口、自动登录、VPS 安装和后续验收步骤见 [docs/api.md](docs/api.md)、[docs/login.md](docs/login.md)、[docs/deployment.md](docs/deployment.md) 和 [docs/integration.md](docs/integration.md)。
 
 ## 目录
 
@@ -80,6 +81,7 @@ docs/
   00-scope-and-safety.md       授权边界和敏感信息处理
   01-capture-plan.md           浏览器抓包和最小实验计划
   integration.md               WebDAV/REST 对接、部署和验收清单
+  login.md                     小白可执行的登录和凭据同步步骤
   findings.md                  已验证发现的唯一事实记录
   request-record-template.md   单个请求/实验的记录模板
 src/wps_adapter/
@@ -88,6 +90,7 @@ src/wps_adapter/
   storage.py                   WPS ID 与路径解析、短时元数据缓存
   server.py                    WebDAV/REST HTTP 服务
   web.py                      浏览器文件管理页
+  login.py                    本地 Chrome 登录和 SSH 凭据同步
   __main__.py                  服务入口和配置检查
 tools/                         无第三方依赖的抓包辅助工具
 tests/                         标准库单元测试
@@ -105,6 +108,8 @@ tests/                         标准库单元测试
 
 ## 认证安全
 
-不要把 Cookie、CSRF、Basic Auth 密码、预签名对象存储 URL、完整 cURL 或原始 HAR 发到聊天、Issue 或 Git。推荐使用 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`；首次初始化时要保存包含 `rtk` 的完整浏览器 Cookie，之后适配器会在本机/VPS secret store 中自动持久化 WPS 轮换的 Cookie。适配器不会把 WPS Cookie 转发给对象存储，也不会打印响应正文。
+不要把 Cookie、CSRF、Basic Auth 密码、预签名对象存储 URL、完整 cURL 或原始 HAR 发到聊天、Issue 或 Git。推荐使用 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`；首次初始化可以运行 `python3 -m wps_adapter login`，由隔离的 Chrome 官方页面完成登录后通过 SSH 写入 VPS。之后适配器会在本机/VPS secret store 中自动持久化 WPS 轮换的 Cookie。适配器不会把 WPS Cookie 转发给对象存储，也不会打印响应正文。
+
+网页登录不能直接读取 WPS Cookie：适配器页面与 WPS 页面不同源，关键 Cookie 还是 HttpOnly。因此登录助手必须在账号所有者自己的电脑上运行，使用本地 Chrome 的 DevTools Protocol 读取浏览器已经保存的会话；它不会把 WPS 密码发送给适配器，也不会读取现有浏览器的其他用户配置。
 
 已验证事实记录在 [docs/findings.md](docs/findings.md)，抓包工具说明在 [docs/01-capture-plan.md](docs/01-capture-plan.md)。
