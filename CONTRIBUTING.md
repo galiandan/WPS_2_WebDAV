@@ -16,6 +16,7 @@
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 -m compileall -q src tests
 python3 tools/build_login_script.py --check
+python3 tools/build_release_manifest.py --check
 git diff --check
 ```
 

@@ -22,6 +22,18 @@ class InstallerTemplateTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_release_manifest_matches_its_builder(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "tools/build_release_manifest.py", "--check"],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_docker_installer_builds_the_deploy_dockerfile(self) -> None:
         script = (PROJECT_ROOT / "scripts/install-docker.sh").read_text(encoding="utf-8")
 
@@ -45,9 +57,17 @@ class InstallerTemplateTests(unittest.TestCase):
 
         for script in (native, docker):
             self.assertIn('SUDO_USER', script)
-            self.assertIn('chown "$RUN_USER:$RUN_GROUP"', script)
-            self.assertIn('chmod 600 "$secret_path"', script)
+            self.assertIn('install -o "$RUN_USER" -g "$RUN_GROUP" -m 600', script)
             self.assertIn('[[ "$secret_path" == "$SECRET_DIR"/* ]]', script)
+            self.assertIn('relative_path', script)
+            self.assertIn('不能是符号链接', script)
+            self.assertIn('SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-', script)
+            self.assertIn('SOURCE_REF.tar.gz', script)
+            self.assertIn('source-ref 必须是 40 位 Git 提交号', script)
+            self.assertIn('SOURCE_MANIFEST_SHA256', script)
+            self.assertIn('--source-manifest-sha256', script)
+            self.assertIn('sha256sum --strict --check release-manifest.txt', script)
+            self.assertIn('--max-filesize 52428800', script)
 
         self.assertIn('awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP"', native)
         self.assertIn('--user "$RUN_UID:$RUN_GID"', docker)
@@ -58,6 +78,9 @@ class InstallerTemplateTests(unittest.TestCase):
         self.assertIn('APP_UID: "${WPS_ADAPTER_UID:-1000}"', compose)
         self.assertIn('APP_GID: "${WPS_ADAPTER_GID:-1000}"', compose)
         self.assertIn('user: "${WPS_ADAPTER_UID:-1000}:${WPS_ADAPTER_GID:-1000}"', compose)
+        self.assertIn('/etc/wps-adapter/secrets:/etc/wps-adapter/secrets:rw', compose)
+        self.assertIn('/etc/wps-adapter/secrets/adapter-username:/etc/wps-adapter/secrets/adapter-username:ro', compose)
+        self.assertIn('/etc/wps-adapter/secrets/adapter-password:/etc/wps-adapter/secrets/adapter-password:ro', compose)
 
 
 if __name__ == "__main__":

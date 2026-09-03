@@ -34,6 +34,56 @@ _SENSITIVE_MARKERS = (
     "ticket",
     "upload_id",
 )
+_SENSITIVE_FIELD_NAMES = {
+    "id",
+    "file_id",
+    "fileid",
+    "group_id",
+    "groupid",
+    "parent_id",
+    "parentid",
+    "link_id",
+    "linkid",
+    "cid",
+    "corpid",
+    "uid",
+    "key",
+    "url",
+    "uri",
+    "href",
+    "link",
+    "link_url",
+    "download_url",
+    "websocketdebuggerurl",
+    "avatar",
+    "accesskeyid",
+    "policy",
+    "expires",
+    "response_content_disposition",
+    "x_amz_signature",
+    "x_amz_credential",
+    "x_amz_security_token",
+    "name",
+    "fname",
+    "file_name",
+    "filename",
+    "displayname",
+    "sid",
+    "wps_sid",
+    "kso_sid",
+    "cv",
+    "rtk",
+    "csrf",
+    "exp",
+    "nexp",
+    "company_id",
+    "tenant_id",
+    "drive_id",
+    "fileids",
+    "taskuuid",
+    "device_id",
+    "weboffice_device_id",
+}
 _SENSITIVE_HEADERS = {
     "authorization",
     "cookie",
@@ -53,7 +103,9 @@ def _normalise_name(name: str) -> str:
 
 def is_sensitive_name(name: str) -> bool:
     normalised = _normalise_name(name)
-    return any(marker in normalised for marker in _SENSITIVE_MARKERS)
+    return normalised in _SENSITIVE_FIELD_NAMES or any(
+        marker in normalised for marker in _SENSITIVE_MARKERS
+    )
 
 
 def redact_url(value: str) -> str:

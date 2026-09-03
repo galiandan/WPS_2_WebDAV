@@ -14,9 +14,10 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 - 不绕过权限、验证码、SSO、风控或租户隔离。
 - Cookie、`rtk`、CSRF、Basic Auth 密码、签名 URL 和原始 HAR 都是敏感信息，不能提交到 GitHub、Issue、聊天或日志。
 - 服务器不长期保存文件。上传超过内存阈值时会使用临时文件，上传完成或失败后删除；因此仍然需要预留临时磁盘空间。
+- 并发大文件上传会预留各自的临时盘空间，空间不足时会拒绝新传输。
 - 公网部署建议使用 HTTPS 反向代理。没有域名或证书时也可以直接使用 HTTP，但 Cookie、Basic Auth 和文件内容都会明文传输，只适合可信网络。
 
-当前版本：`0.7.0`（原型阶段）
+当前版本：`0.8.1`（原型阶段）
 
 ## 能做什么
 
@@ -44,6 +45,7 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 其中：
 
 - `COPY` 是适配器的下载/上传中继，不是 WPS 的服务端复制接口。
+- 为避免 WPS 私有移动/中继流程失败造成数据丢失，`MOVE` 和 `COPY` 暂不覆盖已经存在的目标；请先删除目标或换一个名称。
 - `LOCK` 是当前适配器进程内的短期兼容锁，服务重启后消失。
 - `Depth: infinity` 有条目数和深度上限，避免低配 VPS 被递归请求耗尽资源。
 
@@ -113,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts
 
 两种安装器都会保留 `/etc/wps-adapter/secrets/` 中的凭据。Docker 安装器在构建或健康检查失败时，会尝试恢复原来的服务或容器。
 
-> 一键脚本会从 GitHub 下载当前 `main` 分支代码并以 root 权限安装。生产环境执行前建议先打开脚本检查内容。若仓库是 Private，未获授权的用户无法访问 GitHub Raw 地址。
+> 一键脚本会从 GitHub 下载脚本内固定的 40 位 Git 提交归档，不直接信任可变的 `main` 分支，并在 root 文件操作前校验归档内容清单。升级时先检查脚本内容；维护者发布新版本时会更新固定提交号和清单摘要。也可以用 `--source-ref <40位提交号> --source-manifest-sha256 <64位摘要>` 指定另一个不可变版本。若仓库是 Private，执行机器必须能访问 GitHub Raw 和归档地址。
 
 安装完成后，记下安装器显示的地址。以端口 `54321` 为例：
 
@@ -334,12 +336,21 @@ curl -u <适配器用户名> \
 | `WPS_COOKIE_FILE` | WPS Cookie 文件 | `/etc/wps-adapter/secrets/wps-cookie` |
 | `WPS_CSRF_TOKEN_FILE` | CSRF 文件 | `/etc/wps-adapter/secrets/wps-csrf` |
 | `WPS_AUTO_REFRESH` | 是否在 `401` 后尝试续期 | `true` |
+| `WPS_OBJECT_STORAGE_HOST_SUFFIX` | 允许的 WPS 签名对象存储域名后缀 | `.ag.kdocs.cn` |
+| `WPS_MAX_LIST_ENTRIES` | 单个远程文件夹最多读取的条目数 | `10000` |
 | `ADAPTER_BIND` | 监听地址 | 安装器默认 `0.0.0.0` |
 | `ADAPTER_PORT` | 监听端口 | `54321` |
 | `ADAPTER_USERNAME_FILE` | 适配器用户名文件 | `/etc/wps-adapter/secrets/adapter-username` |
 | `ADAPTER_PASSWORD_FILE` | 适配器密码文件 | `/etc/wps-adapter/secrets/adapter-password` |
 | `WPS_MULTIPART_THRESHOLD` | 进入分片上传的大小阈值 | `50 MiB` |
+| `WPS_MAX_UPLOAD_BYTES` | 单次上传大小上限，`0` 表示不限制 | `1 GiB` |
 | `WPS_MAX_UPLOADS` / `WPS_MAX_DOWNLOADS` | 并发传输上限 | `2` / `4` |
+| `WPS_MAX_CONTROL_BODY` | JSON、LOCK 等控制请求体上限 | `1 MiB` |
+| `WPS_MAX_LOCKS` | 适配器进程内同时保留的 WebDAV 锁数量上限 | `4096` |
+| `WPS_MAX_JSON_RESPONSE_BYTES` | 单个 WPS JSON 响应大小上限 | `8 MiB` |
+| `WPS_MAX_RESPONSE_BODY_BYTES` | 单个适配器 JSON/XML 响应大小上限 | `16 MiB` |
+| `ADAPTER_MAX_CONNECTIONS` | 最大并发客户端连接数 | `64` |
+| `ADAPTER_REQUEST_TIMEOUT` | 单个客户端连接空闲超时（秒） | `60` |
 
 完整模板见 [`.env.example`](.env.example)。不要把 Cookie、CSRF 或密码直接写入公开配置、命令行或 shell 历史。
 
@@ -349,6 +360,7 @@ curl -u <适配器用户名> \
 - 如果必须直接使用 HTTP，至少使用强 Basic Auth，并限制云平台安全组和防火墙来源 IP。
 - 不要把 `/healthz` 当作 WPS 登录成功证明；它只检查适配器进程是否运行。
 - 保持四个 secret 文件为 `0600`，secret 目录为 `0700`。
+- 网页写操作会拒绝带有异站 `Origin`/`Referer` 的请求；WebDAV 和脚本客户端不发送这两个头时不受影响。
 - 不要在 Nginx、Caddy、systemd 或应用日志中记录 `Authorization`、Cookie、签名 URL 或请求体。
 - 升级前先在自己的测试目录验证列表、上传、下载和删除。
 

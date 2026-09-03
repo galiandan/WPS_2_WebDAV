@@ -14,11 +14,40 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class ProbeError(RuntimeError):
     pass
+
+
+MAX_JSON_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+def _validated_url(url: str, *, object_storage: bool = False) -> str:
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except (TypeError, ValueError) as exc:
+        raise ProbeError("captured URL is invalid") from exc
+    host = parts.hostname.rstrip(".").casefold() if parts.hostname else ""
+    suffix = ".ag.kdocs.cn" if object_storage else ".kdocs.cn"
+    if (
+        parts.scheme != "https"
+        or not host
+        or parts.username
+        or parts.password
+        or parts.fragment
+        or port not in {None, 443}
+        or not (host == suffix.lstrip(".") or host.endswith(suffix))
+    ):
+        raise ProbeError("captured URL is outside the WPS domain")
+    return url
 
 
 def _header_value(headers: object, wanted: str) -> str | None:
@@ -77,7 +106,7 @@ def _request_url(entry: Mapping[str, object]) -> str:
     url = request.get("url") if isinstance(request, Mapping) else None
     if not isinstance(url, str) or not url.startswith("https://"):
         raise ProbeError("selected HAR request has no HTTPS URL")
-    return url
+    return _validated_url(url)
 
 
 def _find_entry(entries: list[object], path_suffix: str) -> Mapping[str, object]:
@@ -100,7 +129,7 @@ def _fetch_json(url: str, cookie: str) -> dict[str, object]:
     request.add_header("Accept", "*/*")
     if cookie:
         request.add_header("Cookie", cookie)
-    opener = build_opener()
+    opener = build_opener(_NoRedirectHandler())
     try:
         response = opener.open(request, timeout=30)
     except HTTPError as exc:
@@ -108,7 +137,16 @@ def _fetch_json(url: str, cookie: str) -> dict[str, object]:
     except URLError as exc:
         raise ProbeError("WPS request could not be completed") from exc
     try:
-        raw = response.read()
+        content_length = response.headers.get("Content-Length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_JSON_RESPONSE_BYTES:
+                    raise ProbeError("WPS JSON response is too large")
+            except ValueError:
+                pass
+        raw = response.read(MAX_JSON_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_JSON_RESPONSE_BYTES:
+            raise ProbeError("WPS JSON response is too large")
     finally:
         response.close()
     try:
@@ -137,14 +175,15 @@ def _download(entries: list[object], output: Path) -> int:
     cookie = _find_cookie(entries, selected)
     payload = _fetch_json(_request_url(selected), cookie)
     signed_url = payload.get("download_url") or payload.get("url")
-    if not isinstance(signed_url, str) or not signed_url.startswith("https://"):
+    if not isinstance(signed_url, str):
         raise ProbeError("download response has no HTTPS download URL")
+    signed_url = _validated_url(signed_url, object_storage=True)
 
     # This request intentionally has no WPS Cookie; the URL itself is signed.
     request = Request(signed_url, method="GET")
     request.add_header("Accept", "*/*")
     try:
-        response = build_opener().open(request, timeout=30)
+        response = build_opener(_NoRedirectHandler()).open(request, timeout=30)
     except HTTPError as exc:
         raise ProbeError(f"object download returned HTTP {exc.code}") from None
     except URLError as exc:

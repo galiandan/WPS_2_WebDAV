@@ -79,6 +79,21 @@ class CopyClient(FakeClient):
         return DownloadStream(Response(self.source_bytes), "finished", "text/plain", 11)
 
 
+class FailingFolderCopyClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.children["root"] = (
+            RemoteEntry(id="source-folder", name="source", kind="folder", parent_id="root", size=0),
+        )
+        self.children["source-folder"] = (
+            RemoteEntry(id="child", name="child.txt", kind="file", parent_id="source-folder", size=4),
+        )
+
+    def open_download(self, entry_id: str, **kwargs):
+        self.download_calls.append((entry_id, kwargs))
+        raise RuntimeError("simulated copy failure")
+
+
 class StorageTests(unittest.TestCase):
     def test_resolves_nested_paths_using_parent_ids(self) -> None:
         storage = WpsStorage(FakeClient(), root_id="root", cache_ttl=60)
@@ -184,6 +199,15 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result.name, "copied.txt")
         self.assertEqual(client.download_calls[0][0], "source")
         self.assertEqual(client.upload_calls[0][0:3], ("root", "copied.txt", b"copy source"))
+
+    def test_recursive_copy_attempts_to_clean_a_new_root_after_failure(self) -> None:
+        client = FailingFolderCopyClient()
+        storage = WpsStorage(client, root_id="root", cache_ttl=60)
+
+        with self.assertRaisesRegex(RuntimeError, "simulated copy failure"):
+            storage.copy_path("/source", "/copied", depth="infinity")
+
+        self.assertIn("folder-new", client.delete_calls)
 
 
 if __name__ == "__main__":

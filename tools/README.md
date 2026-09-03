@@ -1,5 +1,11 @@
 # Tools
 
+`build_login_script.py` generates the standalone `wps_login.py` helper.
+`build_release_manifest.py` generates `release-manifest.txt`, which the
+one-command installers verify before installing source files. After changing
+tracked project files, run both generators and keep the manifest digest in the
+two installer scripts synchronized.
+
 这里的工具均使用 Python 标准库：
 
 - `har_inspect.py`：输出 HAR 的脱敏摘要，或生成脱敏副本。

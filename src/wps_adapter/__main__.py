@@ -12,7 +12,7 @@ from .login_command import (
     add_login_arguments,
     run_login_safely,
 )
-from .server import AdapterApplication, BasicAuth, create_server
+from .server import AdapterApplication, BasicAuth, DavLockStore, create_server
 from .storage import WpsStorage
 
 
@@ -36,6 +36,7 @@ def _application() -> AdapterApplication:
         root_id=os.environ.get("WPS_ROOT_ID", "0"),
         root_name=os.environ.get("WPS_ROOT_NAME", "WPS Enterprise Drive"),
         list_count=_env_int("WPS_LIST_COUNT", 20),
+        max_list_entries=_env_int("WPS_MAX_LIST_ENTRIES", 10000),
         cache_ttl=_env_float("WPS_CACHE_TTL", 2.0),
         max_uploads=_env_int("WPS_MAX_UPLOADS", 2),
         max_downloads=_env_int("WPS_MAX_DOWNLOADS", 4),
@@ -55,6 +56,9 @@ def _application() -> AdapterApplication:
         rest_prefix=os.environ.get("ADAPTER_REST_PREFIX", "/api/v1"),
         max_propfind_entries=_env_int("WPS_MAX_PROPFIND_ENTRIES", 10000),
         max_propfind_depth=_env_int("WPS_MAX_PROPFIND_DEPTH", 64),
+        max_control_body=_env_int("WPS_MAX_CONTROL_BODY", 1024 * 1024),
+        max_response_body=_env_int("WPS_MAX_RESPONSE_BODY_BYTES", 16 * 1024 * 1024),
+        locks=DavLockStore(max_locks=_env_int("WPS_MAX_LOCKS", 4096)),
     )
 
 
@@ -100,7 +104,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         _check_public_bind(args.bind, application.auth)
-        server = create_server(application, bind=args.bind, port=args.port)
+        server = create_server(
+            application,
+            bind=args.bind,
+            port=args.port,
+            max_connections=_env_int("ADAPTER_MAX_CONNECTIONS", 64),
+            request_timeout=_env_float("ADAPTER_REQUEST_TIMEOUT", 60.0),
+        )
         print(f"listening=http://{args.bind}:{args.port}", flush=True)
         print(
             f"webdav=http://{args.bind}:{args.port}{application.dav_prefix}/ "

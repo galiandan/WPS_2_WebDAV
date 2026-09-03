@@ -21,6 +21,7 @@ import base64
 import ipaddress
 import json
 import os
+import posixpath
 import secrets
 import shlex
 import shutil
@@ -52,6 +53,9 @@ DEFAULT_LOGIN_URL = "https://365.kdocs.cn/space/"
 DEFAULT_COOKIE_DOMAIN_SUFFIX = "kdocs.cn"
 DEFAULT_REMOTE_COOKIE_PATH = "/etc/wps-adapter/secrets/wps-cookie"
 DEFAULT_REMOTE_CSRF_PATH = "/etc/wps-adapter/secrets/wps-csrf"
+REMOTE_SECRET_DIR = "/etc/wps-adapter/secrets"
+MAX_COOKIE_SNAPSHOT_BYTES = 4 * 1024 * 1024
+MAX_ADAPTER_RESPONSE_BYTES = 1 * 1024 * 1024
 
 
 class LoginError(RuntimeError):
@@ -60,9 +64,21 @@ class LoginError(RuntimeError):
 
 def _host_from_url(url: str) -> str:
     parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
-        raise LoginError("登录地址必须是不带账号信息的 HTTPS 地址")
-    return parts.hostname.rstrip(".").casefold()
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise LoginError("登录地址中的端口无效") from exc
+    host = parts.hostname.rstrip(".").casefold() if parts.hostname else ""
+    if (
+        parts.scheme != "https"
+        or not host
+        or parts.username
+        or parts.password
+        or port not in {None, 443}
+        or not (host == "kdocs.cn" or host.endswith(".kdocs.cn"))
+    ):
+        raise LoginError("登录地址必须是不带账号信息的 HTTPS WPS 地址")
+    return host
 
 
 def _domain_without_dot(value: str) -> str:
@@ -91,7 +107,11 @@ def _cookie_rank(cookie: Mapping[str, object], host: str) -> tuple[int, int, int
 
 
 def _safe_cookie_part(value: str, *, name: bool = False) -> bool:
-    if not value or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+    if (
+        not value
+        or len(value) > 64 * 1024
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+    ):
         return False
     if ";" in value:
         return False
@@ -161,7 +181,10 @@ def credentials_from_cookies(
         raise LoginError(
             "登录 Cookie 中没有 rtk，无法启用自动续期；请使用此助手重新登录 WPS 后重试"
         )
-    return WpsCredentials(cookie="; ".join(pairs), csrf_token=csrf), tuple(
+    cookie_header = "; ".join(pairs)
+    if len(cookie_header) > MAX_COOKIE_SNAPSHOT_BYTES:
+        raise LoginError("WPS Cookie 快照过大")
+    return WpsCredentials(cookie=cookie_header, csrf_token=csrf), tuple(
         str(cookie.get("name", "")) for cookie in selected
     )
 
@@ -217,16 +240,37 @@ def write_local_credentials(
     return cookie_path, csrf_path
 
 
-_REMOTE_WRITE_SCRIPT = r'''import json, os, sys, tempfile
+_REMOTE_WRITE_SCRIPT = r'''import json, os, stat, sys, tempfile
+
+SECRET_DIR = "/etc/wps-adapter/secrets"
+
+def validate_secret_path(path):
+    if not isinstance(path, str) or not path.startswith(SECRET_DIR + "/"):
+        raise ValueError("credential path must be inside the adapter secret directory")
+    relative = path[len(SECRET_DIR) + 1:]
+    if not relative or "/" in relative or relative in {".", ".."}:
+        raise ValueError("credential path must be a direct secret file")
+    if not all("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in "._-" for char in relative):
+        raise ValueError("credential path contains an invalid file name")
+    if os.path.normpath(path) != path or os.path.realpath(SECRET_DIR) != SECRET_DIR:
+        raise ValueError("credential path must not use symlinks or traversal")
+    try:
+        directory_stat = os.lstat(SECRET_DIR)
+    except FileNotFoundError as exc:
+        raise ValueError("adapter secret directory does not exist") from exc
+    if not stat.S_ISDIR(directory_stat.st_mode):
+        raise ValueError("adapter secret path is not a directory")
+    return path
 
 def atomic_write(path, value):
-    target = os.path.abspath(path)
-    directory = os.path.dirname(target)
-    os.makedirs(directory, mode=0o700, exist_ok=True)
+    target = validate_secret_path(path)
+    directory = SECRET_DIR
     os.chmod(directory, 0o700)
     previous_stat = None
     try:
-        previous_stat = os.stat(target, follow_symlinks=False)
+        previous_stat = os.lstat(target)
+        if stat.S_ISLNK(previous_stat.st_mode) or not stat.S_ISREG(previous_stat.st_mode):
+            raise ValueError("credential target must be a regular file")
     except FileNotFoundError:
         pass
     fd, temporary = tempfile.mkstemp(prefix="." + os.path.basename(target) + ".", dir=directory, text=True)
@@ -249,15 +293,20 @@ def atomic_write(path, value):
         except FileNotFoundError:
             pass
 
-data = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+raw_payload = sys.stdin.buffer.read(8 * 1024 * 1024 + 1)
+if len(raw_payload) > 8 * 1024 * 1024:
+    raise ValueError("credential payload is too large")
+data = json.loads(raw_payload.decode("utf-8"))
 cookie_path = data["cookie_path"]
 csrf_path = data["csrf_path"]
 cookie = data["cookie"]
 csrf = data["csrf"]
 if not all(isinstance(item, str) and item for item in (cookie_path, csrf_path, cookie, csrf)):
     raise ValueError("invalid credential payload")
-if any(not item.startswith("/") or any(char in item for char in "\r\n\x00") for item in (cookie_path, csrf_path)):
-    raise ValueError("invalid credential path")
+cookie_path = validate_secret_path(cookie_path)
+csrf_path = validate_secret_path(csrf_path)
+if cookie_path == csrf_path:
+    raise ValueError("credential paths must be different")
 if any(any(ord(char) < 0x20 or ord(char) == 0x7f for char in item) for item in (cookie, csrf)):
     raise ValueError("invalid credential value")
 atomic_write(cookie_path, cookie)
@@ -288,8 +337,22 @@ def push_credentials_over_ssh(
     if timeout <= 0:
         raise LoginError("SSH 超时时间必须为正数")
     for path in (cookie_path, csrf_path):
-        if not path.startswith("/") or any(char in path for char in "\r\n\x00"):
-            raise LoginError("远程凭据路径必须是安全的绝对路径")
+        if not isinstance(path, str) or not path.startswith(REMOTE_SECRET_DIR + "/"):
+            raise LoginError("远程凭据路径必须位于 /etc/wps-adapter/secrets 目录")
+        relative = path[len(REMOTE_SECRET_DIR) + 1:]
+        if (
+            not relative
+            or "/" in relative
+            or relative in {".", ".."}
+            or any(
+                not ("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in "._-")
+                for char in relative
+            )
+            or posixpath.normpath(path) != path
+        ):
+            raise LoginError("远程凭据路径必须是 secret 目录下的普通文件名")
+    if cookie_path == csrf_path:
+        raise LoginError("远程 Cookie 和 CSRF 路径必须不同")
 
     payload = json.dumps(
         {
@@ -421,6 +484,34 @@ def _cookie_payload(cookies: Sequence[Mapping[str, object]]) -> list[dict[str, s
     return payload
 
 
+def _read_limited_http_response(response: object, *, max_bytes: int) -> bytes:
+    """Read a helper response without allowing an untrusted peer to exhaust RAM."""
+
+    if max_bytes <= 0:
+        raise LoginError("响应大小限制必须为正数")
+    getheader = getattr(response, "getheader", None)
+    if callable(getheader):
+        try:
+            declared = getheader("Content-Length")
+            declared_length = int(declared) if declared is not None else None
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and (declared_length < 0 or declared_length > max_bytes):
+            raise LoginError("适配器响应过大")
+    reader = getattr(response, "read", None)
+    if not callable(reader):
+        raise LoginError("适配器响应无效")
+    try:
+        body = reader(max_bytes + 1)
+    except TypeError:
+        # Small test doubles and older wrappers may expose read() without a
+        # size argument; real HTTPResponse objects take the bounded path.
+        body = reader()
+    if not isinstance(body, bytes) or len(body) > max_bytes:
+        raise LoginError("适配器响应过大")
+    return body
+
+
 def push_credentials_over_https(
     credentials: WpsCredentials,
     *,
@@ -478,7 +569,7 @@ def push_credentials_over_https(
             )
             response = connection.getresponse()  # type: ignore[attr-defined]
             response_status = getattr(response, "status", None)
-            response.read()
+            _read_limited_http_response(response, max_bytes=MAX_ADAPTER_RESPONSE_BYTES)
         except (OSError, TimeoutError) as exc:
             raise LoginError("适配器同步凭据失败，请检查地址和网络") from exc
     finally:
@@ -500,7 +591,13 @@ class _WebSocket:
 
     def __init__(self, url: str, *, timeout: float = 10.0) -> None:
         parts = urlsplit(url)
-        if parts.scheme != "ws" or not parts.hostname or parts.username or parts.password:
+        if (
+            parts.scheme != "ws"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or not _is_loopback_host(parts.hostname)
+        ):
             raise LoginError("Chrome 调试接口地址无效")
         self._socket = socket.create_connection(
             (parts.hostname, parts.port or 80),
@@ -612,6 +709,8 @@ class _WebSocket:
                 message.extend(payload)
             else:
                 continue
+            if len(message) > 64 * 1024 * 1024:
+                raise LoginError("Chrome 调试消息过大")
             if final:
                 if message_opcode != 0x1:
                     raise LoginError("Chrome 调试消息格式无效")
@@ -699,7 +798,12 @@ def _cdp_page_url(port: int, *, timeout: float) -> str:
         try:
             request = Request(f"http://127.0.0.1:{port}/json/list")
             with opener.open(request, timeout=min(2.0, max(0.1, deadline - time.monotonic()))) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                payload = json.loads(
+                    _read_limited_http_response(
+                        response,
+                        max_bytes=MAX_ADAPTER_RESPONSE_BYTES,
+                    ).decode("utf-8")
+                )
             if isinstance(payload, list):
                 for target in payload:
                     if (
@@ -1162,7 +1266,7 @@ __all__ = [
 ]
 
 
-__version__ = '0.7.0'
+__version__ = '0.8.1'
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

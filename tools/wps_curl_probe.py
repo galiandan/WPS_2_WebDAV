@@ -16,11 +16,40 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class CurlProbeError(RuntimeError):
     pass
+
+
+MAX_JSON_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+def _validated_url(url: str, *, object_storage: bool = False) -> str:
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except (TypeError, ValueError) as exc:
+        raise CurlProbeError("captured URL is invalid") from exc
+    host = parts.hostname.rstrip(".").casefold() if parts.hostname else ""
+    suffix = ".ag.kdocs.cn" if object_storage else ".kdocs.cn"
+    if (
+        parts.scheme != "https"
+        or not host
+        or parts.username
+        or parts.password
+        or parts.fragment
+        or port not in {None, 443}
+        or not (host == suffix.lstrip(".") or host.endswith(suffix))
+    ):
+        raise CurlProbeError("captured URL is outside the WPS domain")
+    return url
 
 
 def _parse_curl(text: str) -> tuple[str, str, dict[str, str]]:
@@ -64,14 +93,14 @@ def _parse_curl(text: str) -> tuple[str, str, dict[str, str]]:
             url = token
         index += 1
 
-    if not url.startswith("https://"):
-        raise CurlProbeError("cURL does not contain an HTTPS URL")
+    _validated_url(url)
     if method != "GET":
         raise CurlProbeError("only GET cURLs are allowed by this read-only probe")
     return url, method, headers
 
 
 def _request(url: str, headers: Mapping[str, str]) -> bytes:
+    url = _validated_url(url)
     request = Request(url, method="GET")
     # Keep only headers useful for a same-origin read request. In particular,
     # do not forward browser pseudo-headers, content lengths, or compression.
@@ -83,13 +112,22 @@ def _request(url: str, headers: Mapping[str, str]) -> bytes:
     if cookie:
         request.add_header("Cookie", cookie)
     try:
-        response = build_opener().open(request, timeout=30)
+        response = build_opener(_NoRedirectHandler()).open(request, timeout=30)
     except HTTPError as exc:
         raise CurlProbeError(f"WPS request returned HTTP {exc.code}") from None
     except URLError as exc:
         raise CurlProbeError("WPS request could not be completed") from exc
     try:
-        body = response.read()
+        content_length = response.headers.get("Content-Length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_JSON_RESPONSE_BYTES:
+                    raise CurlProbeError("WPS JSON response is too large")
+            except ValueError:
+                pass
+        body = response.read(MAX_JSON_RESPONSE_BYTES + 1)
+        if len(body) > MAX_JSON_RESPONSE_BYTES:
+            raise CurlProbeError("WPS JSON response is too large")
     finally:
         response.close()
     return body
@@ -122,15 +160,16 @@ def _run_download(url: str, headers: Mapping[str, str], output: Path) -> int:
         raise CurlProbeError("the pasted cURL is not a download API request")
     payload = _json_request(url, headers)
     signed_url = payload.get("download_url") or payload.get("url")
-    if not isinstance(signed_url, str) or not signed_url.startswith("https://"):
+    if not isinstance(signed_url, str):
         raise CurlProbeError("download response has no HTTPS download URL")
+    signed_url = _validated_url(signed_url, object_storage=True)
 
     # The API URL is authenticated by Cookie. The returned object URL is
     # independently signed, so forwarding Cookie would be unnecessary.
     request = Request(signed_url, method="GET")
     request.add_header("Accept", "*/*")
     try:
-        response = build_opener().open(request, timeout=30)
+        response = build_opener(_NoRedirectHandler()).open(request, timeout=30)
     except HTTPError as exc:
         raise CurlProbeError(f"object download returned HTTP {exc.code}") from None
     except URLError as exc:

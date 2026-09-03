@@ -16,6 +16,7 @@ from wps_adapter.__main__ import _apply_adapter_port, _prompt_login_target
 from wps_adapter.login import (
     LoginError,
     _REMOTE_WRITE_SCRIPT,
+    _WebSocket,
     credentials_from_cookies,
     login_and_sync,
     push_credentials_over_ssh,
@@ -107,6 +108,15 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(payload["csrf"], credentials.csrf_token)
         self.assertEqual(command[:4], ["ssh", "-F", "/dev/null", "-i"])
 
+    def test_ssh_rejects_paths_outside_the_adapter_secret_directory(self) -> None:
+        credentials = WpsCredentials(cookie="rtk=refresh", csrf_token="csrf")
+        with self.assertRaisesRegex(LoginError, "secret"):
+            push_credentials_over_ssh(
+                credentials,
+                ssh_target="root@vps-host",
+                cookie_path="/tmp/wps-cookie",
+            )
+
     def test_ssh_password_auth_uses_native_ssh_prompt(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh-secret", csrf_token="csrf-secret")
         with patch("wps_adapter.login.subprocess.run") as run:
@@ -140,9 +150,14 @@ class LoginHelperTests(unittest.TestCase):
                     "csrf": "new-csrf",
                 }
             ).encode("utf-8")
+            script = _REMOTE_WRITE_SCRIPT.replace(
+                'SECRET_DIR = "/etc/wps-adapter/secrets"',
+                f"SECRET_DIR = {str(directory)!r}",
+                1,
+            )
 
             completed = subprocess.run(
-                [sys.executable, "-c", _REMOTE_WRITE_SCRIPT],
+                [sys.executable, "-c", script],
                 input=payload,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -266,6 +281,35 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(captured["port"], 18080)
         self.assertTrue(captured["closed"])
 
+    def test_adapter_sync_rejects_oversized_response(self) -> None:
+        credentials = WpsCredentials(cookie="rtk=refresh; csrf=csrf", csrf_token="csrf")
+
+        class Response:
+            status = 200
+
+            def read(self, _size=None) -> bytes:
+                return b"x" * (1024 * 1024 + 1)
+
+        class Connection:
+            def request(self, method, path, *, body, headers) -> None:
+                pass
+
+            def getresponse(self) -> Response:
+                return Response()
+
+            def close(self) -> None:
+                pass
+
+        with self.assertRaisesRegex(LoginError, "响应过大"):
+            push_credentials_over_https(
+                credentials,
+                cookies=[{"name": "rtk", "value": "refresh", "domain": ".kdocs.cn"}],
+                adapter_url="https://adapter.example",
+                username="adapter",
+                password="secret",
+                connection_factory=lambda _host, _port, _timeout: Connection(),
+            )
+
     def test_login_cookie_detection_does_not_require_enter(self) -> None:
         class Session:
             def cookies(self):
@@ -289,6 +333,21 @@ class LoginHelperTests(unittest.TestCase):
             with self.assertRaisesRegex(LoginError, "绝对路径"):
                 login_and_sync(output_dir="relative")
         session.assert_not_called()
+
+    def test_login_url_must_be_a_wps_host(self) -> None:
+        with self.assertRaisesRegex(LoginError, "WPS"):
+            credentials_from_cookies(
+                [
+                    {"name": "rtk", "value": "refresh", "domain": ".example.com", "path": "/"},
+                    {"name": "csrf", "value": "csrf", "domain": ".example.com", "path": "/"},
+                ],
+                base_url="https://login.example.com/",
+                domain_suffix="example.com",
+            )
+
+    def test_cdp_websocket_must_stay_on_loopback(self) -> None:
+        with self.assertRaisesRegex(LoginError, "调试接口地址无效"):
+            _WebSocket("ws://attacker.example:9222/devtools/page/1")
 
     def test_interactive_target_supports_ssh_password_login(self) -> None:
         with patch(

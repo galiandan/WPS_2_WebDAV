@@ -19,11 +19,12 @@ from wps_adapter.client import (
     WpsCredentials,
     WpsDriveClient,
 )
-from wps_adapter.har import REDACTED, redact_har, safe_entry_details, safe_url_shape, summarize_har
+from wps_adapter.har import REDACTED, redact_har, redact_url, safe_entry_details, safe_url_shape, summarize_har
 from wps_adapter.provider import InsufficientStorageError, RemoteEntry
 
 
 CURL_PROBE = runpy.run_path(str(Path(__file__).parents[1] / "tools/wps_curl_probe.py"))
+HAR_PROBE = runpy.run_path(str(Path(__file__).parents[1] / "tools/wps_har_probe.py"))
 
 
 class FakeResponse:
@@ -59,7 +60,7 @@ class DirectDownloadFallbackOpener:
             raise HTTPError(request.full_url, 403, "unsupported", {}, BytesIO())
         if len(self.requests) == 2:
             return FakeResponse(
-                b'{"download_url":"https://object.example/signed?sig=secret",'
+                b'{"download_url":"https://hwc-bj.ag.kdocs.cn/signed?sig=secret",'
                 b'"status":"finished"}'
             )
         return FakeResponse(b"file-content", {"Content-Length": "12"})
@@ -151,6 +152,13 @@ class ClientTests(unittest.TestCase):
         config = WpsClientConfig(group_id="group-1", cookie="Cookie-secret")
         self.assertNotIn("Cookie-secret", repr(config))
 
+    def test_credential_values_cannot_inject_http_control_characters(self) -> None:
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="sid=ok\r\nX-Leak: yes")
+        )
+        with self.assertRaises(WpsApiError):
+            client.list_entries("folder-1")
+
     def test_list_maps_confirmed_file_shapes_and_query_names(self) -> None:
         opener = FakeOpener([
             FakeResponse(
@@ -181,9 +189,35 @@ class ClientTests(unittest.TestCase):
         self.assertIn("include", query_names)
         self.assertEqual(request.get_header("Cookie"), "Cookie-secret")
 
+    def test_json_response_size_is_bounded(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(b"{}", {"Content-Length": str(32 * 1024 * 1024 + 1)}),
+        ])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+        with self.assertRaises(WpsApiError):
+            client.list_entries("folder-1")
+
+    def test_remote_metadata_rejects_unsafe_names(self) -> None:
+        with self.assertRaises(WpsApiError):
+            WpsDriveClient._entry_from_item(
+                {"id": 1, "fname": "bad\nname", "ftype": "file"}
+            )
+        with self.assertRaises(WpsApiError):
+            WpsDriveClient._entry_from_item(
+                {"id": 1, "fname": "x" * 4097, "ftype": "file"}
+            )
+        self.assertIsNone(
+            WpsDriveClient._entry_from_item(
+                {"id": 1, "fname": "ok", "ftype": "file", "fsha": "x" * 4097}
+            ).etag
+        )
+
     def test_download_stream_does_not_forward_wps_cookie(self) -> None:
         opener = FakeOpener([
-            FakeResponse(b'{"download_url":"https://object.example/signed?sig=secret",'
+            FakeResponse(b'{"download_url":"https://hwc-bj.ag.kdocs.cn/signed?sig=secret",'
                          b'"status":"finished"}'),
             FakeResponse(b"file-content", {"Content-Type": "application/octet-stream", "Content-Length": "12"}),
         ])
@@ -225,7 +259,7 @@ class ClientTests(unittest.TestCase):
 
     def test_range_download_requires_partial_object_response(self) -> None:
         opener = FakeOpener([
-            FakeResponse(b'{"download_url":"https://object.example/signed"}'),
+            FakeResponse(b'{"download_url":"https://hwc-bj.ag.kdocs.cn/signed"}'),
             FakeResponse(
                 b"world",
                 {"Content-Length": "5", "Content-Range": "bytes 6-10/11"},
@@ -245,7 +279,7 @@ class ClientTests(unittest.TestCase):
 
     def test_range_download_rejects_mismatched_content_range(self) -> None:
         opener = FakeOpener([
-            FakeResponse(b'{"download_url":"https://object.example/signed"}'),
+            FakeResponse(b'{"download_url":"https://hwc-bj.ag.kdocs.cn/signed"}'),
             FakeResponse(
                 b"wrong",
                 {"Content-Length": "5", "Content-Range": "bytes 0-4/11"},
@@ -260,13 +294,42 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(WpsApiError):
             client.open_download("file-1", offset=6, length=5)
 
+    def test_download_rejects_a_signed_url_outside_the_wps_object_store(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(b'{"download_url":"https://attacker.example/signed"}'),
+        ])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        with self.assertRaises(WpsApiError):
+            client.open_download("file-1")
+
+    def test_signed_target_rejects_http_control_characters(self) -> None:
+        client = WpsDriveClient(WpsClientConfig(group_id="group-1"))
+        with self.assertRaises(WpsApiError):
+            client._signed_target(
+                "https://hwc-bj.ag.kdocs.cn/object\r\nX-Leak: yes",
+                "signed URL",
+            )
+
+    def test_object_store_configuration_cannot_escape_wps_domain(self) -> None:
+        with self.assertRaisesRegex(ValueError, "within kdocs.cn"):
+            WpsDriveClient(
+                WpsClientConfig(
+                    group_id="group-1",
+                    object_storage_host_suffix="attacker.example",
+                )
+            )
+
     def test_upload_uses_confirmed_control_flow_and_streams_object_body(self) -> None:
         object_connection = FakeHttpsConnection()
         opener = FakeOpener([
             FakeResponse(b'{"result":"ok"}'),
             FakeResponse(
                 b'{"method":"PUT","store":"obscn",'
-                b'"url":"https://object.example/signed",'
+                b'"url":"https://hwc-bj.ag.kdocs.cn/signed",'
                 b'"response":{"expect_code":[200]}}'
             ),
             FakeResponse(b'{"id":9,"fname":"probe.txt","ftype":"file",'
@@ -308,12 +371,12 @@ class ClientTests(unittest.TestCase):
             FakeResponse(b'{"result":"ok"}'),
             FakeResponse(
                 b'{"method":"PUT","store":"obscn",'
-                b'"url":"https://object.example/signed-1",'
+                b'"url":"https://hwc-bj.ag.kdocs.cn/signed-1",'
                 b'"response":{"expect_code":[200]}}'
             ),
             FakeResponse(
                 b'{"method":"PUT","store":"obscn",'
-                b'"url":"https://object.example/signed-2",'
+                b'"url":"https://hwc-bj.ag.kdocs.cn/signed-2",'
                 b'"response":{"expect_code":[200]}}'
             ),
             FakeResponse(b'{"id":9,"fname":"probe.txt","ftype":"file",'
@@ -358,7 +421,7 @@ class ClientTests(unittest.TestCase):
         opener = OverwriteUploadOpener([
             FakeResponse(
                 b'{"method":"PUT","store":"obscn",'
-                b'"url":"https://object.example/signed",'
+                b'"url":"https://hwc-bj.ag.kdocs.cn/signed",'
                 b'"response":{"expect_code":[200]}}'
             ),
             FakeResponse(
@@ -432,7 +495,7 @@ class ClientTests(unittest.TestCase):
                             },
                         },
                         "response": {"expect_code": [200]},
-                        "url": "https://object.example/api/multipart/upload-1/part-1",
+                        "url": "https://hwc-bj.ag.kdocs.cn/api/multipart/upload-1/part-1",
                     }
                 ).encode("utf-8")
             ),
@@ -449,7 +512,7 @@ class ClientTests(unittest.TestCase):
                             },
                         },
                         "response": {"expect_code": [200]},
-                        "url": "https://object.example/api/multipart/upload-1/part-2",
+                        "url": "https://hwc-bj.ag.kdocs.cn/api/multipart/upload-1/part-2",
                     }
                 ).encode("utf-8")
             ),
@@ -464,7 +527,7 @@ class ClientTests(unittest.TestCase):
                             "headers": {"Content-Type": "application/xml"},
                         },
                         "response": {"expect_code": [200]},
-                        "url": "https://object.example/api/multipart/upload-1/complete",
+                        "url": "https://hwc-bj.ag.kdocs.cn/api/multipart/upload-1/complete",
                     }
                 ).encode("utf-8")
             ),
@@ -526,6 +589,24 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(final_body["etag"], "merged-etag")
         self.assertEqual(final_body["groupid"], "1")
         self.assertEqual(final_body["parentid"], "3")
+
+    def test_multipart_part_buffer_has_a_memory_ceiling(self) -> None:
+        client = WpsDriveClient(
+            WpsClientConfig(
+                group_id="group-1",
+                cookie="Cookie-secret",
+                multipart_part_size=65 * 1024 * 1024,
+            )
+        )
+        with self.assertRaises(InsufficientStorageError):
+            client._multipart_part_size(
+                100 * 1024 * 1024,
+                {
+                    "min_part_size": 5 * 1024 * 1024,
+                    "max_part_size": 5 * 1024 * 1024 * 1024,
+                    "max_parts": 10000,
+                },
+            )
 
     def test_create_folder_uses_confirmed_json_body(self) -> None:
         opener = FakeOpener([
@@ -690,12 +771,34 @@ class ClientTests(unittest.TestCase):
         client = WpsDriveClient(WpsClientConfig(group_id="group-1"), opener=opener)
         entries = client.iter_entries("folder-1", count=1)
         self.assertEqual([entry.id for entry in entries], ["1", "2"])
-        self.assertEqual([parse_qsl(urlsplit(request.full_url).query)[1][1] for request, _ in opener.requests], ["0", "1"])
+        self.assertEqual(
+            [parse_qsl(urlsplit(request.full_url).query)[1][1] for request, _ in opener.requests],
+            ["0", "1"],
+        )
+
+    def test_iter_entries_bounds_broken_pagination(self) -> None:
+        class EndlessOpener:
+            def __init__(self) -> None:
+                self.offset = 0
+
+            def open(self, request, timeout: float) -> FakeResponse:
+                self.offset += 1
+                return FakeResponse(
+                    json.dumps({"files": [], "next_offset": self.offset, "result": "ok"}).encode()
+                )
+
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=EndlessOpener(),
+        )
+        with self.assertRaises(InsufficientStorageError):
+            client.iter_entries("folder-1", count=1, max_entries=2)
 
     def test_file_credentials_are_read_without_repr_and_csrf_can_come_from_cookie(self) -> None:
         with TemporaryDirectory() as directory:
             cookie_path = Path(directory) / "cookie"
             cookie_path.write_text("sid=first; csrf=csrf-first", encoding="utf-8")
+            cookie_path.chmod(0o600)
             source = FileCredentialSource(cookie_path=str(cookie_path))
             self.assertEqual(source.get(), WpsCredentials(cookie="sid=first; csrf=csrf-first"))
             config = WpsClientConfig(group_id="group-1", credential_source=source)
@@ -712,6 +815,8 @@ class ClientTests(unittest.TestCase):
             csrf_path = Path(directory) / "csrf"
             cookie_path.write_text("sid=first", encoding="utf-8")
             csrf_path.write_text("csrf-first", encoding="utf-8")
+            cookie_path.chmod(0o600)
+            csrf_path.chmod(0o600)
             source = FileCredentialSource(
                 cookie_path=str(cookie_path),
                 csrf_token_path=str(csrf_path),
@@ -725,12 +830,30 @@ class ClientTests(unittest.TestCase):
                 WpsCredentials(cookie="sid=second", csrf_token="csrf-second"),
             )
 
+    def test_file_credentials_reject_symlinks_and_broad_permissions(self) -> None:
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "cookie"
+            target.write_text("sid=first", encoding="utf-8")
+            target.chmod(0o644)
+            source = FileCredentialSource(cookie_path=str(target))
+            with self.assertRaises(WpsApiError):
+                source.get()
+
+            target.chmod(0o600)
+            link = Path(directory) / "cookie-link"
+            link.symlink_to(target)
+            linked_source = FileCredentialSource(cookie_path=str(link))
+            with self.assertRaises(WpsApiError):
+                linked_source.get()
+
     def test_file_credentials_can_be_replaced_as_a_pair(self) -> None:
         with TemporaryDirectory() as directory:
             cookie_path = Path(directory) / "cookie"
             csrf_path = Path(directory) / "csrf"
             cookie_path.write_text("sid=first", encoding="utf-8")
             csrf_path.write_text("csrf-first", encoding="utf-8")
+            cookie_path.chmod(0o600)
+            csrf_path.chmod(0o600)
             source = FileCredentialSource(
                 cookie_path=str(cookie_path),
                 csrf_token_path=str(csrf_path),
@@ -750,6 +873,8 @@ class ClientTests(unittest.TestCase):
             csrf_path = Path(directory) / "csrf"
             cookie_path.write_text("sid=first", encoding="utf-8")
             csrf_path.write_text("csrf-first", encoding="utf-8")
+            cookie_path.chmod(0o600)
+            csrf_path.chmod(0o600)
             source = FileCredentialSource(
                 cookie_path=str(cookie_path),
                 csrf_token_path=str(csrf_path),
@@ -791,6 +916,8 @@ class ClientTests(unittest.TestCase):
             csrf_path = Path(directory) / "csrf"
             cookie_path.write_text("sid=first; rtk=refresh-ticket", encoding="utf-8")
             csrf_path.write_text("csrf-first", encoding="utf-8")
+            cookie_path.chmod(0o600)
+            csrf_path.chmod(0o600)
             source = FileCredentialSource(
                 cookie_path=str(cookie_path),
                 csrf_token_path=str(csrf_path),
@@ -845,6 +972,30 @@ class ClientTests(unittest.TestCase):
             )
             self.assertEqual(csrf_path.read_text(encoding="utf-8").strip(), "csrf-second")
 
+    def test_failed_refresh_closes_the_http_error_response(self) -> None:
+        closed = {"value": False}
+
+        class RefreshError(HTTPError):
+            def close(self) -> None:
+                closed["value"] = True
+                super().close()
+
+        class RefreshOpener:
+            def open(self, request, timeout: float):
+                raise RefreshError(request.full_url, 503, "unavailable", {}, BytesIO())
+
+        client = WpsDriveClient(
+            WpsClientConfig(
+                group_id="group-1",
+                cookie="rtk=refresh; csrf=csrf",
+                credential_source=FileCredentialSource(),
+            ),
+            opener=RefreshOpener(),
+        )
+
+        self.assertFalse(client._refresh_wps_session())
+        self.assertTrue(closed["value"])
+
 
 class CurlProbeTests(unittest.TestCase):
     def test_parse_curl_extracts_cookie_without_printing_it(self) -> None:
@@ -856,6 +1007,12 @@ class CurlProbeTests(unittest.TestCase):
         self.assertEqual(method, "GET")
         self.assertIn("/files?parentid=f", url)
         self.assertEqual(headers["cookie"], "session-secret")
+
+    def test_probe_urls_cannot_send_cookies_outside_wps(self) -> None:
+        with self.assertRaisesRegex(CURL_PROBE["CurlProbeError"], "WPS domain"):
+            CURL_PROBE["_validated_url"]("https://attacker.example/files")
+        with self.assertRaisesRegex(HAR_PROBE["ProbeError"], "WPS domain"):
+            HAR_PROBE["_validated_url"]("https://attacker.example/download", object_storage=True)
 
 
 class HarTests(unittest.TestCase):
@@ -895,6 +1052,51 @@ class HarTests(unittest.TestCase):
         self.assertNotIn("secret", entry["request"]["postData"]["text"])
         self.assertNotIn("secret", entry["response"]["content"]["text"])
         self.assertEqual(document["log"]["entries"][0]["request"]["headers"][0]["value"], "Bearer secret")
+
+    def test_redacts_signed_urls_and_object_ids_inside_json(self) -> None:
+        document = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {"url": "https://365.kdocs.cn/list?parentid=test-parent-id"},
+                        "response": {
+                            "content": {
+                                "mimeType": "application/json",
+                                "text": (
+                                    '{"download_url":"https://hwc-bj.ag.kdocs.cn/object/secret?'
+                                    'AccessKeyId=secret&Signature=secret",'
+                                    '"link_url":"https://www.kdocs.cn/l/private",'
+                                    '"id":"test-file-id","key":"object-secret"}'
+                                ),
+                            }
+                        },
+                    }
+                ]
+            }
+        }
+
+        redacted = redact_har(document)
+        text = redacted["log"]["entries"][0]["response"]["content"]["text"]
+        self.assertNotIn("hwc-bj", text)
+        self.assertNotIn("AccessKeyId", text)
+        self.assertNotIn("private", text)
+        self.assertNotIn("test-file-id", text)
+        self.assertNotIn("object-secret", text)
+        self.assertIn(REDACTED, text)
+
+    def test_redacts_signed_url_query_credentials(self) -> None:
+        value = (
+            "https://hwc-bj.ag.kdocs.cn/object/private?"
+            "AccessKeyId=access-secret&Policy=policy-secret&Expires=123&Signature=signature-secret"
+        )
+
+        redacted = redact_url(value)
+
+        self.assertNotIn("access-secret", redacted)
+        self.assertNotIn("policy-secret", redacted)
+        self.assertNotIn("signature-secret", redacted)
+        self.assertIn("AccessKeyId=%3Credacted%3E", redacted)
+        self.assertIn("Policy=%3Credacted%3E", redacted)
 
     def test_summary_contains_shape_not_header_values(self) -> None:
         document = {
@@ -938,7 +1140,7 @@ class HarTests(unittest.TestCase):
                 "headers": [{"name": "Set-Cookie", "value": "response-secret"}],
                 "content": {
                     "mimeType": "application/json",
-                    "text": '{"url":"https://object.example/signed-secret","result":"ok"}',
+                    "text": '{"url":"https://hwc-bj.ag.kdocs.cn/signed-secret","result":"ok"}',
                 },
             },
         }

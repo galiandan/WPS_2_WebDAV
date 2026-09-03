@@ -23,6 +23,8 @@ from .provider import (
     UnsupportedOperationError,
 )
 
+MAX_REMOTE_NAME_BYTES = 4096
+
 
 def split_remote_path(path: str) -> tuple[str, ...]:
     """Decode and validate an absolute URL path into remote name components."""
@@ -33,7 +35,11 @@ def split_remote_path(path: str) -> tuple[str, ...]:
         decoded = unquote(path, encoding="utf-8", errors="strict")
     except UnicodeDecodeError as exc:
         raise InvalidPathError("remote path is not valid UTF-8") from exc
-    if "\x00" in decoded or "\\" in decoded:
+    if (
+        "\x00" in decoded
+        or "\\" in decoded
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in decoded)
+    ):
         raise InvalidPathError("remote path contains a forbidden character")
     if decoded == "/":
         return ()
@@ -43,7 +49,12 @@ def split_remote_path(path: str) -> tuple[str, ...]:
         raw_parts.pop()
     if any(part in {"", ".", ".."} for part in raw_parts):
         raise InvalidPathError("remote path contains an empty or traversal component")
-    if any("\x00" in part or "/" in part for part in raw_parts):
+    if any(
+        "\x00" in part
+        or "/" in part
+        or len(part.encode("utf-8")) > MAX_REMOTE_NAME_BYTES
+        for part in raw_parts
+    ):
         raise InvalidPathError("remote path contains a forbidden component")
     return tuple(raw_parts)
 
@@ -51,7 +62,19 @@ def split_remote_path(path: str) -> tuple[str, ...]:
 def join_remote_path(parts: Iterable[str], *, trailing_slash: bool = False) -> str:
     """Build a canonical URL path from already validated remote names."""
 
-    path = "/" + "/".join(parts)
+    validated_parts = tuple(parts)
+    if any(
+        not isinstance(part, str)
+        or not part
+        or part in {".", ".."}
+        or "/" in part
+        or "\\" in part
+        or len(part.encode("utf-8")) > MAX_REMOTE_NAME_BYTES
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in part)
+        for part in validated_parts
+    ):
+        raise InvalidPathError("remote path contains an invalid component")
+    path = "/" + "/".join(validated_parts)
     if trailing_slash and path != "/":
         path += "/"
     return posixpath.normpath(path) if path != "/" else path
@@ -116,6 +139,7 @@ class WpsStorage:
         root_id: str = "0",
         root_name: str = "WPS Enterprise Drive",
         list_count: int = 20,
+        max_list_entries: int = 10000,
         cache_ttl: float = 2.0,
         max_uploads: int = 2,
         max_downloads: int = 4,
@@ -127,6 +151,10 @@ class WpsStorage:
             raise ValueError("root_id is required")
         if list_count <= 0:
             raise ValueError("list_count must be positive")
+        if max_list_entries <= 0:
+            raise ValueError("max_list_entries must be positive")
+        if list_count > max_list_entries:
+            raise ValueError("list_count must not exceed max_list_entries")
         if cache_ttl < 0:
             raise ValueError("cache_ttl must not be negative")
         if max_uploads <= 0:
@@ -143,6 +171,7 @@ class WpsStorage:
         self.root_id = str(root_id)
         self.root_name = root_name or "WPS Enterprise Drive"
         self.list_count = list_count
+        self.max_list_entries = max_list_entries
         self.cache_ttl = cache_ttl
         self.max_copy_entries = max_copy_entries
         self.max_copy_depth = max_copy_depth
@@ -177,6 +206,7 @@ class WpsStorage:
             self.client.iter_entries(
                 parent_id,
                 count=self.list_count,
+                max_entries=self.max_list_entries,
                 linkgroup=True,
                 include="acl,pic_thumbnail",
                 with_link=True,
@@ -239,6 +269,8 @@ class WpsStorage:
             or "/" in name
             or "\\" in name
             or "\x00" in name
+            or len(name.encode("utf-8")) > MAX_REMOTE_NAME_BYTES
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in name)
         ):
             raise InvalidPathError("name must be one remote path component")
         return name
@@ -471,8 +503,12 @@ class WpsStorage:
             existing = self.resolve(destination_path)
         except EntryNotFoundError:
             existing = None
-        if existing is not None and not overwrite:
-            raise AlreadyExistsError(f"entry already exists: {destination_path}")
+        if existing is not None:
+            if not overwrite:
+                raise AlreadyExistsError(f"entry already exists: {destination_path}")
+            raise UnsupportedOperationError(
+                "COPY overwrite is disabled because the relay is not atomic"
+            )
 
         copied = 0
 
@@ -515,30 +551,40 @@ class WpsStorage:
                 self.invalidate()
             result = self.client.create_folder(destination_parent_entry.id, destination_item_name)
             self.invalidate()
-            if depth == "0" or (depth == "1" and level >= 1):
-                return result
-            if depth == "1":
+            try:
+                if depth == "0" or (depth == "1" and level >= 1):
+                    return result
+                if depth == "1":
+                    for child in self.list_path(source_item_path):
+                        child_path = join_remote_path(
+                            split_remote_path(source_item_path) + (child.name,),
+                            trailing_slash=child.kind == "folder",
+                        )
+                        copy_entry(
+                            child,
+                            child_path,
+                            result,
+                            child.name,
+                            level + 1,
+                        )
+                    return result
+
                 for child in self.list_path(source_item_path):
                     child_path = join_remote_path(
                         split_remote_path(source_item_path) + (child.name,),
                         trailing_slash=child.kind == "folder",
                     )
-                    copy_entry(
-                        child,
-                        child_path,
-                        result,
-                        child.name,
-                        level + 1,
-                    )
+                    copy_entry(child, child_path, result, child.name, level + 1)
                 return result
-
-            for child in self.list_path(source_item_path):
-                child_path = join_remote_path(
-                    split_remote_path(source_item_path) + (child.name,),
-                    trailing_slash=child.kind == "folder",
-                )
-                copy_entry(child, child_path, result, child.name, level + 1)
-            return result
+            except Exception:
+                # The destination did not exist before this request. Remove the
+                # newly-created root when a recursive relay fails part-way through.
+                try:
+                    self.client.delete(result.id)
+                except Exception:
+                    pass
+                self.invalidate()
+                raise
 
         return copy_entry(
             source,

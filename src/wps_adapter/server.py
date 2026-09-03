@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 
 from . import __version__
 from .client import WpsApiError
+from .client import _read_credential_file
 from .login import credentials_from_cookies
 from .provider import (
     AlreadyExistsError,
@@ -59,10 +60,8 @@ class BasicAuth:
         if not path:
             return ""
         try:
-            from pathlib import Path
-
-            return Path(path).read_text(encoding="utf-8").strip()
-        except OSError:
+            return _read_credential_file(path, operation="read adapter credential file")
+        except WpsApiError:
             return ""
 
     def values(self) -> tuple[str, str]:
@@ -118,8 +117,13 @@ class DavLockStore:
 
     _token_pattern = re.compile(r"<((?:opaquelocktoken:)[^>]+)>", re.IGNORECASE)
 
-    def __init__(self, *, max_timeout: int = 86400) -> None:
+    def __init__(self, *, max_timeout: int = 86400, max_locks: int = 4096) -> None:
+        if max_timeout <= 0:
+            raise ValueError("max_timeout must be positive")
+        if max_locks <= 0:
+            raise ValueError("max_locks must be positive")
         self.max_timeout = max_timeout
+        self.max_locks = max_locks
         self._locks: dict[str, ActiveLock] = {}
         self._lock = threading.RLock()
 
@@ -194,6 +198,8 @@ class DavLockStore:
                     )
                 ):
                     raise RuntimeError("resource is already locked")
+            if len(self._locks) >= self.max_locks:
+                raise ServiceBusyError("too many active WebDAV locks")
             token = "opaquelocktoken:" + str(uuid.uuid4())
             active = ActiveLock(
                 token=token,
@@ -224,6 +230,8 @@ class AdapterApplication:
     locks: DavLockStore = field(default_factory=DavLockStore)
     max_propfind_entries: int = 10000
     max_propfind_depth: int = 64
+    max_control_body: int = 1024 * 1024
+    max_response_body: int = 16 * 1024 * 1024
 
     def __post_init__(self) -> None:
         self.dav_prefix = self._normalise_prefix(self.dav_prefix)
@@ -232,6 +240,10 @@ class AdapterApplication:
             raise ValueError("max_propfind_entries must be positive")
         if self.max_propfind_depth <= 0:
             raise ValueError("max_propfind_depth must be positive")
+        if self.max_control_body <= 0:
+            raise ValueError("max_control_body must be positive")
+        if self.max_response_body <= 0:
+            raise ValueError("max_response_body must be positive")
 
     @staticmethod
     def _normalise_prefix(value: str) -> str:
@@ -273,13 +285,51 @@ class _RangeNotSatisfiable(ValueError):
         super().__init__("requested byte range cannot be satisfied")
 
 
+class _RequestBodyTooLarge(ValueError):
+    """A control request exceeded the adapter's bounded parser budget."""
+
+    def __init__(self) -> None:
+        super().__init__("request body is too large")
+
+
 class AdapterHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 64
 
-    def __init__(self, address: tuple[str, int], application: AdapterApplication) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        application: AdapterApplication,
+        *,
+        max_connections: int = 64,
+        request_timeout: float = 60.0,
+    ) -> None:
+        if max_connections <= 0:
+            raise ValueError("max_connections must be positive")
+        if request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
         self.application = application
+        self.max_connections = max_connections
+        self.request_timeout = request_timeout
+        self._connection_slots = threading.BoundedSemaphore(max_connections)
         super().__init__(address, AdapterRequestHandler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._connection_slots.acquire(blocking=False):
+            request.close()
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connection_slots.release()
 
 
 class AdapterRequestHandler(BaseHTTPRequestHandler):
@@ -292,10 +342,40 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def application(self) -> AdapterApplication:
         return self.server.application  # type: ignore[attr-defined]
 
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(self.server.request_timeout)  # type: ignore[attr-defined]
+
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+        transfer_encoding = ",".join(self.headers.get_all("Transfer-Encoding", [])).strip()
+        content_lengths = self.headers.get_all("Content-Length", [])
+        if transfer_encoding:
+            self.close_connection = True
+            self._send_error(HTTPStatus.BAD_REQUEST, "Transfer-Encoding is not supported")
+            return False
+        if len(content_lengths) > 1:
+            self.close_connection = True
+            self._send_error(HTTPStatus.BAD_REQUEST, "multiple Content-Length headers are not supported")
+            return False
+        if self.command in {"GET", "HEAD", "OPTIONS"} and content_lengths:
+            try:
+                declared = int(content_lengths[0])
+            except ValueError:
+                declared = -1
+            if declared != 0:
+                self.close_connection = True
+                self._send_error(HTTPStatus.BAD_REQUEST, "request body is not supported for this method")
+                return False
+        return True
+
     def log_message(self, format: str, *args: Any) -> None:
         # Keep query values and headers out of logs.  Signed WPS URLs should
         # never reach this service, but avoiding query logging is still safer.
-        LOG.info("%s %s", self.command, urlsplit(self.path).path)
+        path = urlsplit(self.path).path
+        path = "".join(char if ord(char) >= 0x20 and char != "\x7f" else "?" for char in path)
+        LOG.info("%s %s", self.command, path)
 
     def _is_health(self) -> bool:
         return urlsplit(self.path).path == "/healthz"
@@ -310,8 +390,59 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             return True
         self.send_response(HTTPStatus.UNAUTHORIZED)
         self.send_header("WWW-Authenticate", 'Basic realm="wps-adapter"')
+        self.send_header("Connection", "close")
         self.send_header("Content-Length", "0")
         self.end_headers()
+        self.close_connection = True
+        return False
+
+    def _origin_matches_request_host(self, value: str, *, referer: bool) -> bool:
+        if not value or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            return False
+        try:
+            parts = urlsplit(value)
+            if (
+                parts.scheme not in {"http", "https"}
+                or not parts.hostname
+                or parts.username
+                or parts.password
+                or parts.query
+                or parts.fragment
+                or (not referer and parts.path not in {"", "/"})
+            ):
+                return False
+            origin_port = parts.port
+            request_host = self.headers.get("Host", "")
+            request_parts = urlsplit("//" + request_host)
+            if not request_parts.hostname:
+                return False
+            request_port = request_parts.port
+            origin_hostname = parts.hostname
+            request_hostname = request_parts.hostname
+        except ValueError:
+            return False
+        if origin_hostname.rstrip(".").casefold() != request_hostname.rstrip(".").casefold():
+            return False
+        # A browser normally sends the same explicit adapter port in both
+        # headers. Reject a mismatch while allowing reverse proxies to omit
+        # the public default port from Host.
+        return origin_port is None or request_port is None or origin_port == request_port
+
+    def _allow_mutation_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            matches = self._origin_matches_request_host(origin, referer=False)
+        else:
+            referer = self.headers.get("Referer")
+            matches = referer is None or self._origin_matches_request_host(referer, referer=True)
+        if matches:
+            return True
+        self.close_connection = True
+        self._send_error(
+            HTTPStatus.FORBIDDEN,
+            "cross-origin mutation is not allowed",
+            headers={"Connection": "close"},
+        )
         return False
 
     def _send_bytes(
@@ -329,12 +460,18 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         if headers:
             for name, value in headers.items():
                 self.send_header(name, value)
+        if self.close_connection and (
+            not headers or not any(name.casefold() == "connection" for name in headers)
+        ):
+            self.send_header("Connection", "close")
         self.end_headers()
         if self.command != "HEAD" and body:
             self.wfile.write(body)
 
     def _send_json(self, status: int, payload: object, *, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        if len(body) > self.application.max_response_body:
+            raise InsufficientStorageError("response exceeds the configured size limit")
         self._send_bytes(status, body, content_type="application/json; charset=utf-8", headers=headers)
 
     def _send_error(
@@ -351,7 +488,9 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             self._send_bytes(status, (message + "\n").encode("utf-8"), headers=headers)
 
     def _handle_exception(self, exc: Exception, *, rest: bool = False) -> None:
-        if isinstance(exc, InvalidPathError):
+        if isinstance(exc, _RequestBodyTooLarge):
+            self._send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc), rest=rest)
+        elif isinstance(exc, InvalidPathError):
             self._send_error(HTTPStatus.BAD_REQUEST, str(exc), rest=rest)
         elif isinstance(exc, (EntryNotFoundError,)):
             self._send_error(HTTPStatus.NOT_FOUND, str(exc), rest=rest)
@@ -436,26 +575,44 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         raise InvalidPathError(f"query parameter '{name}' must be boolean")
 
     def _content_length(self, *, required: bool = False) -> int | None:
-        transfer_encoding = self.headers.get("Transfer-Encoding", "").lower()
-        if "chunked" in transfer_encoding:
-            raise ValueError("chunked request bodies are not supported; send Content-Length")
-        value = self.headers.get("Content-Length")
+        transfer_encoding = ",".join(self.headers.get_all("Transfer-Encoding", [])).strip()
+        if transfer_encoding:
+            self.close_connection = True
+            raise ValueError("Transfer-Encoding is not supported; send Content-Length")
+        content_lengths = self.headers.get_all("Content-Length", [])
+        if len(content_lengths) > 1:
+            self.close_connection = True
+            raise ValueError("multiple Content-Length headers are not supported")
+        value = content_lengths[0] if content_lengths else None
         if value is None:
             if required:
+                self.close_connection = True
                 self._send_error(HTTPStatus.LENGTH_REQUIRED, "Content-Length is required")
             return None
         try:
             length = int(value)
         except ValueError as exc:
+            self.close_connection = True
             raise ValueError("invalid Content-Length") from exc
         if length < 0:
+            self.close_connection = True
             raise ValueError("invalid Content-Length")
         return length
+
+    def _check_declared_upload_length(self, length: int) -> None:
+        config = getattr(getattr(self.application.storage, "client", None), "config", None)
+        maximum = getattr(config, "max_upload_bytes", 0)
+        if isinstance(maximum, int) and maximum > 0 and length > maximum:
+            self.close_connection = True
+            raise InsufficientStorageError("upload exceeds the configured size limit")
 
     def _discard_body(self) -> None:
         length = self._content_length(required=False)
         if length is None:
             return
+        if length > self.application.max_control_body:
+            self.close_connection = True
+            raise _RequestBodyTooLarge()
         remaining = length
         while remaining:
             chunk = self.rfile.read(min(64 * 1024, remaining))
@@ -467,11 +624,14 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         length = self._content_length(required=True)
         if length is None:
             return None
+        if max_length is None:
+            max_length = self.application.max_control_body
         if max_length is not None and length > max_length:
-            self._discard_body()
-            raise ValueError("request body is too large")
+            self.close_connection = True
+            raise _RequestBodyTooLarge()
         body = self.rfile.read(length)
         if len(body) != length:
+            self.close_connection = True
             raise ValueError("request body is shorter than Content-Length")
         try:
             payload = json.loads(body.decode("utf-8"))
@@ -704,13 +864,15 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         length = self._content_length(required=False)
         if length is None or length == 0:
             return ""
-        reader = _LimitedReader(self.rfile, length)
         if length > 64 * 1024:
-            reader.drain()
-            raise ValueError("LOCK request body is too large")
+            self.close_connection = True
+            raise _RequestBodyTooLarge()
+        reader = _LimitedReader(self.rfile, length)
         body = reader.read(length)
         if len(body) != length:
             raise ValueError("request body is shorter than Content-Length")
+        if b"<!doctype" in body.lower() or b"<!entity" in body.lower():
+            raise ValueError("LOCK request body must not declare XML entities")
         try:
             root = ElementTree.fromstring(body)
         except (ElementTree.ParseError, UnicodeDecodeError) as exc:
@@ -766,9 +928,12 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
 
     def _propfind_body(self, entries: list[tuple[str, RemoteEntry]]) -> bytes:
         ElementTree.register_namespace("D", "DAV:")
-        multistatus = ElementTree.Element("{DAV:}multistatus")
+        prefix = b'<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">'
+        suffix = b"</D:multistatus>"
+        chunks = [prefix]
+        response_size = len(prefix) + len(suffix)
         for href, entry in entries:
-            response = ElementTree.SubElement(multistatus, "{DAV:}response")
+            response = ElementTree.Element("{DAV:}response")
             ElementTree.SubElement(response, "{DAV:}href").text = href
             propstat = ElementTree.SubElement(response, "{DAV:}propstat")
             prop = ElementTree.SubElement(propstat, "{DAV:}prop")
@@ -789,7 +954,13 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             if modified:
                 ElementTree.SubElement(prop, "{DAV:}getlastmodified").text = modified
             ElementTree.SubElement(propstat, "{DAV:}status").text = "HTTP/1.1 200 OK"
-        return ElementTree.tostring(multistatus, encoding="utf-8", xml_declaration=True)
+            chunk = ElementTree.tostring(response, encoding="utf-8")
+            response_size += len(chunk)
+            if response_size > self.application.max_response_body:
+                raise InsufficientStorageError("PROPFIND response exceeds the configured size limit")
+            chunks.append(chunk)
+        chunks.append(suffix)
+        return b"".join(chunks)
 
     def _do_propfind(self, path: str) -> None:
         self._discard_body()
@@ -812,6 +983,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         length = self._content_length(required=True)
         if length is None:
             return
+        self._check_declared_upload_length(length)
         source = _LimitedReader(self.rfile, length)
         try:
             entry = self.application.storage.upload_path(
@@ -843,6 +1015,24 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         if not destination:
             raise InvalidPathError("Destination header is required")
         parsed = urlsplit(destination)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise InvalidPathError("Destination must not contain credentials, query, or fragment")
+        if parsed.netloc:
+            destination_host = parsed.hostname
+            request_host = self.headers.get("Host", "")
+            request_parts = urlsplit("//" + request_host)
+            try:
+                destination_port = parsed.port
+                request_port = request_parts.port
+            except ValueError as exc:
+                raise InvalidPathError("Destination host or port is invalid") from exc
+            if (
+                not destination_host
+                or not request_parts.hostname
+                or destination_host.casefold() != request_parts.hostname.casefold()
+                or destination_port != request_port
+            ):
+                raise InvalidPathError("Destination must point to this adapter")
         destination_path = parsed.path
         prefix = self.application.dav_prefix
         if destination_path == prefix:
@@ -866,11 +1056,15 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                 destination_exists = True
             except EntryNotFoundError:
                 pass
-            if destination_exists:
-                if not overwrite:
-                    self._send_error(HTTPStatus.PRECONDITION_FAILED, "destination already exists")
-                    return
-                self.application.storage.delete_path(destination)
+        if destination_exists:
+            if not overwrite:
+                self._send_error(HTTPStatus.PRECONDITION_FAILED, "destination already exists")
+                return
+            self._send_error(
+                HTTPStatus.NOT_IMPLEMENTED,
+                "MOVE overwrite is disabled because WPS move is not atomic",
+            )
+            return
         destination_parts = split_remote_path(destination)
         entry = self.application.storage.move_path(path, destination)
         headers = {"Location": self._href(destination_parts, entry)}
@@ -899,6 +1093,12 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             destination_exists = False
         if destination_exists and not overwrite:
             self._send_error(HTTPStatus.PRECONDITION_FAILED, "destination already exists")
+            return
+        if destination_exists:
+            self._send_error(
+                HTTPStatus.NOT_IMPLEMENTED,
+                "COPY overwrite is disabled because the relay is not atomic",
+            )
             return
         try:
             entry = self.application.storage.copy_path(
@@ -1030,6 +1230,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         length = self._content_length(required=True)
         if length is None:
             return
+        self._check_declared_upload_length(length)
         path = self._query_path(query)
         overwrite = self._query_bool(query, "overwrite")
         if not self._check_locks(path, rest=True):
@@ -1082,9 +1283,6 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.NOT_FOUND, "unknown REST route", rest=True)
             return
         path = self._query_path(query)
-        if not self._check_locks(path, rest=True):
-            self._discard_body()
-            return
         payload = self._json_body()
         if payload is None:
             return
@@ -1094,6 +1292,37 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("choose either a new name or a move destination")
         if len(name_keys) > 1 or len(move_keys) > 1:
             raise ValueError("request contains multiple mutation targets")
+
+        # A destination can be protected by a lock independently of the
+        # source. Check both sides before making any WPS mutation, including
+        # the exact child path for a parent-directory move.
+        lock_paths = [path]
+        source_parts = split_remote_path(path)
+        if name_keys:
+            name = payload[name_keys[0]]
+            if not isinstance(name, str):
+                raise ValueError("JSON field 'name' is required")
+            lock_paths.append(join_remote_path(source_parts[:-1] + (name,)))
+        elif "destination" in payload:
+            destination = payload["destination"]
+            if not isinstance(destination, str):
+                raise ValueError("JSON field 'destination' must be a path")
+            split_remote_path(destination)
+            lock_paths.append(destination)
+        elif "parent_path" in payload:
+            parent_path = payload["parent_path"]
+            if not isinstance(parent_path, str):
+                raise ValueError("JSON field 'parent_path' must be a path")
+            parent_parts = split_remote_path(parent_path)
+            source_entry = self.application.storage.metadata(path)
+            lock_paths.extend(
+                (parent_path, join_remote_path(parent_parts + (source_entry.name,)))
+            )
+        else:
+            raise ValueError("JSON field 'name', 'destination' or 'parent_path' is required")
+        if not self._check_locks(*lock_paths, rest=True):
+            return
+
         if name_keys:
             name = payload[name_keys[0]]
             if not isinstance(name, str):
@@ -1148,6 +1377,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1174,6 +1404,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1186,6 +1417,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1203,6 +1435,8 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         rest = self._rest_route()
         try:
             if rest is not None:
@@ -1210,6 +1444,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                 return
             path = self._dav_path()
             if path is None:
+                self.close_connection = True
                 self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
                 return
             self._do_webdav_put(path)
@@ -1219,8 +1454,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         rest = self._rest_route()
         if rest is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1231,6 +1469,8 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         rest = self._rest_route()
         if rest is not None:
             try:
@@ -1240,6 +1480,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1254,8 +1495,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         rest = self._rest_route()
         if rest is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_IMPLEMENTED, "WPS rename/move is not available")
             return
         try:
@@ -1266,8 +1510,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_MKCOL(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1278,8 +1525,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_MOVE(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1290,8 +1540,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_COPY(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1302,8 +1555,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_LOCK(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1314,8 +1570,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def do_UNLOCK(self) -> None:
         if not self._authorise():
             return
+        if not self._allow_mutation_origin():
+            return
         path = self._dav_path()
         if path is None:
+            self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown route")
             return
         try:
@@ -1329,12 +1588,19 @@ def create_server(
     *,
     bind: str = "127.0.0.1",
     port: int = 54321,
+    max_connections: int = 64,
+    request_timeout: float = 60.0,
 ) -> AdapterHTTPServer:
     """Create a server without starting threads or making network calls."""
 
     if not 1 <= port <= 65535:
         raise ValueError("port must be between 1 and 65535")
-    return AdapterHTTPServer((bind, port), application)
+    return AdapterHTTPServer(
+        (bind, port),
+        application,
+        max_connections=max_connections,
+        request_timeout=request_timeout,
+    )
 
 
 __all__ = ["AdapterApplication", "AdapterHTTPServer", "BasicAuth", "create_server"]

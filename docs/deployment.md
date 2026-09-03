@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts
   | sudo bash -s -- --port 18080
 ```
 
-安装脚本会自动下载当前 `main` 分支代码，不要求 VPS 已安装 `git`。原生脚本需要 Python `3.11+` 和 systemd；Docker 脚本会在 Debian/Ubuntu 上安装 `docker.io`（如果尚未安装）。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭证文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
+安装脚本会从脚本内固定的 40 位 Git 提交归档下载代码，并校验归档内置的 SHA-256 文件清单，不要求 VPS 已安装 `git`；可用 `--source-ref` 和对应的 `--source-manifest-sha256` 指定另一个完整提交号。原生脚本需要 Python `3.11+` 和 systemd；Docker 脚本会在 Debian/Ubuntu 上安装 `docker.io`（如果尚未安装）。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
 
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
@@ -51,6 +51,14 @@ docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 - systemd。
 - 能访问 WPS 和对象存储域名。
 - 临时上传文件所在磁盘有足够空间。
+- 默认只接受 WPS 返回的 `*.ag.kdocs.cn` 签名对象存储地址；如果你的企业区域返回了不同但可信的 WPS 对象存储后缀，再显式设置 `WPS_OBJECT_STORAGE_HOST_SUFFIX`。
+- 单个文件夹默认最多读取 `10000` 个条目，避免异常大的目录耗尽 VPS 内存。
+- 并发上传会共享临时盘预留预算；预算不足时返回 `507`，而不是继续占满磁盘。
+- 单次上传默认不超过 1 GiB；如果确实需要更大的文件，先评估 VPS 临时盘空间，再设置 `WPS_MAX_UPLOAD_BYTES=0` 或更大的值。
+- 适配器生成的单个 JSON/XML 响应默认不超过 16 MiB；超大目录响应会返回 `507`，避免目录元数据耗尽内存。
+- 进程内 WebDAV 锁默认最多保留 4096 把，超过时返回 `503`，避免异常客户端无限堆积锁状态。
+
+安装器从归档中读取 `release-manifest.txt`，并只接受清单中列出的普通文件。修改 `--source-ref` 时必须同时提供该提交对应的清单 SHA-256；不要随意复制其他版本的摘要。
 
 ## 2. Install the source
 

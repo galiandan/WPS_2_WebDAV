@@ -23,4 +23,10 @@ services:
     ports:
       - "${ADAPTER_BIND:-0.0.0.0}:${ADAPTER_PORT:-54321}:${ADAPTER_PORT:-54321}"
     volumes:
+      # The directory must be writable because rotation creates a temporary
+      # file beside the target before atomically replacing it. Overlay the
+      # Basic Auth files as read-only mounts. Keep custom file names in sync
+      # with the two entries below if the env file overrides their paths.
       - /etc/wps-adapter/secrets:/etc/wps-adapter/secrets:rw
+      - /etc/wps-adapter/secrets/adapter-username:/etc/wps-adapter/secrets/adapter-username:ro
+      - /etc/wps-adapter/secrets/adapter-password:/etc/wps-adapter/secrets/adapter-password:ro

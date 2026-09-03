@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import Request, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
 from .provider import InsufficientStorageError, RemoteEntry, UnsupportedOperationError
@@ -55,6 +56,89 @@ def _csrf_from_cookie(cookie: str) -> str:
         if separator and name.strip().lower() == "csrf":
             return value.strip()
     return ""
+
+
+MAX_CREDENTIAL_FILE_BYTES = 4 * 1024 * 1024
+MAX_JSON_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_OBJECT_RESPONSE_BYTES = 1 * 1024 * 1024
+MAX_XML_RESPONSE_BYTES = 4 * 1024 * 1024
+DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+MAX_MULTIPART_PART_BUFFER = 64 * 1024 * 1024
+MAX_REMOTE_NAME_BYTES = 4096
+MAX_REMOTE_ETAG_BYTES = 4096
+
+
+def _validate_credential_parent(path: str, *, operation: str) -> None:
+    """Require a private, real parent directory before reading a secret."""
+
+    if not path or not os.path.isabs(path) or "\x00" in path:
+        raise WpsApiError(operation)
+    parent = os.path.dirname(path)
+    if os.path.realpath(parent) != os.path.abspath(parent):
+        raise WpsApiError(operation)
+    try:
+        metadata = os.stat(parent, follow_symlinks=False)
+    except OSError as exc:
+        raise WpsApiError(operation) from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_mode & 0o077
+        or metadata.st_uid not in {0, os.getuid()}
+    ):
+        raise WpsApiError(operation)
+
+
+def _read_credential_file(path: str, *, operation: str = "read credential file") -> str:
+    """Read a credential file without following symlinks or trusting broad modes."""
+
+    _validate_credential_parent(path, operation=operation)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise WpsApiError(operation) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_mode & 0o077
+            or metadata.st_uid not in {0, os.getuid()}
+        ):
+            raise WpsApiError(operation)
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            descriptor = -1
+            value = stream.read(MAX_CREDENTIAL_FILE_BYTES + 1)
+        if len(value) > MAX_CREDENTIAL_FILE_BYTES:
+            raise WpsApiError(operation)
+        return value.strip()
+    except UnicodeError as exc:
+        raise WpsApiError(operation) from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+
+
+def _validate_credential_values(credentials: WpsCredentials) -> WpsCredentials:
+    """Prevent malformed file values from becoming outbound HTTP headers."""
+
+    if len(credentials.cookie) > MAX_CREDENTIAL_FILE_BYTES or len(credentials.csrf_token) > MAX_CREDENTIAL_FILE_BYTES:
+        raise WpsApiError("credential value is too large")
+    if any(
+        ord(char) < 0x20 or ord(char) == 0x7F
+        for char in credentials.cookie + credentials.csrf_token
+    ):
+        raise WpsApiError("credential value contains a control character")
+    return credentials
+
+
+DEFAULT_OBJECT_STORAGE_HOST_SUFFIX = ".ag.kdocs.cn"
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Do not let a signed object request escape its verified host."""
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
 
 
 class _Response(Protocol):
@@ -128,10 +212,7 @@ class FileCredentialSource:
     def _read(path: str | None) -> str:
         if not path:
             return ""
-        try:
-            return Path(path).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise WpsApiError("read credential file") from exc
+        return _read_credential_file(path)
 
     def _snapshot(self) -> WpsCredentials:
         return WpsCredentials(
@@ -208,7 +289,7 @@ class FileCredentialSource:
     @staticmethod
     def _write_atomic(path: str, value: str) -> None:
         target = Path(path)
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _validate_credential_parent(str(target), operation="write credential file")
         try:
             os.chmod(target.parent, 0o700)
         except OSError as exc:
@@ -370,6 +451,36 @@ class WpsApiError(RuntimeError):
         super().__init__(f"WPS operation failed: {operation}{suffix}")
 
 
+def _read_limited_response(response: Any, *, max_bytes: int, operation: str) -> bytes:
+    """Read a bounded upstream control response without trusting its length."""
+
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        try:
+            declared = int(headers.get("Content-Length", ""))
+        except (AttributeError, TypeError, ValueError):
+            declared = None
+        if declared is not None and (declared < 0 or declared > max_bytes):
+            raise WpsApiError(operation)
+
+    body = bytearray()
+    while len(body) <= max_bytes:
+        try:
+            chunk = response.read(min(64 * 1024, max_bytes + 1 - len(body)))
+        except (OSError, ValueError) as exc:
+            raise WpsApiError(operation) from exc
+        if not chunk:
+            return bytes(body)
+        if not isinstance(chunk, bytes):
+            raise WpsApiError(operation)
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise WpsApiError(operation)
+    raise WpsApiError(operation)
+
+
 @dataclass(frozen=True, slots=True)
 class WpsClientConfig:
     """Connection settings; cookie values are deliberately excluded from repr."""
@@ -394,11 +505,13 @@ class WpsClientConfig:
     enable_range: bool = True
     upload_spool_dir: str | None = None
     upload_min_free_bytes: int = 512 * 1024 * 1024
-    max_upload_bytes: int = 0
+    max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     upload_retries: int = 2
     upload_retry_delay: float = 0.5
     credential_refresh_command: tuple[str, ...] = ()
     credential_refresh_timeout: float = 30.0
+    object_storage_host_suffix: str = DEFAULT_OBJECT_STORAGE_HOST_SUFFIX
+    max_json_response_bytes: int = MAX_JSON_RESPONSE_BYTES
 
     @classmethod
     def from_env(cls) -> "WpsClientConfig":
@@ -424,6 +537,10 @@ class WpsClientConfig:
             ),
             base_url=os.environ.get("WPS_BASE_URL", "https://365.kdocs.cn"),
             account_base_url=os.environ.get("WPS_ACCOUNT_BASE_URL") or None,
+            object_storage_host_suffix=os.environ.get(
+                "WPS_OBJECT_STORAGE_HOST_SUFFIX",
+                DEFAULT_OBJECT_STORAGE_HOST_SUFFIX,
+            ),
             auto_refresh=_env_bool("WPS_AUTO_REFRESH", default=True),
             referer=os.environ.get("WPS_REFERER") or None,
             origin=os.environ.get("WPS_ORIGIN") or None,
@@ -438,12 +555,17 @@ class WpsClientConfig:
             upload_min_free_bytes=int(
                 os.environ.get("WPS_UPLOAD_MIN_FREE_BYTES", str(512 * 1024 * 1024))
             ),
-            max_upload_bytes=int(os.environ.get("WPS_MAX_UPLOAD_BYTES", "0")),
+            max_upload_bytes=int(
+                os.environ.get("WPS_MAX_UPLOAD_BYTES", str(DEFAULT_MAX_UPLOAD_BYTES))
+            ),
             upload_retries=int(os.environ.get("WPS_UPLOAD_RETRIES", "2")),
             upload_retry_delay=float(os.environ.get("WPS_UPLOAD_RETRY_DELAY", "0.5")),
             credential_refresh_command=refresh_command,
             credential_refresh_timeout=float(
                 os.environ.get("WPS_CREDENTIAL_REFRESH_TIMEOUT", "30")
+            ),
+            max_json_response_bytes=int(
+                os.environ.get("WPS_MAX_JSON_RESPONSE_BYTES", str(MAX_JSON_RESPONSE_BYTES))
             ),
         )
 
@@ -508,6 +630,23 @@ class DownloadStream:
         self.close()
 
 
+class _UploadSpoolReservation:
+    """Reserve temporary-disk capacity across concurrent uploads."""
+
+    def __init__(self, client: "WpsDriveClient") -> None:
+        self.client = client
+        self.reserved = 0
+
+    def reserve(self, total: int) -> None:
+        self.reserved = self.client._reserve_spool_bytes(total, self.reserved)
+
+    def __enter__(self) -> "_UploadSpoolReservation":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_value: Any, _traceback: Any) -> None:
+        self.client._release_spool_bytes(self.reserved)
+
+
 class WpsDriveClient:
     """Client for observed list, download, and normal-upload endpoints."""
 
@@ -520,8 +659,31 @@ class WpsDriveClient:
     ) -> None:
         if not config.group_id:
             raise ValueError("group_id is required")
+        if config.max_json_response_bytes <= 0:
+            raise ValueError("max_json_response_bytes must be positive")
+        base_parts = urlsplit(config.base_url)
+        if (
+            base_parts.scheme != "https"
+            or not base_parts.hostname
+            or base_parts.username
+            or base_parts.password
+            or base_parts.query
+            or base_parts.fragment
+            or base_parts.path not in {"", "/"}
+            or not self._is_wps_host(base_parts.hostname)
+        ):
+            raise ValueError("base_url must be an HTTPS WPS host without a path or credentials")
+        object_suffix = config.object_storage_host_suffix.strip().lstrip(".").rstrip(".").casefold()
+        if not object_suffix or not (
+            object_suffix == "kdocs.cn" or object_suffix.endswith(".kdocs.cn")
+        ):
+            raise ValueError("object_storage_host_suffix must be within kdocs.cn")
         self.config = config
-        self._opener = opener or build_opener()
+        self._opener = opener or build_opener(_NoRedirectHandler())
+        self._signed_opener = self._opener
+        self._credential_refresh_lock = threading.Lock()
+        self._spool_reservation_lock = threading.Lock()
+        self._reserved_spool_bytes = 0
         self._https_connection_factory = https_connection_factory or (
             lambda host, port, timeout: HTTPSConnection(host, port=port, timeout=timeout)
         )
@@ -542,12 +704,12 @@ class WpsDriveClient:
         else:
             credentials = WpsCredentials(
                 cookie=(
-                    Path(self.config.cookie_file).read_text(encoding="utf-8").strip()
+                    _read_credential_file(self.config.cookie_file)
                     if self.config.cookie_file
                     else self.config.cookie
                 ),
                 csrf_token=(
-                    Path(self.config.csrf_token_file).read_text(encoding="utf-8").strip()
+                    _read_credential_file(self.config.csrf_token_file)
                     if self.config.csrf_token_file
                     else self.config.csrf_token
                 ),
@@ -557,15 +719,19 @@ class WpsDriveClient:
                 cookie=credentials.cookie,
                 csrf_token=_csrf_from_cookie(credentials.cookie),
             )
-        return credentials
+        return _validate_credential_values(credentials)
 
     def _refresh_credentials(self) -> bool:
-        source = self.config.credential_source
-        if source is not None and source.refresh():
-            return True
-        if not self.config.auto_refresh:
-            return False
-        return self._refresh_wps_session()
+        # Several request threads can observe the same expired session. Keep
+        # refresh grants serial so a rotated rtk cookie cannot be overwritten
+        # by a concurrent grant response.
+        with self._credential_refresh_lock:
+            source = self.config.credential_source
+            if source is not None and source.refresh():
+                return True
+            if not self.config.auto_refresh:
+                return False
+            return self._refresh_wps_session()
 
     def _persist_set_cookie_headers(self, headers: Any) -> bool:
         source = self.config.credential_source
@@ -588,9 +754,23 @@ class WpsDriveClient:
                 raise WpsApiError("resolve account refresh URL")
             base_url = "https://account." + ".".join(labels[-2:])
         parts = urlsplit(base_url)
-        if parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment:
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+            or parts.path not in {"", "/"}
+            or not self._is_wps_host(parts.hostname)
+        ):
             raise WpsApiError("resolve account refresh URL")
         return base_url.rstrip("/")
+
+    @staticmethod
+    def _is_wps_host(host: str) -> bool:
+        normalized = host.rstrip(".").casefold()
+        return normalized == "kdocs.cn" or normalized.endswith(".kdocs.cn")
 
     def _refresh_wps_session(self) -> bool:
         """Use the WPS SDK refresh-token grant and persist rotated cookies."""
@@ -612,14 +792,21 @@ class WpsDriveClient:
             request.add_header("Origin", self.config.origin)
         try:
             response = self._opener.open(request, timeout=self.config.timeout)
-        except (HTTPError, URLError):
+        except HTTPError as exc:
+            exc.close()
+            return False
+        except URLError:
             return False
         try:
             response_status = getattr(response, "status", 200)
             if not isinstance(response_status, int) or response_status != 200:
                 return False
             headers = response.headers
-            response.read()
+            _read_limited_response(
+                response,
+                max_bytes=self.config.max_json_response_bytes,
+                operation="refresh WPS session",
+            )
         finally:
             response.close()
         return self._persist_set_cookie_headers(headers)
@@ -690,7 +877,11 @@ class WpsDriveClient:
             raise WpsApiError(path, status=401)
 
         try:
-            payload = response.read()
+            payload = _read_limited_response(
+                response,
+                max_bytes=self.config.max_json_response_bytes,
+                operation=path,
+            )
         finally:
             response.close()
 
@@ -714,18 +905,38 @@ class WpsDriveClient:
     def _entry_from_item(item: Mapping[str, Any]) -> RemoteEntry:
         if item.get("id") is None:
             raise WpsApiError("normalize file metadata")
+        name = item.get("fname", "")
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in {".", ".."}
+            or "/" in name
+            or "\\" in name
+            or "\x00" in name
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in name)
+            or len(name.encode("utf-8")) > MAX_REMOTE_NAME_BYTES
+        ):
+            raise WpsApiError("normalize file metadata")
         kind = item.get("ftype")
         normalized_kind = kind if isinstance(kind, str) and kind in {"file", "folder"} else "unknown"
+        raw_size = item.get("fsize")
+        size = raw_size if isinstance(raw_size, int) and not isinstance(raw_size, bool) and raw_size >= 0 else None
+        raw_etag = item.get("fsha")
+        etag = (
+            raw_etag
+            if isinstance(raw_etag, str)
+            and len(raw_etag.encode("utf-8")) <= MAX_REMOTE_ETAG_BYTES
+            and not any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw_etag)
+            else None
+        )
         return RemoteEntry(
             id=str(item["id"]),
-            name=str(item.get("fname", "")),
+            name=name,
             kind=normalized_kind,
             parent_id=str(item["parentid"]) if item.get("parentid") is not None else None,
-            size=item.get("fsize")
-            if isinstance(item.get("fsize"), int) and not isinstance(item.get("fsize"), bool)
-            else None,
+            size=size,
             modified_at=str(item["mtime"]) if item.get("mtime") is not None else None,
-            etag=str(item["fsha"]) if item.get("fsha") is not None else None,
+            etag=etag,
             link_id=str(item["link_id"]) if item.get("link_id") else None,
         )
 
@@ -796,6 +1007,7 @@ class WpsDriveClient:
         parent_id: str,
         *,
         count: int = 100,
+        max_entries: int | None = None,
         orderby: str = "mtime",
         order: str = "desc",
         linkgroup: bool | None = None,
@@ -808,10 +1020,17 @@ class WpsDriveClient:
 
         if count <= 0:
             raise ValueError("count must be positive")
+        if max_entries is not None and max_entries <= 0:
+            raise ValueError("max_entries must be positive")
         entries: list[RemoteEntry] = []
         offset = 0
         seen_offsets: set[int] = set()
+        page_count = 0
+        page_limit = max_entries + 1 if max_entries is not None else 10000
         while True:
+            page_count += 1
+            if page_count > page_limit:
+                raise InsufficientStorageError("remote folder pagination exceeds the configured limit")
             page = self.list_entries(
                 parent_id,
                 offset=offset,
@@ -824,6 +1043,8 @@ class WpsDriveClient:
                 review_pic_thumbnail=review_pic_thumbnail,
                 with_sharefolder_type=with_sharefolder_type,
             )
+            if max_entries is not None and len(entries) + len(page.entries) > max_entries:
+                raise InsufficientStorageError("remote folder exceeds the configured entry limit")
             entries.extend(page.entries)
             next_offset = page.next_offset
             if next_offset is None or next_offset < 0 or next_offset in seen_offsets:
@@ -869,18 +1090,70 @@ class WpsDriveClient:
         if free_bytes < required:
             raise InsufficientStorageError("not enough free space for the upload spool")
 
+    def _reserve_spool_bytes(self, total: int, current: int) -> int:
+        """Reserve this upload's complete spool plus the configured free-space reserve."""
+
+        if total <= self.config.upload_spool_memory:
+            return current
+        spool_dir = self.config.upload_spool_dir or tempfile.gettempdir()
+        required = total + self.config.upload_min_free_bytes
+        with self._spool_reservation_lock:
+            try:
+                free_bytes = shutil.disk_usage(spool_dir).free
+            except OSError as exc:
+                raise InsufficientStorageError("upload spool directory is unavailable") from exc
+            other_reservations = self._reserved_spool_bytes - current
+            if free_bytes - other_reservations < required:
+                raise InsufficientStorageError("not enough free space for concurrent upload spools")
+            self._reserved_spool_bytes += required - current
+        return required
+
+    def _release_spool_bytes(self, reserved: int) -> None:
+        if reserved <= 0:
+            return
+        with self._spool_reservation_lock:
+            self._reserved_spool_bytes = max(0, self._reserved_spool_bytes - reserved)
+
     def _retry_delay(self, attempt: int) -> None:
         if attempt and self.config.upload_retry_delay:
             time.sleep(self.config.upload_retry_delay * (2 ** (attempt - 1)))
 
     def _signed_target(self, signed_url: str, operation: str) -> tuple[str, int | None, str]:
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in signed_url):
+            raise WpsApiError(operation)
         parts = urlsplit(signed_url)
-        if parts.scheme != "https" or not parts.hostname:
+        try:
+            port = parts.port
+        except ValueError:
+            raise WpsApiError(operation) from None
+        host = parts.hostname
+        suffix = (
+            self.config.object_storage_host_suffix.strip()
+            .lstrip(".")
+            .rstrip(".")
+            .casefold()
+        )
+        host_allowed = bool(
+            suffix
+            and host
+            and (
+                host.rstrip(".").casefold() == suffix
+                or host.rstrip(".").casefold().endswith("." + suffix)
+            )
+        )
+        if (
+            parts.scheme != "https"
+            or not host_allowed
+            or parts.username
+            or parts.password
+            or parts.fragment
+            or port not in {None, 443}
+        ):
             raise WpsApiError(operation)
         target = parts.path or "/"
         if parts.query:
             target += "?" + parts.query
-        return parts.hostname, parts.port, target
+        return host, port, target
 
     @staticmethod
     def _range_response_matches(
@@ -921,7 +1194,11 @@ class WpsDriveClient:
                 str(name).lower(): str(value)
                 for name, value in response.getheaders()
             }
-            response.read()
+            _read_limited_response(
+                response,
+                max_bytes=MAX_OBJECT_RESPONSE_BYTES,
+                operation="object upload",
+            )
             if response.status != 200:
                 raise WpsApiError("object upload", status=response.status)
             return response_headers.get("etag"), response_headers.get("x-obs-save-key")
@@ -950,7 +1227,11 @@ class WpsDriveClient:
                 str(name).lower(): str(value)
                 for name, value in response.getheaders()
             }
-            response.read()
+            _read_limited_response(
+                response,
+                max_bytes=MAX_OBJECT_RESPONSE_BYTES,
+                operation="multipart part upload",
+            )
             if response.status != 200:
                 raise WpsApiError("multipart part upload", status=response.status)
             etag = response_headers.get("etag")
@@ -977,7 +1258,11 @@ class WpsDriveClient:
             for offset in range(0, len(body), self.config.stream_chunk_size):
                 connection.send(body[offset : offset + self.config.stream_chunk_size])
             response = connection.getresponse()
-            response_body = response.read()
+            response_body = _read_limited_response(
+                response,
+                max_bytes=MAX_XML_RESPONSE_BYTES,
+                operation="multipart merge",
+            )
             if response.status != 200:
                 raise WpsApiError("multipart merge", status=response.status)
             return response_body
@@ -986,6 +1271,8 @@ class WpsDriveClient:
 
     @staticmethod
     def _multipart_etag(response_body: bytes) -> str:
+        if b"<!doctype" in response_body.lower() or b"<!entity" in response_body.lower():
+            raise WpsApiError("parse multipart merge response")
         try:
             root = ElementTree.fromstring(response_body)
         except (ElementTree.ParseError, UnicodeDecodeError) as exc:
@@ -1185,6 +1472,8 @@ class WpsDriveClient:
         part_size = max(part_size, (total + max_parts - 1) // max_parts)
         if part_size > max_size:
             raise WpsApiError("file exceeds multipart size limits")
+        if part_size > MAX_MULTIPART_PART_BUFFER:
+            raise InsufficientStorageError("multipart part exceeds the memory safety limit")
         return part_size
 
     def _multipart_upload(
@@ -1423,7 +1712,7 @@ class WpsDriveClient:
         hasher_sha256 = sha256()
         total = 0
         spool_dir = self.config.upload_spool_dir or tempfile.gettempdir()
-        with tempfile.SpooledTemporaryFile(
+        with _UploadSpoolReservation(self) as reservation, tempfile.SpooledTemporaryFile(
             max_size=self.config.upload_spool_memory,
             mode="w+b",
             dir=spool_dir,
@@ -1435,6 +1724,7 @@ class WpsDriveClient:
                 if not isinstance(chunk, bytes):
                     raise TypeError("source must return bytes")
                 self._check_upload_budget(total + len(chunk))
+                reservation.reserve(total + len(chunk))
                 spool.write(chunk)
                 hasher_md5.update(chunk)
                 hasher_sha1.update(chunk)
@@ -1616,6 +1906,7 @@ class WpsDriveClient:
         download_url = payload.get("download_url") or payload.get("url")
         if not isinstance(download_url, str) or not download_url.startswith("https://"):
             raise WpsApiError("resolve download URL")
+        self._signed_target(download_url, "resolve download URL")
 
         # The returned URL is already signed. Sending the WPS Cookie to the
         # object-storage host is unnecessary and increases credential exposure.
@@ -1626,7 +1917,7 @@ class WpsDriveClient:
             end = "" if length is None else str(offset + length - 1)
             request.add_header("Range", f"bytes={offset}-{end}")
         try:
-            response = self._opener.open(request, timeout=self.config.timeout)
+            response = self._signed_opener.open(request, timeout=self.config.timeout)
         except HTTPError as exc:
             raise WpsApiError("object download", status=exc.code) from None
         except URLError as exc:
