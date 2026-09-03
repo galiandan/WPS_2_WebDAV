@@ -31,4 +31,4 @@
 - `inferred`: 根据多个请求推断，但还没有单独实验确认。
 - `unknown`: 尚未观察到，不能当作 API 事实使用。
 
-所有 WPS 相关结论必须写入 `docs/findings.md`，注明证据等级、实验编号和观察时间。
+所有 WPS 相关结论必须写入 `docs/research/findings.md`，注明证据等级、实验编号和观察时间。

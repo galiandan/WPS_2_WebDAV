@@ -102,7 +102,7 @@ evidence: observed
 notes: pagination field still unknown
 ```
 
-不要把这段示例中的占位符替换成真实 Token 后提交。真实发现写入 `docs/findings.md`，敏感原文留在本机。
+不要把这段示例中的占位符替换成真实 Token 后提交。真实发现写入 `docs/research/findings.md`，敏感原文留在本机。
 
 ## 停止条件
 

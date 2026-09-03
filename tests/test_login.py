@@ -66,7 +66,7 @@ class LoginHelperTests(unittest.TestCase):
             run.return_value = SimpleNamespace(returncode=0)
             push_credentials_over_ssh(
                 credentials,
-                ssh_target="root@example.test",
+                ssh_target="root@vps-host",
                 identity_file="/tmp/id_ed25519",
             )
 

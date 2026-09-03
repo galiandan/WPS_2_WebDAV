@@ -1,9 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "wps-enterprise-adapter"
 version = "0.4.0"
-description = "Experiment-first adapter for an authorized WPS enterprise cloud drive account"
+description = "Experimental WebDAV and REST adapter for an authorized WPS enterprise drive"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = []
+keywords = ["wps", "webdav", "cloud-drive", "adapter"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Internet :: WWW/HTTP",
+]
+
+[project.urls]
+Repository = "https://github.com/galiandan/WPS_2_WebDAV"
+Issues = "https://github.com/galiandan/WPS_2_WebDAV/issues"
+
+[project.scripts]
+wps-adapter = "wps_adapter.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.wps-adapter]
 phase = "prototype"

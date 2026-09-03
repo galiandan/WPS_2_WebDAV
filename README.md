@@ -1,115 +1,207 @@
 # WPS Enterprise Cloud Adapter
 
-这个仓库用于研究并实现一个面向本人 WPS 企业云盘账号的适配器。目标链路是：
+一个面向**已授权 WPS 企业云盘账号**的实验性 WebDAV / REST 适配器：把 WPS 云盘接入 Windows、Linux、手机、NAS 和其他支持 WebDAV 的客户端。
 
 ```text
-WPS 企业云盘 -> Adapter -> WebDAV / REST -> Windows / Linux / 手机 / NAS
+WPS Enterprise Drive -> Adapter -> WebDAV / REST -> client applications
 ```
 
-当前可运行版本已经接通从本人抓包确认的列目录、流式下载、普通上传、创建目录、删除、重命名和移动流程，并增加了 WebDAV COPY、锁定、递归 PROPFIND、单范围下载和传输保护。程序不会在导入时访问 WPS；只有收到对应请求时才访问上游。
+> 当前版本为 `0.4.0` 原型。WPS 相关接口不是公开稳定契约，升级前请先在自己的测试目录验证。项目只适用于你本人正常拥有权限的数据，不绕过权限、验证码、SSO、风控或租户隔离。
 
-## 边界
+## Features
 
-- 只使用本人账号在网页端或官方客户端已经能够执行的操作。
-- 不绕过权限、验证码、访问控制、租户隔离或文件分享限制。
-- 不尝试枚举 ID、扫描接口、重放他人请求或访问其他用户数据。
-- 原始 HAR 可能包含 Cookie、Bearer token、签名下载 URL 和文件内容，只保存在本机，不能提交到仓库或直接分享。
-- 每个结论都要有一个可重复的本人账号实验作为依据；猜测会明确标注为猜测。
+- WebDAV：`PROPFIND`、`GET`、`HEAD`、`PUT`、`MKCOL`、`DELETE`、`MOVE`、`COPY`、`LOCK`、`UNLOCK`。
+- REST：列目录、读取元数据、上传、下载、创建文件夹、删除、重命名和移动。
+- 流式下载、单范围 `Range` 下载、上传并发限制和临时空间保护。
+- 普通上传、覆盖更新和基于已观察 WPS 流程的大文件分片上传。
+- 适配器层的递归 `PROPFIND`、`COPY` 和短期写锁兼容能力。
+- Cookie/CSRF 文件动态读取；上游 `401` 时按已确认的 WPS SDK `grant_token` 流程尝试续期。
+- 本地隔离 Chrome 登录助手：在官方 WPS 页面登录后，通过 SSH 将会话安全同步到 VPS。
+- 仅依赖 Python 标准库；不需要 Docker、Playwright 或浏览器插件。
+- 同源浏览器文件管理页面，入口为服务根路径 `/`。
 
-## 已实现
+## Important security notes
 
-- `PROPFIND`：目录和子项，支持 `Depth: 0/1/infinity`，递归深度和条目数有上限保护。
-- 浏览器文件管理页：打开服务根路径即可操作文件和文档。
-- `GET` / `HEAD`：文件元数据和流式下载；GET 支持单个 `Range: bytes=...`。
-- `PUT`：新文件上传和覆盖更新；适配器只在上传期间使用内存或临时 spool，完成后删除。
-- 大文件分片上传：达到阈值后使用已观察的 block/multipart 流程；默认阈值为 50 MiB、分片为 10 MiB。
-- 普通上传和单个分片失败后的有限重试；临时 spool 受文件大小和磁盘余量保护。
-- `COPY`：文件和文件夹通过流式中继复制，支持 `Depth: 0/1/infinity`。
-- `LOCK` / `UNLOCK`：适配器进程内的短期独占写锁，写操作会校验锁令牌。
-- 上传、下载并发限制，避免低内存 VPS 被大量并发传输拖垮。
-- `DELETE`：删除文件或文件夹；等待 WPS 异步删除任务完成。
-- 重命名：REST `PATCH` 和 WebDAV 同目录 `MOVE`。
-- REST 的列表、元数据、下载和上传接口。
-- REST 和 WebDAV 的删除接口。
-- Cookie/CSRF 从环境变量或本机 secret 文件读取。
-- Cookie 文件替换后的动态读取；`401` 时先检测文件变化，否则调用 WPS SDK 使用的 `grant_token` 刷新流程，并原子保存轮换后的 Set-Cookie。
-- 本地一次性登录助手：打开隔离的 WPS 官方登录窗口，读取 Chrome 会话中的 `rtk`/`csrf`，通过 SSH 原子同步到 VPS；不需要 Playwright 或浏览器插件。
-- `/healthz`、适配器 Basic Auth、systemd 部署骨架。
+- 这是第三方实验性适配器，不是 WPS 官方客户端或官方 SDK。
+- 只在自己的账号、企业空间和测试文件上使用；不要扫描 ID、重放他人请求或扩大权限。
+- Cookie、`rtk`、CSRF、refresh token、签名 URL、Basic Auth 密码和原始 HAR 都属于敏感信息，不能提交到 GitHub、Issue、聊天或日志。
+- 生产环境不要直接用 HTTP 暴露公网。请在 HTTPS 反向代理后使用，并关闭代理访问日志中的认证信息。
+- 当前 systemd 示例以 root 运行以简化部署；正式环境建议改为专用低权限用户，并仅允许其访问 secret 目录。
 
-## 尚未实现
+## Requirements
 
-适配器服务器本身不执行密码登录、SSO、验证码或风控；这些步骤由本地 Chrome 官方页面完成。`login` 助手只负责读取登录完成后的本地浏览器会话并通过 SSH 同步，首次登录或会话被撤销时需要本人重新操作。WPS 的跨目录同时改名、快速上传成功路径和进程重启后的分片续传仍未确认；其他未确认的 WPS 操作会返回 `501`。COPY 是适配器层的下载/上传中继，不代表 WPS 提供了服务端 COPY。
+- Python `3.11+`。
+- 运行服务只需要 Python 标准库。
+- 使用自动登录助手时，需要本机已有 Chrome/Chromium 和可用的 SSH 客户端。
+- WPS 企业云盘账号需要已经能在官方网页端正常登录和操作目标文件。
 
-## 本地运行
+## Quick start
 
-项目只依赖 Python 标准库，不需要安装额外工具。先复制配置模板：
+### 1. Get the source
+
+```bash
+git clone https://github.com/galiandan/WPS_2_WebDAV.git
+cd WPS_2_WebDAV
+```
+
+项目不要求安装第三方 Python 包。所有命令都可以通过 `PYTHONPATH=src` 直接运行；也可以按标准 Python 包方式执行 `python3 -m pip install -e .`。
+
+### 2. Create configuration
 
 ```bash
 cp .env.example .env
 ```
 
-在 `.env` 中填写自己的 `WPS_GROUP_ID`、`WPS_ROOT_ID` 和 secret 文件路径。然后在当前 shell 中加载配置并检查：
+编辑 `.env`，至少设置：
+
+```dotenv
+WPS_GROUP_ID=your-enterprise-group-id
+WPS_ROOT_ID=0
+WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
+WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
+ADAPTER_USERNAME_FILE=/etc/wps-adapter/secrets/adapter-username
+ADAPTER_PASSWORD_FILE=/etc/wps-adapter/secrets/adapter-password
+```
+
+`WPS_GROUP_ID` 和 `WPS_ROOT_ID` 是你自己账号上下文中的标识，不要从别人请求中复制。secret 文件必须由管理员创建并设置为 `0600`；不要把凭据写入 `.env`、命令行或仓库。
+
+### 3. Check and run locally
 
 ```bash
 set -a
 . ./.env
 set +a
 PYTHONPATH=src python3 -m wps_adapter check-config
-PYTHONPATH=src python3 -m wps_adapter serve
+PYTHONPATH=src python3 -m wps_adapter serve --bind 127.0.0.1 --port 54321
 ```
 
-默认地址：
+服务入口：
 
 ```text
-网页:   http://127.0.0.1:54321/
-WebDAV: http://127.0.0.1:54321/dav/
-REST:   http://127.0.0.1:54321/api/v1/
-健康检查: http://127.0.0.1:54321/healthz
+Web UI:     http://127.0.0.1:54321/
+WebDAV:     http://127.0.0.1:54321/dav/
+REST:       http://127.0.0.1:54321/api/v1/
+Health:     http://127.0.0.1:54321/healthz
 ```
 
-详细接口、自动登录、VPS 安装和后续验收步骤见 [docs/api.md](docs/api.md)、[docs/login.md](docs/login.md)、[docs/deployment.md](docs/deployment.md) 和 [docs/integration.md](docs/integration.md)。
+### 4. Bootstrap WPS login
 
-## 目录
+适配器网页不能读取另一个域名的 HttpOnly Cookie，所以登录助手必须在账号所有者自己的电脑上运行。它会打开一个临时隔离的 Chrome 窗口；你只在官方 WPS 页面登录，看到云盘页面后回到终端按回车。
+
+```bash
+PYTHONPATH=src python3 -m wps_adapter login \
+  --ssh-target root@your-vps-host \
+  --ssh-identity ~/.ssh/id_ed25519
+```
+
+助手只选取匹配 WPS 云盘域名的 Cookie，要求存在 `rtk` 和 `csrf`，不显示 Cookie 值，并通过 SSH 标准输入写入远端 secret 文件。登录结束后临时浏览器配置会删除。完整步骤见 [`docs/login.md`](docs/login.md)。
+
+### 5. Try the API
+
+```bash
+curl -u your-adapter-user \
+  'http://127.0.0.1:54321/api/v1/entries?path=/'
+```
+
+curl 会提示输入适配器密码。不要把密码写进命令或提交到配置文件。
+
+## WebDAV clients
+
+WebDAV 根地址是：
 
 ```text
-README.md                    项目入口和安全边界
-.env.example                 不含凭据的配置模板
-deploy/
-  wps-adapter.service        systemd 服务单元
-captures/                    本地私密 HAR，仅用于实验，始终被 Git 忽略
-docs/
-  00-scope-and-safety.md       授权边界和敏感信息处理
-  01-capture-plan.md           浏览器抓包和最小实验计划
-  integration.md               WebDAV/REST 对接、部署和验收清单
-  login.md                     小白可执行的登录和凭据同步步骤
-  findings.md                  已验证发现的唯一事实记录
-  request-record-template.md   单个请求/实验的记录模板
-src/wps_adapter/
-  har.py                       HAR 读取、摘要和初步脱敏
-  provider.py                  远端存储接口和安全错误类型
-  storage.py                   WPS ID 与路径解析、短时元数据缓存
-  server.py                    WebDAV/REST HTTP 服务
-  web.py                      浏览器文件管理页
-  login.py                    本地 Chrome 登录和 SSH 凭据同步
-  __main__.py                  服务入口和配置检查
-tools/                         无第三方依赖的抓包辅助工具
-tests/                         标准库单元测试
+http(s)://your-host:54321/dav/
 ```
 
-`__pycache__/`、`.pyc`、本地环境文件和原始网络抓包都是生成或敏感材料，不属于项目交付内容，已由 `.gitignore` 排除。
+使用适配器 Basic Auth 登录。桌面同步软件、NAS、文件管理器和 Office 客户端的具体配置方式不同；先用 `PROPFIND`、小文件上传和小文件下载完成验收，再接入自动同步。
 
-## WPS 研究边界
+REST 入口适合脚本和自定义客户端：
 
-- 只使用本人账号在网页端或官方客户端已经能够执行的操作。
-- 不绕过权限、验证码、访问控制、租户隔离或文件分享限制。
-- 不枚举 ID、扫描接口、重放他人请求或访问其他用户数据。
-- 原始 HAR 可能包含 Cookie、Bearer token、签名下载 URL 和文件内容，只保存在本机，不能提交到仓库或直接分享。
-- 每个结论都要有一个可重复的本人账号实验作为依据；猜测会明确标注为猜测。
+```text
+GET    /api/v1/entries?path=/
+GET    /api/v1/metadata?path=/folder/file.txt
+GET    /api/v1/download?path=/folder/file.txt
+PUT    /api/v1/upload?path=/folder/file.txt
+POST   /api/v1/folders?path=/folder
+PATCH  /api/v1/entries?path=/folder/file.txt
+DELETE /api/v1/entries?path=/folder/file.txt
+```
 
-## 认证安全
+接口细节、状态码和示例见 [`docs/api.md`](docs/api.md)。
 
-不要把 Cookie、CSRF、Basic Auth 密码、预签名对象存储 URL、完整 cURL 或原始 HAR 发到聊天、Issue 或 Git。推荐使用 `WPS_COOKIE_FILE` 和 `WPS_CSRF_TOKEN_FILE`；首次初始化可以运行 `python3 -m wps_adapter login`，由隔离的 Chrome 官方页面完成登录后通过 SSH 写入 VPS。之后适配器会在本机/VPS secret store 中自动持久化 WPS 轮换的 Cookie。适配器不会把 WPS Cookie 转发给对象存储，也不会打印响应正文。
+## Documentation
 
-网页登录不能直接读取 WPS Cookie：适配器页面与 WPS 页面不同源，关键 Cookie 还是 HttpOnly。因此登录助手必须在账号所有者自己的电脑上运行，使用本地 Chrome 的 DevTools Protocol 读取浏览器已经保存的会话；它不会把 WPS 密码发送给适配器，也不会读取现有浏览器的其他用户配置。
+- [`docs/architecture.md`](docs/architecture.md)：组件、请求流和资源模型。
+- [`docs/integration.md`](docs/integration.md)：WebDAV、REST、客户端和运维验收。
+- [`docs/deployment.md`](docs/deployment.md)：systemd、secret 文件和升级步骤。
+- [`docs/login.md`](docs/login.md)：使用官方 WPS 页面建立并同步会话。
+- [`docs/research/`](docs/research/)：抓包方案、脱敏实验事实和研究边界。
 
-已验证事实记录在 [docs/findings.md](docs/findings.md)，抓包工具说明在 [docs/01-capture-plan.md](docs/01-capture-plan.md)。
+## Configuration
+
+`.env.example` 是完整模板。常用参数如下：
+
+| Variable | Purpose |
+| --- | --- |
+| `WPS_GROUP_ID` | WPS 企业空间/群组标识 |
+| `WPS_ROOT_ID` | 适配器映射的根文件夹，`0` 表示尝试空间根目录 |
+| `WPS_COOKIE_FILE` | 完整 WPS Cookie 文件 |
+| `WPS_CSRF_TOKEN_FILE` | CSRF Cookie 值文件 |
+| `WPS_AUTO_REFRESH` | 是否在上游 `401` 后尝试自动续期 |
+| `WPS_MULTIPART_THRESHOLD` | 进入分片上传的文件大小阈值 |
+| `WPS_MAX_UPLOADS` / `WPS_MAX_DOWNLOADS` | 同时传输数量上限 |
+| `WPS_UPLOAD_MIN_FREE_BYTES` | 临时上传文件系统的最小保留空间 |
+| `ADAPTER_BIND` / `ADAPTER_PORT` | 服务监听地址和端口 |
+| `ADAPTER_USERNAME_FILE` / `ADAPTER_PASSWORD_FILE` | 适配器 Basic Auth 文件 |
+
+不要把 `WPS_COOKIE`、`WPS_CSRF_TOKEN`、`ADAPTER_PASSWORD` 等秘密值放在环境变量或 shell 历史中；优先使用权限为 `0600` 的文件。
+
+## Deployment
+
+项目包含不依赖 Docker 的 systemd 模板：
+
+```text
+deploy/wps-adapter.service
+deploy/wps-adapter-hardening.conf
+deploy/wps-adapter-hardening.env
+```
+
+通用 VPS 安装和升级步骤见 [`docs/deployment.md`](docs/deployment.md)。部署前先完成本地测试，并使用 HTTPS 反向代理保护公网流量。
+
+## Current limitations
+
+- WPS 接口随时可能变化，项目不会把未观察到的接口当成事实。
+- 适配器的 `COPY` 是下载/上传中继，不代表 WPS 存在服务端 COPY API。
+- `LOCK` 是进程内短期兼容锁，服务重启后消失，不是 WPS 远端锁。
+- 失败后的跨进程分片续传、取消/清理、快速上传成功路径和部分跨目录改名场景仍未确认。
+- 服务器本身不会自动填写 WPS 密码，也不会处理 SSO、验证码或风控；需要重新登录时使用本地登录助手。
+
+## Development
+
+运行测试和静态检查：
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+python3 -m compileall -q src tests
+git diff --check
+```
+
+测试默认不访问 WPS。涉及真实请求的实验必须只使用自己的测试目录，并把脱敏后的结论记录到 [`docs/research/findings.md`](docs/research/findings.md)。原始 HAR 放在本地 `captures/`，该目录已被 Git 忽略。
+
+项目结构：
+
+```text
+src/wps_adapter/       核心客户端、存储、WebDAV/REST 服务和登录助手
+tests/                 标准库单元测试
+tools/                 HAR 摘要和只读探针
+deploy/                systemd 与资源保护模板
+docs/                  API、架构、部署、登录、集成和研究记录
+docs/research/         抓包方案、实验事实、范围约束和请求模板
+.github/workflows/     GitHub Actions 测试
+```
+
+贡献方式见 [`CONTRIBUTING.md`](CONTRIBUTING.md)，安全问题见 [`SECURITY.md`](SECURITY.md)，版本变化见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+## License
+
+本项目以 [MIT License](LICENSE) 发布。WPS 商标、服务和接口归其各自权利人所有；本项目不代表 WPS 官方立场。

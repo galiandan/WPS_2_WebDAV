@@ -1,80 +1,72 @@
-# 自动登录并同步凭据
+# Bootstrap Login
 
-这一步只需要在你自己的电脑上做。VPS 不需要安装 Chrome、Playwright 或图形界面；WPS 密码也只会输入在官方 WPS 页面里。
+这一步在账号所有者自己的电脑上完成。服务器不需要安装 Chrome、Playwright 或图形界面，WPS 密码也只输入在官方 WPS 页面中。
 
-## 开始前
+## Requirements
 
-电脑上需要有：
+- Chrome 或 Chromium。
+- Python `3.11+`。
+- 可用的 SSH 客户端和 VPS 登录密钥。
+- 已下载本仓库源码。
 
-- Chrome 或 Chromium 浏览器。
-- Python 3.11 或更高版本。
-- 能正常 SSH 登录 VPS 的密钥。
-- 项目目录，例如 `<project-dir>`。
-
-先在终端确认 SSH 主机指纹和密钥都正常。这个命令只执行远程退出，不会改动项目：
+先确认 SSH 主机指纹和密钥：
 
 ```bash
 ssh -F /dev/null -i ~/.ssh/id_ed25519 <vps-user>@<vps-host> exit
 ```
 
-第一次连接如果询问是否信任主机指纹，只有确认地址确实是自己的 VPS 后才输入 `yes`。如果密钥位置不同，把 `-i` 后面的路径换成自己的密钥路径。
+第一次连接时，只有在确认目标地址属于自己服务器后才接受主机指纹。如果密钥路径或远程用户不同，请替换命令中的对应部分。
 
-## 登录并同步
+## Run the helper
 
-在项目目录打开终端，运行：
+在项目目录运行：
 
 ```bash
-cd <project-dir>
 PYTHONPATH=src python3 -m wps_adapter login \
   --ssh-target <vps-user>@<vps-host> \
   --ssh-identity ~/.ssh/id_ed25519
 ```
 
-Windows PowerShell 可以这样运行：
+助手会启动一个临时隔离的 Chrome 窗口：
 
-```powershell
-cd C:\path\to\WPS_2_WebDAV
-$env:PYTHONPATH = "src"
-python -m wps_adapter login --ssh-target <vps-user>@<vps-host>
-```
+1. 只在官方 WPS 页面中登录自己的账号。
+2. 正常完成学校 SSO、扫码、验证码或二次验证。
+3. 看到云盘页面后，回到终端按回车。
+4. 等待终端显示凭据已通过 SSH 更新。
 
-随后会出现一个单独的 Chrome 窗口：
+助手只读取这个临时 Chrome 配置，只保留匹配 WPS 云盘域名的 Cookie，并要求存在 `rtk` 和 `csrf`。Cookie 值不会显示、不会进入命令参数，也不会写入仓库。临时浏览器配置在流程结束后删除。
 
-1. 只在这个官方 WPS 窗口中登录自己的 WPS 账号。
-2. 如果出现学校 SSO、扫码、验证码或二次验证，按 WPS 页面正常完成。
-3. 看到云盘页面后，回到刚才的终端按一次回车。
-4. 等终端显示“已通过 SSH 更新 VPS 凭据”。
+## Why a helper is needed
 
-助手只读取这个临时 Chrome 配置中的 Cookie，且只保留匹配 WPS 云盘的 Cookie。它必须找到 `rtk` 和 `csrf` 才会同步；Cookie 值不会显示在终端，也不会写入命令行参数。登录结束后临时 Chrome 配置会自动删除。
+适配器网页和 WPS 网页属于不同源；浏览器页面也不能读取 HttpOnly Cookie。因此不能通过 iframe 或普通 JavaScript 从 WPS 页面“拿出”登录态。助手使用 Chrome 本地 DevTools Protocol 读取浏览器自身已经保存的会话，登录动作仍完全由官方 WPS 页面执行。
 
-## 检查结果
+## Verify
 
-同步完成后不需要重启 VPS 服务。执行下面的命令测试列表：
+同步完成后服务无需重启：
 
 ```bash
-curl -u <adapter-user> 'http://<vps-host>:54321/api/v1/entries?path=/'
+curl -u <adapter-user> \
+  'https://<adapter-host>/api/v1/entries?path=/'
 ```
 
-curl 会提示输入适配器密码。不要把密码直接写在命令里，也不要把终端输出中的 Cookie、CSRF 或错误详情发到聊天。
+curl 会提示输入适配器 Basic Auth 密码。不要把密码写在命令中。
 
-以后 WPS 会话正常续期时，适配器会自己调用已经确认的 `grant_token` 流程。只有 WPS 撤销了 `rtk` 或要求重新登录时，才需要重新运行本页命令。
+## Troubleshooting
 
-## 常见提示
+### 找不到 Chrome
 
-### 没有找到 Chrome
-
-请确认 Chrome 已安装，然后重新运行。也可以显式指定浏览器路径，例如：
+确认本机安装了 Chrome/Chromium，或显式指定路径：
 
 ```bash
 PYTHONPATH=src python3 -m wps_adapter login \
-  --browser /usr/bin/google-chrome-stable \
+  --browser /path/to/chrome \
   --ssh-target <vps-user>@<vps-host>
 ```
 
-### 没有找到 `rtk`
+### 找不到 `rtk`
 
-不要手工复制 Cookie。关闭窗口后重新运行助手，并确认已经在官方 WPS 页面完成登录，而不是停留在登录页或只打开了分享链接。
+关闭临时窗口并重新运行助手，确认已在官方 WPS 页面完成登录，而不是停留在登录页或只打开分享链接。
 
 ### SSH 同步失败
 
-先重新执行“开始前”的 SSH 命令，确认密钥和主机指纹正常；如果密钥有口令，先将密钥加入本机的 `ssh-agent`，再运行登录助手。不要把 Cookie 作为命令参数或通过 HTTP 上传到适配器。
+先手动运行 Requirements 中的 SSH 命令确认密钥、主机指纹和权限。若密钥有口令，先把密钥加入本机 `ssh-agent`。不要通过 HTTP 上传 Cookie，也不要把 Cookie 粘贴到聊天或命令行。

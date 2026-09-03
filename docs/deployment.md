@@ -1,23 +1,31 @@
-# VPS 部署
+# Deployment
 
-当前 VPS `<vps-host>:54321` 已运行 `0.4.0`。本页保留可重复执行的安装/升级步骤；重复部署前先备份 systemd 单元和非秘密配置，并且不要覆盖 `/etc/wps-adapter/secrets/`。
+本文说明如何在 Debian/Ubuntu 风格的 Linux VPS 上使用 systemd 部署适配器。不需要 Docker 或第三方 Python 包。示例中的 `<vps-host>`、`<vps-user>` 和路径都要替换为自己的值。
 
-程序只用 Python 标准库，不需要 Docker 或额外 Python 包。下面以 Debian/Ubuntu 风格系统和 `/opt/wps-adapter` 为例；命令中的路径可以按实际目录调整。
+## 1. Prepare the host
 
-## 1. 准备目录和代码
+建议使用专用低权限系统用户运行服务；当前模板默认使用 root 以降低首次部署复杂度。公网部署必须配置 HTTPS 反向代理，不能把带 Basic Auth 的纯 HTTP 端口直接暴露给互联网。
 
-把整个项目目录放到 VPS 的 `/opt/wps-adapter`，并确认以下命令能运行：
+确认主机满足：
+
+- Python `3.11+`。
+- systemd。
+- 能访问 WPS 和对象存储域名。
+- 临时上传文件所在磁盘有足够空间。
+
+## 2. Install the source
+
+在 VPS 上将仓库放到 `/opt/wps-adapter`。例如：
 
 ```bash
+sudo git clone https://github.com/galiandan/WPS_2_WebDAV.git /opt/wps-adapter
 cd /opt/wps-adapter
 PYTHONPATH=src python3 -m wps_adapter --version
 ```
 
-本次部署按当前配置直接由 root 运行 systemd 服务。这样最省事，但隔离性较弱；以后可以把 service 文件中的 `User=root` 改回专用低权限用户。
+升级时先备份 systemd 单元和非秘密配置，再更新代码。不要用仓库文件覆盖 `/etc/wps-adapter/secrets/`。
 
-## 2. 创建 secret 文件
-
-使用 root 创建目录和文件。Cookie 文件写入浏览器当前会话的完整 Cookie 行，必须包含 `rtk`、`kso_sid`、`wps_sid` 等本人会话 Cookie；`rtk` 的浏览器路径是 `/passport/secure`，所以普通云盘列表请求复制出来的 Cookie 可能不包含它。CSRF 文件写入 `csrf` Cookie 的值；如果不单独创建 CSRF 文件，程序也会尝试从 Cookie 行中提取名为 `csrf` 的值。
+## 3. Create secret files
 
 ```bash
 sudo install -d -o root -g root -m 700 /etc/wps-adapter/secrets
@@ -27,13 +35,11 @@ sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-u
 sudo install -o root -g root -m 600 /dev/null /etc/wps-adapter/secrets/adapter-password
 ```
 
-不要再手工复制 Cookie 时把值放进 shell 历史或聊天。推荐在账号所有者自己的电脑上运行本地登录助手：它会打开隔离的官方 WPS 登录页，登录完成后通过 SSH 安全写入这两个文件。服务随后会在上游 `401` 时调用已确认的 WPS `POST /passport/secure/api/grant_token` 刷新流程，并把返回的 Set-Cookie 原子保存回文件；如果 `rtk` 已失效，则重新运行登录助手。
+优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。它会在官方 WPS 页面完成交互式登录，然后通过 SSH 写入 `wps-cookie` 和 `wps-csrf`；不需要把 Cookie 粘贴进命令行。
 
-如果企业环境需要自有的会话建立脚本，仍可以把它的绝对路径写入 `WPS_CREDENTIAL_REFRESH_COMMAND` 作为 WPS 刷新失败后的外部兜底。服务只会在上游 `401` 时调用一次该命令，标准输出和错误输出会被丢弃；命令必须由 root 管理，并以临时文件加重命名的方式原子替换两个 secret。当前不会代填密码、绕过 SSO 或处理验证码。
+适配器 Basic Auth 的用户名和密码分别写入 `adapter-username`、`adapter-password`。这些文件只允许服务用户读取。不要把 WPS 密码、Cookie 或 Basic Auth 密码放入 `.env`、Git、Issue 或聊天。
 
-service 单元对 `/etc/wps-adapter/secrets` 保留了写权限，专门用于上述 root 管理的刷新助手原子替换凭据；如果未配置刷新助手，适配器本身不会主动写入这些文件。
-
-## 3. 配置非秘密环境变量
+## 4. Configure the service
 
 ```bash
 sudo cp /opt/wps-adapter/.env.example /etc/wps-adapter/wps-adapter.env
@@ -41,9 +47,20 @@ sudo chmod 600 /etc/wps-adapter/wps-adapter.env
 sudoedit /etc/wps-adapter/wps-adapter.env
 ```
 
-至少修改 `WPS_GROUP_ID` 和 `WPS_ROOT_ID`。`WPS_ROOT_ID` 可以填你本人测试目录的文件夹 ID；填 `0` 表示尝试企业空间根目录。适配器默认只绑定 `127.0.0.1`，Basic Auth 文件仍建议配置，尤其是后面接反向代理或改为公网监听时。
+至少设置：
 
-低内存 VPS 建议保留下面的保护参数（`.env.example` 已给出默认值）：`WPS_MAX_UPLOADS=2`、`WPS_MAX_DOWNLOADS=4`、`WPS_UPLOAD_SPOOL_MEMORY=8388608`、`WPS_UPLOAD_MIN_FREE_BYTES=536870912`、`WPS_UPLOAD_RETRIES=2`。这些限制会让并发上传排队或返回 `503`，不会把全部请求同时压进内存。
+```dotenv
+WPS_GROUP_ID=your-enterprise-group-id
+WPS_ROOT_ID=0
+WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
+WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
+ADAPTER_USERNAME_FILE=/etc/wps-adapter/secrets/adapter-username
+ADAPTER_PASSWORD_FILE=/etc/wps-adapter/secrets/adapter-password
+ADAPTER_BIND=127.0.0.1
+ADAPTER_PORT=54321
+```
+
+`WPS_ROOT_ID=0` 表示尝试企业空间根目录；也可以填自己测试目录的文件夹 ID。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
 
 检查配置不会访问 WPS：
 
@@ -55,41 +72,51 @@ set +a
 PYTHONPATH=src python3 -m wps_adapter check-config
 ```
 
-## 4. 安装 systemd 服务
+## 5. Install systemd
 
 ```bash
-sudo install -m 644 /opt/wps-adapter/deploy/wps-adapter.service /etc/systemd/system/wps-adapter.service
+sudo install -m 644 /opt/wps-adapter/deploy/wps-adapter.service \
+  /etc/systemd/system/wps-adapter.service
+sudo install -d -m 755 /etc/systemd/system/wps-adapter.service.d
+sudo install -m 644 /opt/wps-adapter/deploy/wps-adapter-hardening.conf \
+  /etc/systemd/system/wps-adapter.service.d/override.conf
+sudo install -m 600 /opt/wps-adapter/deploy/wps-adapter-hardening.env \
+  /etc/wps-adapter/wps-adapter-hardening.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now wps-adapter
 systemctl status wps-adapter --no-pager
 curl http://127.0.0.1:54321/healthz
 ```
 
-查看不含 Cookie/Token 的服务错误摘要：
+查看不包含 Cookie、Token、完整 URL 或文件内容的日志：
 
 ```bash
 sudo journalctl -u wps-adapter -n 100 --no-pager
 ```
 
-## 5. 使用
+## 6. Reverse proxy
 
-在 VPS 本机先测试：
+让反向代理终止 TLS，并将请求转发到 `http://127.0.0.1:54321`。保留适配器 Basic Auth；不要在代理访问日志中记录 `Authorization` 头或查询参数。WebDAV 客户端使用：
 
-```bash
-curl http://127.0.0.1:54321/api/v1/entries?path=/
+```text
+https://<vps-host>/dav/
 ```
 
-浏览器页面地址使用 `http://<VPS 地址>:54321/`；WebDAV 客户端连接地址使用 `http://<VPS 地址>:54321/dav/`。如果通过 SSH 隧道访问 VPS，则把本地端口转发到 VPS 的 `127.0.0.1:54321`。直接公网暴露时必须使用 HTTPS 反向代理，并保留 Basic Auth；不要让 Cookie 进入反向代理访问日志。
+如果只通过 SSH 隧道使用，可以保持服务绑定 `127.0.0.1`，无需开放公网端口。
 
-## 6. 认证失效
+## 7. Upgrade and rollback
 
-如果返回 `503` 且 `upstream_status` 是 `401`，说明 WPS 会话和 `rtk` 刷新票据都失效或被撤销。适配器已先自动尝试 WPS SDK 刷新；仍然失败时，在账号所有者自己的电脑上执行：
+升级前执行：
 
 ```bash
-cd <project-dir>
-PYTHONPATH=src python3 -m wps_adapter login \
-  --ssh-target <vps-user>@<vps-host> \
-  --ssh-identity ~/.ssh/id_ed25519
+sudo cp /etc/systemd/system/wps-adapter.service \
+  /etc/systemd/system/wps-adapter.service.before-upgrade
+sudo cp /etc/wps-adapter/wps-adapter.env \
+  /etc/wps-adapter/wps-adapter.env.before-upgrade
 ```
 
-登录助手要求本机存在 Chrome/Chromium，并且 SSH 主机指纹已经提前确认。它不需要 VPS 安装图形界面、Playwright 或浏览器插件；只在官方 WPS 窗口中登录，不会把 WPS 密码发送给适配器。
+更新代码后重新安装 service 文件、执行 `systemctl daemon-reload` 和 `systemctl restart wps-adapter`，再检查 `/healthz`。回滚只恢复代码和非秘密配置；不要从 Git 或备份中恢复旧 Cookie。
+
+## 8. Session expiry
+
+服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手。服务无需因凭据同步而重启。
