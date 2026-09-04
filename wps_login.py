@@ -35,8 +35,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
-from urllib.error import URLError
-from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from dataclasses import field
@@ -1158,6 +1158,89 @@ def wait_for_login_snapshot(
         time.sleep(min(0.5, remaining))
 
 
+def verify_workspace_access(
+    credentials: WpsCredentials,
+    workspace: WpsWorkspaceSelection,
+    *,
+    base_url: str = DEFAULT_LOGIN_URL,
+    timeout: float = 30.0,
+    opener: object | None = None,
+) -> None:
+    """Verify the selected WPS workspace before persisting new credentials.
+
+    This uses the already observed enterprise file-list endpoint only. It is
+    deliberately separate from OpenList's unverified group-discovery
+    candidate: a page-derived or explicitly selected workspace must first
+    prove that its root is readable with the newly captured session.
+    """
+
+    if not isinstance(credentials, WpsCredentials) or not credentials.cookie:
+        raise LoginError("WPS 登录凭据不完整，无法验证工作区")
+    if not isinstance(workspace, WpsWorkspaceSelection):
+        raise LoginError("WPS 工作区信息无效，无法验证访问权限")
+    if timeout <= 0:
+        raise LoginError("工作区验证超时时间必须为正数")
+    host = _host_from_url(base_url)
+    group_id = _workspace_id(workspace.group_id, field_name="群组 ID")
+    root_id = _workspace_id(workspace.root_id, field_name="目录 ID")
+    query = urlencode(
+        {
+            "parentid": root_id,
+            "offset": "0",
+            "count": "1",
+            "orderby": "mtime",
+            "order": "desc",
+        }
+    )
+    url = urlunsplit(
+        (
+            "https",
+            host,
+            f"/3rd/drive/api/v5/groups/{quote(group_id, safe='')}/files",
+            query,
+            "",
+        )
+    )
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Cookie": credentials.cookie,
+            "User-Agent": "wps-adapter-login/1",
+        },
+        method="GET",
+    )
+    client = opener or build_opener(ProxyHandler({}))
+    try:
+        response = client.open(request, timeout=timeout)  # type: ignore[attr-defined]
+        try:
+            body = _read_limited_http_response(response, max_bytes=MAX_ADAPTER_RESPONSE_BYTES)
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+    except HTTPError as exc:
+        try:
+            exc.close()
+        except OSError:
+            pass
+        if exc.code == 401:
+            raise LoginError("WPS 登录已过期，未同步新凭据") from exc
+        if exc.code in {403, 404}:
+            raise LoginError("当前账号无权访问所选 WPS 工作区，未同步新凭据") from exc
+        raise LoginError(f"WPS 工作区验证失败（HTTP {exc.code}），未同步新凭据") from exc
+    except (OSError, URLError, TimeoutError, ValueError) as exc:
+        raise LoginError("无法连接 WPS 验证工作区，未同步新凭据") from exc
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LoginError("WPS 工作区验证返回了无效响应，未同步新凭据") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("files"), list):
+        raise LoginError("WPS 工作区验证返回格式异常，未同步新凭据")
+    if payload.get("result") not in {None, "ok"}:
+        raise LoginError("WPS 工作区验证未成功，未同步新凭据")
+
+
 def login_and_sync(
     *,
     login_url: str = DEFAULT_LOGIN_URL,
@@ -1234,6 +1317,14 @@ def login_and_sync(
         f"已获取 {len(names)} 个 WPS Cookie（包含 rtk 和 csrf）；Cookie 值不会显示。",
         flush=True,
     )
+    print("正在验证 WPS 工作区访问权限...", flush=True)
+    verify_workspace_access(
+        credentials,
+        workspace,
+        base_url=browser_url,
+        timeout=adapter_timeout,
+    )
+    print("工作区验证成功，准备同步凭据。", flush=True)
     if ssh_target:
         push_credentials_over_ssh(
             credentials,

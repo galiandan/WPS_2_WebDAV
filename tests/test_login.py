@@ -23,6 +23,7 @@ from wps_adapter.login import (
     login_and_sync,
     push_credentials_over_ssh,
     push_credentials_over_https,
+    verify_workspace_access,
     wait_for_login_credentials,
     wait_for_login_snapshot,
     write_local_credentials,
@@ -36,6 +37,69 @@ PROJECT_ROOT = Path(__file__).parents[1]
 
 
 class LoginHelperTests(unittest.TestCase):
+    def test_workspace_access_verification_uses_observed_list_request(self) -> None:
+        class Response:
+            def read(self, _size: int = -1) -> bytes:
+                return b'{"files":[],"result":"ok"}'
+
+            def close(self) -> None:
+                pass
+
+        class Opener:
+            def __init__(self) -> None:
+                self.request = None
+
+            def open(self, request, timeout: float) -> Response:
+                self.request = request
+                self.timeout = timeout
+                return Response()
+
+        opener = Opener()
+        verify_workspace_access(
+            WpsCredentials(cookie="sid=secret", csrf_token="csrf"),
+            WpsWorkspaceSelection("tenant", "group-1", "0"),
+            base_url="https://365.kdocs.cn/space/",
+            opener=opener,
+        )
+        self.assertIsNotNone(opener.request)
+        self.assertIn("/3rd/drive/api/v5/groups/group-1/files", opener.request.full_url)
+        self.assertIn("parentid=0", opener.request.full_url)
+        self.assertEqual(opener.request.get_header("Cookie"), "sid=secret")
+
+    def test_workspace_access_verification_reports_permission_failure(self) -> None:
+        from urllib.error import HTTPError
+        from io import BytesIO
+
+        class Opener:
+            def open(self, request, timeout: float):
+                raise HTTPError(request.full_url, 403, "forbidden", {}, BytesIO())
+
+        with self.assertRaisesRegex(LoginError, "无权访问所选 WPS 工作区"):
+            verify_workspace_access(
+                WpsCredentials(cookie="sid=secret", csrf_token="csrf"),
+                WpsWorkspaceSelection("tenant", "group-1", "0"),
+                opener=Opener(),
+            )
+
+    def test_workspace_access_verification_rejects_malformed_response(self) -> None:
+        class Response:
+            def read(self, _size: int = -1) -> bytes:
+                return b'{"result":"ok"}'
+
+            def close(self) -> None:
+                pass
+
+        class Opener:
+            def open(self, request, timeout: float) -> Response:
+                return Response()
+
+        with self.assertRaisesRegex(LoginError, "返回格式异常"):
+            verify_workspace_access(
+                WpsCredentials(cookie="sid=secret", csrf_token="csrf"),
+                WpsWorkspaceSelection("tenant", "group-1", "0"),
+                opener=Opener(),
+            )
+
     def test_standalone_helper_runs_without_the_project_checkout(self) -> None:
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
