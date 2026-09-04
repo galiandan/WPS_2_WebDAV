@@ -61,6 +61,7 @@ class WpsWorkspaceSelection:
     tenant_id: str
     group_id: str
     root_id: str
+    spaces: tuple["WpsWorkspaceCandidate", ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,13 +86,23 @@ def _workspace_id(value: str, *, field_name: str) -> str:
     return value
 
 
-def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, str]:
+def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, object]:
     if not isinstance(selection, WpsWorkspaceSelection):
         raise LoginError("WPS 工作区信息无效")
-    return {
+    payload: dict[str, object] = {
         "group_id": _workspace_id(selection.group_id, field_name="群组 ID"),
         "root_id": _workspace_id(selection.root_id, field_name="目录 ID"),
     }
+    if selection.spaces:
+        payload["spaces"] = [
+            {
+                "group_id": _workspace_id(item.group_id, field_name="群组 ID"),
+                "root_id": "0",
+                "name": item.name,
+            }
+            for item in selection.spaces
+        ]
+    return payload
 
 
 def _workspace_parts_from_page_url(
@@ -1392,7 +1403,7 @@ def login_and_sync(
     adapter_timeout: float = 30.0,
     allow_insecure_http: bool = False,
     workspace_url: str | None = None,
-    workspace_selector: Callable[[Sequence[WpsWorkspaceCandidate]], WpsWorkspaceCandidate] | None = None,
+    workspace_selector: Callable[[Sequence[WpsWorkspaceCandidate]], object] | None = None,
 ) -> tuple[str, ...]:
     """Open WPS, wait for a human login, then sync a safe credential snapshot."""
 
@@ -1475,24 +1486,33 @@ def login_and_sync(
                 if not workspace.group_id:
                     print("没有发现可选企业空间；将使用当前页面中的空间。", flush=True)
     if workspace_url is None and discovered_workspaces:
-        if workspace_selector is None:
-            selected_candidate = discovered_workspaces[0]
+        selected = discovered_workspaces[0] if workspace_selector is None else workspace_selector(discovered_workspaces)
+        if isinstance(selected, WpsWorkspaceCandidate):
+            selected_candidates = (selected,)
+        elif isinstance(selected, Sequence) and not isinstance(selected, (str, bytes)):
+            selected_candidates = tuple(selected)
         else:
-            selected_candidate = workspace_selector(discovered_workspaces)
-        if not isinstance(selected_candidate, WpsWorkspaceCandidate):
             raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+        if not selected_candidates or any(not isinstance(item, WpsWorkspaceCandidate) for item in selected_candidates):
+            raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+        selected_candidate = selected_candidates[0]
         workspace = WpsWorkspaceSelection(
             tenant_id=selected_candidate.tenant_id,
             group_id=selected_candidate.group_id,
             root_id="0",
+            spaces=tuple(selected_candidates),
         )
     print("正在验证 WPS 工作区访问权限...", flush=True)
-    verify_workspace_access(
-        credentials,
-        workspace,
-        base_url=browser_url,
-        timeout=adapter_timeout,
-    )
+    if workspace.spaces:
+        for candidate in workspace.spaces:
+            verify_workspace_access(
+                credentials,
+                WpsWorkspaceSelection(candidate.tenant_id, candidate.group_id, "0"),
+                base_url=browser_url,
+                timeout=adapter_timeout,
+            )
+    else:
+        verify_workspace_access(credentials, workspace, base_url=browser_url, timeout=adapter_timeout)
     print("工作区验证成功，准备同步凭据。", flush=True)
     if ssh_target:
         push_credentials_over_ssh(

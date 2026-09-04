@@ -204,6 +204,29 @@ def _select_workspace(candidates: tuple[WpsWorkspaceCandidate, ...]) -> WpsWorks
         print("请输入列表中的序号。", flush=True)
 
 
+def _select_workspaces(candidates: tuple[WpsWorkspaceCandidate, ...]) -> tuple[WpsWorkspaceCandidate, ...]:
+    """Select one, several, or all discovered spaces by display name."""
+
+    if len(candidates) == 1:
+        return candidates
+    print("可输入一个或多个序号（例如 1,3），也可以输入 all 使用全部空间。", flush=True)
+    while True:
+        answer = input("请选择空间 [1]: ").strip() or "1"
+        if answer.casefold() == "all":
+            return candidates
+        try:
+            indexes = [int(value.strip()) for value in answer.split(",")]
+        except ValueError:
+            print("请输入序号，例如 1,3，或输入 all。", flush=True)
+            continue
+        if not indexes or len(set(indexes)) != len(indexes) or any(
+            index < 1 or index > len(candidates) for index in indexes
+        ):
+            print("请输入列表中的序号。", flush=True)
+            continue
+        return tuple(candidates[index - 1] for index in indexes)
+
+
 def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
     """Run the login flow and return a process exit code."""
 
@@ -265,7 +288,7 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         adapter_password=adapter_password,
         adapter_timeout=args.adapter_timeout,
         allow_insecure_http=allow_insecure_http,
-        workspace_selector=_select_workspace if interactive and not args.workspace_url else None,
+        workspace_selector=_select_workspaces if interactive and not args.workspace_url else None,
     )
     return 0
 

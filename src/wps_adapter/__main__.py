@@ -14,7 +14,7 @@ from .login_command import (
 )
 from .server import AdapterApplication, BasicAuth, DavLockStore, create_server
 from .settings import DEFAULT_ROOT_NAME, WebSettings
-from .storage import WpsStorage
+from .storage import MultiSpaceStorage, WpsStorage
 
 
 def _env_int(name: str, default: int) -> int:
@@ -39,20 +39,20 @@ def _application() -> AdapterApplication:
         else os.environ.get("WPS_ROOT_ID", "0")
     )
 
-    storage = WpsStorage(
-        WpsDriveClient(client_config),
-        root_id=root_id,
-        root_name=root_name,
-        list_count=_env_int("WPS_LIST_COUNT", 20),
-        max_list_entries=_env_int("WPS_MAX_LIST_ENTRIES", 10000),
-        cache_ttl=_env_float("WPS_CACHE_TTL", 2.0),
-        max_cached_folders=_env_int("WPS_MAX_CACHED_FOLDERS", 1024),
-        max_uploads=_env_int("WPS_MAX_UPLOADS", 2),
-        max_downloads=_env_int("WPS_MAX_DOWNLOADS", 4),
-        transfer_wait_timeout=_env_float("WPS_TRANSFER_WAIT_TIMEOUT", 30.0),
-        max_copy_entries=_env_int("WPS_MAX_COPY_ENTRIES", 10000),
-        max_copy_depth=_env_int("WPS_MAX_COPY_DEPTH", 64),
-    )
+    storage_options = {
+        "list_count": _env_int("WPS_LIST_COUNT", 20),
+        "max_list_entries": _env_int("WPS_MAX_LIST_ENTRIES", 10000),
+        "cache_ttl": _env_float("WPS_CACHE_TTL", 2.0),
+        "max_cached_folders": _env_int("WPS_MAX_CACHED_FOLDERS", 1024),
+        "max_uploads": _env_int("WPS_MAX_UPLOADS", 2),
+        "max_downloads": _env_int("WPS_MAX_DOWNLOADS", 4),
+        "transfer_wait_timeout": _env_float("WPS_TRANSFER_WAIT_TIMEOUT", 30.0),
+        "max_copy_entries": _env_int("WPS_MAX_COPY_ENTRIES", 10000),
+        "max_copy_depth": _env_int("WPS_MAX_COPY_DEPTH", 64),
+    }
+    client = WpsDriveClient(client_config)
+    mounts = workspace.spaces if workspace is not None else ()
+    storage = MultiSpaceStorage(client, mounts, root_name=root_name, **storage_options)
     return AdapterApplication(
         storage,
         web_root_name=root_name,

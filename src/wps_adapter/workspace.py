@@ -16,11 +16,29 @@ from typing import Any, Mapping
 AUTO_VALUE = "auto"
 DEFAULT_WORKSPACE_FILE = "/etc/wps-adapter/secrets/wps-workspace.json"
 MAX_WORKSPACE_FILE_BYTES = 16 * 1024
+MAX_WORKSPACE_SPACES = 128
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
 
 
 class WorkspaceConfigError(ValueError):
     """The workspace state is missing, malformed, or unsafe to use."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceMount:
+    """One WPS space exposed below the adapter's virtual root."""
+
+    group_id: str
+    root_id: str = "0"
+    name: str = ""
+
+    def __post_init__(self) -> None:
+        validate_workspace_identifier(self.group_id, field_name="space.group_id")
+        validate_workspace_identifier(self.root_id, field_name="space.root_id")
+        if not isinstance(self.name, str) or not self.name or "/" in self.name or "\\" in self.name:
+            raise WorkspaceConfigError("space.name is invalid")
+        if len(self.name.encode("utf-8")) > 4096:
+            raise WorkspaceConfigError("space.name is too long")
 
 
 def validate_workspace_identifier(value: object, *, field_name: str) -> str:
@@ -114,6 +132,7 @@ class WorkspaceState:
     configured_root_id: str = "0"
     _group_id: str = field(default="", init=False, repr=False)
     _root_id: str = field(default="0", init=False, repr=False)
+    _spaces: tuple[WorkspaceMount, ...] = field(default=(), init=False, repr=False)
     _file_mtime_ns: int | None = field(default=None, init=False, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
@@ -165,6 +184,24 @@ class WorkspaceState:
                 else validate_workspace_identifier(raw_group, field_name="workspace.group_id")
             )
             file_root = validate_workspace_identifier(raw_root, field_name="workspace.root_id")
+        raw_spaces = payload.get("spaces") if isinstance(payload, Mapping) else None
+        spaces: list[WorkspaceMount] = []
+        if raw_spaces is not None:
+            if not isinstance(raw_spaces, list) or not raw_spaces or len(raw_spaces) > MAX_WORKSPACE_SPACES:
+                raise WorkspaceConfigError("workspace.spaces is invalid")
+            seen_groups: set[str] = set()
+            for item in raw_spaces:
+                if not isinstance(item, Mapping):
+                    raise WorkspaceConfigError("workspace space is invalid")
+                group = validate_workspace_identifier(item.get("group_id"), field_name="space.group_id")
+                root = validate_workspace_identifier(item.get("root_id", "0"), field_name="space.root_id")
+                name = item.get("name", group)
+                mount = WorkspaceMount(group, root, name)
+                if group in seen_groups:
+                    raise WorkspaceConfigError("workspace spaces contain duplicate groups")
+                seen_groups.add(group)
+                spaces.append(mount)
+        self._spaces = tuple(spaces)
         if self.configured_group_id in {"", AUTO_VALUE}:
             self._group_id = file_group
         if self.configured_root_id == AUTO_VALUE:
@@ -199,21 +236,48 @@ class WorkspaceState:
             return self._root_id
 
     @property
+    def spaces(self) -> tuple[WorkspaceMount, ...]:
+        with self._lock:
+            self._refresh_locked()
+            if self._spaces:
+                return self._spaces
+            if self._group_id:
+                return (WorkspaceMount(self._group_id, self._root_id, self._group_id),)
+            return ()
+
+    @property
     def configured(self) -> bool:
         return bool(self.group_id)
 
-    def update(self, group_id: str, root_id: str = "0") -> None:
+    def update(
+        self,
+        group_id: str,
+        root_id: str = "0",
+        *,
+        spaces: list[WorkspaceMount] | tuple[WorkspaceMount, ...] | None = None,
+    ) -> None:
         group_id = validate_workspace_identifier(group_id, field_name="workspace.group_id")
         root_id = validate_workspace_identifier(root_id, field_name="workspace.root_id")
+        normalized_spaces = tuple(spaces or ())
+        if normalized_spaces and len(normalized_spaces) > MAX_WORKSPACE_SPACES:
+            raise WorkspaceConfigError("too many workspace spaces")
+        if any(not isinstance(item, WorkspaceMount) for item in normalized_spaces):
+            raise WorkspaceConfigError("workspace spaces are invalid")
         with self._lock:
             if self.file_path:
-                self._persist_locked(group_id, root_id)
+                self._persist_locked(group_id, root_id, normalized_spaces)
             if self.configured_group_id in {"", AUTO_VALUE}:
                 self._group_id = group_id
             if self.configured_root_id == AUTO_VALUE:
                 self._root_id = root_id
+            self._spaces = normalized_spaces
 
-    def _persist_locked(self, group_id: str, root_id: str) -> None:
+    def _persist_locked(
+        self,
+        group_id: str,
+        root_id: str,
+        spaces: tuple[WorkspaceMount, ...] = (),
+    ) -> None:
         assert self.file_path is not None
         _validate_parent(self.file_path)
         descriptor, temporary = tempfile.mkstemp(
@@ -225,8 +289,14 @@ class WorkspaceState:
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 descriptor = -1
+                payload: dict[str, Any] = {"group_id": group_id, "root_id": root_id}
+                if spaces:
+                    payload["spaces"] = [
+                        {"group_id": item.group_id, "root_id": item.root_id, "name": item.name}
+                        for item in spaces
+                    ]
                 json.dump(
-                    {"group_id": group_id, "root_id": root_id},
+                    payload,
                     stream,
                     ensure_ascii=True,
                     separators=(",", ":"),
@@ -251,6 +321,7 @@ class WorkspaceState:
 __all__ = [
     "AUTO_VALUE",
     "DEFAULT_WORKSPACE_FILE",
+    "WorkspaceMount",
     "WorkspaceConfigError",
     "WorkspaceState",
     "validate_workspace_identifier",

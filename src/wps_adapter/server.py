@@ -40,7 +40,7 @@ from .provider import (
 from .storage import WpsStorage, join_remote_path, split_remote_path
 from .settings import WebSettings, validate_root_name
 from .web import render_web_app
-from .workspace import WorkspaceConfigError, validate_workspace_identifier
+from .workspace import WorkspaceConfigError, WorkspaceMount, validate_workspace_identifier
 
 
 LOG = logging.getLogger("wps_adapter.http")
@@ -296,7 +296,7 @@ class AdapterApplication:
             )
         try:
             root = getattr(self.storage, "root")
-            root_id = str(getattr(root, "id"))
+            root_id = str(getattr(self.storage, "status_root_id", getattr(root, "id")))
             return checker(root_id=root_id)
         except (AttributeError, OSError, TypeError, ValueError):
             return WpsStatus(
@@ -1313,7 +1313,8 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("too many cookies")
         raw_workspace = payload.get("workspace")
         workspace_state = getattr(self.application.storage.client.config, "workspace", None)
-        workspace_data: dict[str, str] | None = None
+        workspace_data: dict[str, object] | None = None
+        workspace_mounts: list[WorkspaceMount] = []
         if raw_workspace is not None:
             if not isinstance(raw_workspace, dict):
                 raise ValueError("JSON field 'workspace' must be an object")
@@ -1332,6 +1333,24 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                         field_name="workspace.root_id",
                     ),
                 }
+                raw_spaces = raw_workspace.get("spaces")
+                if raw_spaces is not None:
+                    if not isinstance(raw_spaces, list) or not raw_spaces or len(raw_spaces) > 128:
+                        raise ValueError("JSON field 'workspace.spaces' is invalid")
+                    seen_names: set[str] = set()
+                    for item in raw_spaces:
+                        if not isinstance(item, dict):
+                            raise ValueError("workspace space must be an object")
+                        mount = WorkspaceMount(
+                            validate_workspace_identifier(item.get("group_id"), field_name="space.group_id"),
+                            validate_workspace_identifier(item.get("root_id", "0"), field_name="space.root_id"),
+                            item.get("name", str(item.get("group_id", ""))),
+                        )
+                        if mount.name in seen_names:
+                            raise ValueError("workspace spaces contain duplicate names")
+                        seen_names.add(mount.name)
+                        workspace_mounts.append(mount)
+                    workspace_data["spaces"] = workspace_mounts
             except WorkspaceConfigError as exc:
                 raise ValueError(str(exc)) from exc
         credentials, names = credentials_from_cookies(

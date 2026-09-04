@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from wps_adapter.client import WpsCredentials
 from wps_adapter.__main__ import _apply_adapter_port, _prompt_login_target
-from wps_adapter.login_command import _select_workspace
+from wps_adapter.login_command import _select_workspace, _select_workspaces
 from wps_adapter.login import (
     ChromeLoginSession,
     LoginError,
@@ -148,6 +148,17 @@ class LoginHelperTests(unittest.TestCase):
             selected = _select_workspace((candidate,))
         self.assertEqual(selected, candidate)
         prompt.assert_not_called()
+
+    def test_workspace_selection_supports_multiple_and_all(self) -> None:
+        candidates = (
+            WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
+            WpsWorkspaceCandidate("tenant", "456", "个人团队"),
+            WpsWorkspaceCandidate("tenant", "789", "自动备份"),
+        )
+        with patch("builtins.input", return_value="1,3"):
+            self.assertEqual(_select_workspaces(candidates), (candidates[0], candidates[2]))
+        with patch("builtins.input", return_value="all"):
+            self.assertEqual(_select_workspaces(candidates), candidates)
 
     def test_workspace_selection_happens_after_browser_closes(self) -> None:
         class Session:

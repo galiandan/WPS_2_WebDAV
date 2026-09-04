@@ -10,7 +10,8 @@ WebDAV clients / REST clients / browser UI
        streaming, range, resource limits
                     |
                 WpsStorage
-       path resolution and short metadata cache
+       path resolution, space mounts,
+       and short metadata cache
                     |
               WpsDriveClient
        confirmed WPS control requests
@@ -24,7 +25,7 @@ WebDAV clients / REST clients / browser UI
 
 1. 客户端请求进入 WebDAV、REST 或同源文件管理页。
 2. 服务完成 Basic Auth、路径校验、并发槽和请求大小检查。
-3. `WpsStorage` 将远端路径解析为 WPS 文件夹/文件 ID，并使用短 TTL 元数据缓存减少重复列表请求。
+3. `WpsStorage` 将远端路径解析为 WPS 文件夹/文件 ID，并使用短 TTL 元数据缓存减少重复列表请求；选择多个空间时，`MultiSpaceStorage` 先按根目录下的虚拟空间文件夹路由，再交给对应的 `WpsStorage`。
 4. `WpsDriveClient` 从 secret 文件读取当前 Cookie/CSRF，调用已经从本人账号观察并记录的 WPS 请求形状。
 5. 文件上传和下载尽量通过流式中继完成；签名对象存储请求不会收到 WPS Cookie。
 6. 上游 `401` 时，文件凭据源优先检测管理员替换，然后按已观察的 SDK `grant_token` 流程尝试续期并重试一次。
