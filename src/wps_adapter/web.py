@@ -112,8 +112,14 @@ WEB_APP_HTML = r"""<!doctype html>
     .eyebrow { color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .04em; margin-bottom: 6px; }
     h1 { font-size: 26px; letter-spacing: 0; line-height: 1.2; margin: 0; }
     .workspace-note { color: var(--muted); margin: 8px 0 0; }
-    .connection { align-items: center; background: var(--green-soft); border-radius: 999px; color: var(--green); display: inline-flex; flex: 0 0 auto; font-size: 12px; gap: 7px; padding: 7px 11px; white-space: nowrap; }
-    .connection-dot { background: var(--green); border-radius: 50%; height: 7px; width: 7px; }
+    .connection { align-items: center; background: var(--amber-soft); border-radius: 999px; color: var(--amber); display: inline-flex; flex: 0 0 auto; font-size: 12px; gap: 7px; padding: 7px 11px; white-space: nowrap; }
+    .connection.connected { background: var(--green-soft); color: var(--green); }
+    .connection.disconnected { background: var(--red-soft); color: var(--red); }
+    .connection.unknown { background: var(--panel-soft); color: var(--muted); }
+    .connection-dot { background: var(--amber); border-radius: 50%; height: 7px; width: 7px; }
+    .connection.connected .connection-dot { background: var(--green); }
+    .connection.disconnected .connection-dot { background: var(--red); }
+    .connection.unknown .connection-dot { background: var(--quiet); }
 
     .navigation-row { align-items: center; display: flex; gap: 16px; justify-content: space-between; margin-bottom: 12px; }
     .breadcrumbs { align-items: center; display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
@@ -237,7 +243,9 @@ WEB_APP_HTML = r"""<!doctype html>
         <h1 id="folder-title">根目录</h1>
         <p id="folder-note" class="workspace-note">管理 WPS 企业云盘中的文件和文件夹</p>
       </div>
-      <div class="connection"><span class="connection-dot" aria-hidden="true"></span>WPS 已连接</div>
+      <div id="connection" class="connection checking" role="status" aria-live="polite">
+        <span class="connection-dot" aria-hidden="true"></span><span id="connection-label">正在检查 WPS</span>
+      </div>
     </section>
 
     <div class="navigation-row">
@@ -294,7 +302,7 @@ WEB_APP_HTML = r"""<!doctype html>
   <script>
     (() => {
       "use strict";
-      const state = { path: "/", entries: [], busy: false, search: "" };
+      const state = { path: "/", entries: [], busy: false, search: "", connection: "checking" };
       const $ = (id) => document.getElementById(id);
       const apiRoot = "/api/v1/";
       let modalResolve = null;
@@ -316,6 +324,7 @@ WEB_APP_HTML = r"""<!doctype html>
           const message = data && data.error ? data.error : `请求失败（${response.status}）`;
           const error = new Error(message);
           error.status = response.status;
+          if (data && typeof data.code === "string") error.code = data.code;
           throw error;
         }
         return data;
@@ -336,13 +345,61 @@ WEB_APP_HTML = r"""<!doctype html>
         status.parentElement.className = "status-row" + (kind ? " " + kind : "");
       }
 
+      function updateControls() {
+        const unavailable = state.connection !== "connected";
+        $("up-button").disabled = state.busy || unavailable || state.path === "/";
+        $("refresh-button").disabled = state.busy;
+        [$("folder-button"), $("upload-button"), $("drop-upload-button")].forEach((button) => {
+          button.disabled = state.busy || unavailable;
+        });
+        document.querySelectorAll(".action-button").forEach((button) => {
+          button.disabled = state.busy || unavailable;
+        });
+      }
+
       function setBusy(value) {
         state.busy = value;
-        [$("up-button"), $("refresh-button"), $("folder-button"), $("upload-button"), $("drop-upload-button")].forEach((button) => {
-          button.disabled = value;
-        });
+        updateControls();
         document.body.classList.toggle("is-busy", value);
         if (value) hideDropOverlay();
+      }
+
+      function setConnection(value) {
+        state.connection = value;
+        const badge = $("connection");
+        const labels = {
+          checking: "正在检查 WPS",
+          connected: "WPS 已连接",
+          disconnected: "WPS 未连接",
+          unknown: "WPS 状态未知",
+        };
+        badge.className = "connection " + value;
+        $("connection-label").textContent = labels[value] || labels.checking;
+        updateControls();
+      }
+
+      function isWpsError(error) {
+        return Boolean(
+          error && (
+            error.code === "wps_unavailable" ||
+            error.code === "wps_session_expired" ||
+            error.message === "upstream WPS request failed" ||
+            error.message === "WPS session expired; refresh the configured credentials"
+          )
+        );
+      }
+
+      function showError(error) {
+        if (isWpsError(error)) {
+          setConnection("disconnected");
+          const message = error.code === "wps_session_expired"
+            ? "WPS 未连接（登录已过期），请重新运行 wps_login.py 同步凭据，然后点击刷新"
+            : "WPS 未连接，请先在自己的电脑运行 wps_login.py 登录并同步凭据，然后点击刷新";
+          setStatus(message, "error");
+          return;
+        }
+        if (state.connection === "checking") setConnection("unknown");
+        setStatus(error.message, "error");
       }
 
       function canonicalPath(path) {
@@ -392,7 +449,7 @@ WEB_APP_HTML = r"""<!doctype html>
         $("folder-note").textContent = parts.length ? "当前文件夹中的文件和文件夹" : "管理 WPS 企业云盘中的文件和文件夹";
         $("path-value").textContent = state.path;
         $("drop-target").textContent = state.path;
-        $("up-button").disabled = state.busy || state.path === "/";
+        updateControls();
       }
 
       function formatBytes(value) {
@@ -449,9 +506,17 @@ WEB_APP_HTML = r"""<!doctype html>
         empty.classList.toggle("hidden", entries.length !== 0);
         if (!entries.length) {
           const title = document.createElement("strong");
-          title.textContent = state.entries.length ? "没有匹配的项目" : "这个文件夹还是空的";
+          title.textContent = state.connection === "disconnected"
+            ? "WPS 尚未连接"
+            : state.connection === "unknown"
+              ? "暂时无法读取目录"
+              : state.entries.length ? "没有匹配的项目" : "这个文件夹还是空的";
           const note = document.createElement("span");
-          note.textContent = state.entries.length ? "换一个关键词试试" : "上传文件或新建文件夹开始使用";
+          note.textContent = state.connection === "disconnected"
+            ? "请先运行 wps_login.py 同步凭据，然后点击刷新"
+            : state.connection === "unknown"
+              ? "请点击刷新重试"
+              : state.entries.length ? "换一个关键词试试" : "上传文件或新建文件夹开始使用";
           empty.replaceChildren(title, note);
         }
         entries.forEach((entry) => {
@@ -492,6 +557,7 @@ WEB_APP_HTML = r"""<!doctype html>
           row.append(nameCell, typeCell, sizeCell, timeCell, actionsCell);
           body.append(row);
         });
+        updateControls();
         const total = state.entries.length;
         const visible = entries.length;
         $("panel-summary").innerHTML = state.search.trim()
@@ -507,14 +573,16 @@ WEB_APP_HTML = r"""<!doctype html>
         renderBreadcrumbs();
         if (!quiet) setStatus("正在读取...");
         try {
+          setConnection("checking");
           const data = await api("entries", state.path);
           state.entries = Array.isArray(data.entries) ? data.entries : [];
+          setConnection("connected");
           renderEntries();
           setStatus(`${state.entries.length} 个项目`, "success");
         } catch (error) {
           state.entries = [];
+          showError(error);
           renderEntries();
-          setStatus(error.message, "error");
         }
       }
 
@@ -534,7 +602,7 @@ WEB_APP_HTML = r"""<!doctype html>
       }
 
       function showDropOverlay() {
-        if (state.busy) return;
+        if (state.busy || state.connection !== "connected") return;
         $("drop-target").textContent = state.path;
         $("drop-overlay").classList.add("active");
         $("drop-overlay").setAttribute("aria-hidden", "false");
@@ -589,7 +657,7 @@ WEB_APP_HTML = r"""<!doctype html>
           await api("folders", joinPath(state.path, name), { method: "POST" });
           setStatus("文件夹已创建", "success");
           await load(state.path, true, true);
-        } catch (error) { setStatus(error.message, "error"); }
+        } catch (error) { showError(error); }
         finally { setBusy(false); renderBreadcrumbs(); }
       }
 
@@ -601,7 +669,7 @@ WEB_APP_HTML = r"""<!doctype html>
           await api("entries", path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
           setStatus("名称已更新", "success");
           await load(state.path, true, true);
-        } catch (error) { setStatus(error.message, "error"); }
+        } catch (error) { showError(error); }
         finally { setBusy(false); renderBreadcrumbs(); }
       }
 
@@ -613,7 +681,7 @@ WEB_APP_HTML = r"""<!doctype html>
           await api("entries", path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parent_path: canonicalPath(destination) }) });
           setStatus("项目已移动", "success");
           await load(state.path, true, true);
-        } catch (error) { setStatus(error.message, "error"); }
+        } catch (error) { showError(error); }
         finally { setBusy(false); renderBreadcrumbs(); }
       }
 
@@ -625,7 +693,7 @@ WEB_APP_HTML = r"""<!doctype html>
           await api("entries", path, { method: "DELETE" });
           setStatus("项目已删除", "success");
           await load(state.path, true, true);
-        } catch (error) { setStatus(error.message, "error"); }
+        } catch (error) { showError(error); }
         finally { setBusy(false); renderBreadcrumbs(); }
       }
 
@@ -659,9 +727,14 @@ WEB_APP_HTML = r"""<!doctype html>
               return;
             }
             let message = `上传失败（${xhr.status}）`;
-            try { message = JSON.parse(xhr.responseText).error || message; } catch (_) {}
+            let payload = null;
+            try {
+              payload = JSON.parse(xhr.responseText);
+              message = payload.error || message;
+            } catch (_) {}
             const error = new Error(message);
             error.status = xhr.status;
+            if (payload && typeof payload.code === "string") error.code = payload.code;
             reject(error);
           };
           xhr.onerror = () => reject(new Error("上传连接失败"));
@@ -670,7 +743,7 @@ WEB_APP_HTML = r"""<!doctype html>
       }
 
       async function uploadFiles(files) {
-        if (!files.length || state.busy) return;
+        if (!files.length || state.busy || state.connection !== "connected") return;
         setBusy(true);
         $("progress").classList.remove("hidden");
         try {
@@ -689,7 +762,7 @@ WEB_APP_HTML = r"""<!doctype html>
           }
           setStatus("上传完成", "success");
           await load(state.path, true, true);
-        } catch (error) { setStatus(error.message, "error"); }
+        } catch (error) { showError(error); }
         finally {
           $("progress").classList.add("hidden");
           $("progress").value = 0;

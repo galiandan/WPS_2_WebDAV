@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from wps_adapter.client import WpsCredentials
+from wps_adapter.client import WpsApiError, WpsCredentials
 from wps_adapter.provider import (
     EntryNotFoundError,
     InvalidPathError,
@@ -59,6 +59,7 @@ class FakeStorage:
         self.moved_paths: list[tuple[str, str]] = []
         self.copied_paths: list[tuple[str, str, str, bool]] = []
         self.root_updates: list[str] = []
+        self.wps_error: WpsApiError | None = None
 
     def metadata(self, path: str) -> RemoteEntry:
         if path == "/":
@@ -78,6 +79,8 @@ class FakeStorage:
         raise EntryNotFoundError(path)
 
     def list_path(self, path: str) -> tuple[RemoteEntry, ...]:
+        if self.wps_error is not None:
+            raise self.wps_error
         if path == "/":
             return (self.file, self.folder)
         if path == "/docs":
@@ -151,6 +154,28 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
         self.assertEqual(json.loads(body)["status"], "ok")
+
+    def test_rest_reports_wps_connection_state_errors(self) -> None:
+        self.storage.wps_error = WpsApiError("list files")
+        status, _headers, body = self.request("GET", "/api/v1/entries?path=%2F")
+        self.assertEqual(status, 502)
+        self.assertEqual(
+            json.loads(body),
+            {"error": "upstream WPS request failed", "code": "wps_unavailable"},
+        )
+
+        self.storage.wps_error = WpsApiError("list files", status=401)
+        status, headers, body = self.request("GET", "/api/v1/entries?path=%2F")
+        self.assertEqual(status, 503)
+        self.assertEqual(headers["Retry-After"], "60")
+        self.assertEqual(
+            json.loads(body),
+            {
+                "error": "WPS session expired; refresh the configured credentials",
+                "code": "wps_session_expired",
+                "upstream_status": 401,
+            },
+        )
 
     def test_unauthorised_requests_close_the_connection(self) -> None:
         auth_server = AdapterHTTPServer(
@@ -270,6 +295,10 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"window.addEventListener(\"drop\"", body)
         self.assertIn(b"upload-speed", body)
         self.assertIn(b"formatRate", body)
+        self.assertIn(b'id="connection"', body)
+        self.assertIn("WPS 未连接".encode("utf-8"), body)
+        self.assertIn("wps_login.py 同步凭据".encode("utf-8"), body)
+        self.assertIn(b'wps_unavailable', body)
 
     def test_generated_response_size_is_bounded(self) -> None:
         self.server.application.max_response_body = 64

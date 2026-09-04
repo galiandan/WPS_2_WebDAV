@@ -517,10 +517,17 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                 status = HTTPStatus.SERVICE_UNAVAILABLE
                 message = "WPS session expired; refresh the configured credentials"
                 headers["Retry-After"] = "60"
-            payload: object = {"error": message}
+            payload: dict[str, object] = {
+                "error": message,
+                "code": (
+                    "wps_session_expired"
+                    if exc.status == 401
+                    else "wps_unavailable"
+                ),
+            }
             if rest:
                 if exc.status is not None:
-                    payload = {"error": message, "upstream_status": exc.status}
+                    payload["upstream_status"] = exc.status
                 self._send_json(status, payload, headers=headers)
             else:
                 self._send_error(status, message, rest=False, headers=headers)
