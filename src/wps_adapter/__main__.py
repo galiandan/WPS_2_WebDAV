@@ -13,6 +13,7 @@ from .login_command import (
     run_login_safely,
 )
 from .server import AdapterApplication, BasicAuth, DavLockStore, create_server
+from .settings import DEFAULT_ROOT_NAME, WebSettings
 from .storage import WpsStorage
 
 
@@ -29,7 +30,9 @@ def _env_float(name: str, default: float) -> float:
 def _application() -> AdapterApplication:
     client_config = WpsClientConfig.from_env()
     workspace = client_config.workspace
-    root_name = os.environ.get("WPS_ROOT_NAME", "WPS Enterprise Drive")
+    root_name = os.environ.get("WPS_ROOT_NAME") or DEFAULT_ROOT_NAME
+    web_settings = WebSettings(fallback_name=root_name)
+    root_name = web_settings.name
     root_id = (
         workspace.root_id
         if workspace is not None
@@ -65,6 +68,7 @@ def _application() -> AdapterApplication:
         max_control_body=_env_int("WPS_MAX_CONTROL_BODY", 1024 * 1024),
         max_response_body=_env_int("WPS_MAX_RESPONSE_BODY_BYTES", 16 * 1024 * 1024),
         locks=DavLockStore(max_locks=_env_int("WPS_MAX_LOCKS", 4096)),
+        web_settings=web_settings,
     )
 
 

@@ -4,7 +4,7 @@
 
 ## 浏览器页面
 
-打开 `http://<服务器地址>:<端口>/` 并通过适配器 Basic Auth 后，可以在网页中浏览目录、打开文件夹、上传文件、下载文件、新建文件夹、重命名、移动和删除。页面只调用同源 REST 接口；上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。
+打开 `http://<服务器地址>:<端口>/` 并通过适配器 Basic Auth 后，可以在网页中浏览目录、打开文件夹、上传文件、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。
 
 ## WebDAV
 
@@ -47,12 +47,27 @@ PUT  /api/v1/upload?path=/folder/file.txt&overwrite=true
 POST /api/v1/folders?path=/folder/new-folder
 DELETE /api/v1/entries?path=/folder/file.txt
 PATCH /api/v1/entries?path=/folder/file.txt
+GET  /api/v1/settings
+PATCH /api/v1/settings
 POST  /api/v1/session/import
 ```
 
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
 
 其中 `GET entries`、`metadata`、`download`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到当前 WPS 原型；`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+
+### Web settings
+
+`GET /api/v1/settings` 返回当前网页显示名称。使用适配器 Basic Auth 发送下面的请求即可修改名称；网页按钮会自动完成同样的请求：
+
+```http
+PATCH /api/v1/settings
+Content-Type: application/json
+
+{"name":"我的学校云盘"}
+```
+
+成功响应为 `200` JSON。名称只影响适配器网页、虚拟根目录元数据和 WebDAV `displayname`，不会重命名 WPS 远端文件夹。服务会将名称以权限受限的 JSON 文件保存到 `/etc/wps-adapter/secrets/web-settings.json`，不访问 WPS，因此即使 WPS 当前未连接也可以修改。
 
 ### Importing a WPS session
 

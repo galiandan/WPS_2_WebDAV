@@ -213,6 +213,14 @@ class WpsStorage:
             self.root_id = str(root_id)
             self._cache.clear()
 
+    def set_root_name(self, root_name: str) -> None:
+        """Update the adapter-side display name for the virtual root."""
+
+        if not isinstance(root_name, str) or not root_name:
+            raise ValueError("root_name is required")
+        with self._lock:
+            self.root_name = root_name
+
     def _children(self, parent_id: str) -> tuple[RemoteEntry, ...]:
         self._sync_workspace_root()
         now = time.monotonic()

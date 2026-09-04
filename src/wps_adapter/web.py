@@ -239,6 +239,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         </div>
       </div>
       <div class="header-actions">
+        <button id="settings-button" class="icon-button" type="button" title="设置云盘名称" aria-label="设置云盘名称">⚙</button>
         <button id="up-button" class="icon-button" type="button" title="返回上一级" aria-label="返回上一级">←</button>
         <button id="refresh-button" class="icon-button" type="button" title="刷新目录" aria-label="刷新目录">↻</button>
         <button id="folder-button" type="button"><span class="button-icon" aria-hidden="true">＋</span>新建文件夹</button>
@@ -317,12 +318,16 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       const state = { path: "/", entries: [], busy: false, search: "", connection: "checking" };
       const $ = (id) => document.getElementById(id);
       const apiRoot = "/api/v1/";
-      const rootName = __WPS_ROOT_NAME_JSON__;
+      let rootName = __WPS_ROOT_NAME_JSON__;
       let modalResolve = null;
       let modalMode = "input";
 
+      function apiUrl(route) {
+        return new URL(apiRoot + route, window.location.origin);
+      }
+
       function pathUrl(route, path) {
-        const url = new URL(apiRoot + route, window.location.origin);
+        const url = apiUrl(route);
         url.searchParams.set("path", path);
         return url;
       }
@@ -360,6 +365,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
 
       function updateControls() {
         const unavailable = state.connection !== "connected";
+        $("settings-button").disabled = state.busy;
         $("up-button").disabled = state.busy || unavailable || state.path === "/";
         $("refresh-button").disabled = state.busy;
         [$("folder-button"), $("upload-button"), $("drop-upload-button")].forEach((button) => {
@@ -608,6 +614,28 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         link.remove();
       }
 
+      async function changeRootName() {
+        const name = await openInputModal("设置云盘名称", "云盘名称", rootName, "例如：我的学校云盘", "保存");
+        if (!name || name === rootName) return;
+        setBusy(true);
+        try {
+          const response = await fetch(apiUrl("settings"), {
+            method: "PATCH",
+            cache: "no-store",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+          const data = await responseData(response);
+          if (!data || typeof data.name !== "string") throw new Error("服务器没有返回新的云盘名称");
+          rootName = data.name;
+          document.title = rootName;
+          renderBreadcrumbs();
+          setStatus("云盘名称已更新", "success");
+        } catch (error) { showError(error); }
+        finally { setBusy(false); renderBreadcrumbs(); }
+      }
+
       function hasFileTransfer(event) {
         const transfer = event.dataTransfer;
         if (!transfer) return false;
@@ -793,6 +821,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       });
       $("modal-cancel").addEventListener("click", () => closeModal(null));
       $("modal").addEventListener("cancel", (event) => { event.preventDefault(); closeModal(null); });
+      $("settings-button").addEventListener("click", changeRootName);
       $("up-button").addEventListener("click", () => load(parentPath(state.path)));
       $("refresh-button").addEventListener("click", () => load(state.path));
       $("folder-button").addEventListener("click", createFolder);

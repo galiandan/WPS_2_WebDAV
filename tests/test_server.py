@@ -20,6 +20,7 @@ from wps_adapter.provider import (
     UnsupportedOperationError,
 )
 from wps_adapter.server import AdapterApplication, AdapterHTTPServer, BasicAuth, DavLockStore
+from wps_adapter.settings import WebSettings
 from wps_adapter.storage import split_remote_path
 from wps_adapter.web import render_web_app
 from wps_adapter.workspace import WorkspaceState
@@ -306,6 +307,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn("WPS 未连接".encode("utf-8"), body)
         self.assertIn("wps_login.py 同步凭据".encode("utf-8"), body)
         self.assertIn(b'wps_unavailable', body)
+        self.assertIn(b'id="settings-button"', body)
 
     def test_web_file_manager_uses_configured_root_name(self) -> None:
         self.server.application.web_root_name = "学校云盘 <script>alert('x')</script> \"资料\""
@@ -316,10 +318,44 @@ class ServerTests(unittest.TestCase):
             body,
         )
         self.assertIn(
-            'const rootName = "学校云盘 \\u003cscript\\u003ealert(\'x\')\\u003c/script\\u003e'.encode("utf-8"),
+            'let rootName = "学校云盘 \\u003cscript\\u003ealert(\'x\')\\u003c/script\\u003e'.encode("utf-8"),
             body,
         )
         self.assertNotIn(b"<script>alert('x')</script>", body)
+
+    def test_web_settings_can_be_updated_without_wps_access(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = WebSettings(str(Path(directory) / "web-settings.json"), fallback_name="Drive")
+            self.server.application = AdapterApplication(self.storage, web_settings=settings)
+
+            status, _headers, body = self.request("GET", "/api/v1/settings")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), {"status": "ok", "name": "Drive"})
+
+            payload = json.dumps({"name": "我的学校云盘"}, ensure_ascii=False).encode("utf-8")
+            status, _headers, body = self.request(
+                "PATCH",
+                "/api/v1/settings",
+                body=payload,
+                headers={"Content-Length": str(len(payload)), "Content-Type": "application/json"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), {"status": "ok", "name": "我的学校云盘"})
+            self.assertEqual(self.server.application.current_web_root_name(), "我的学校云盘")
+
+            status, _headers, body = self.request("GET", "/")
+            self.assertEqual(status, 200)
+            self.assertIn("我的学校云盘".encode("utf-8"), body)
+            self.assertEqual(WebSettings(str(Path(directory) / "web-settings.json")).name, "我的学校云盘")
+
+            invalid = b'{"name":""}'
+            status, _headers, _body = self.request(
+                "PATCH",
+                "/api/v1/settings",
+                body=invalid,
+                headers={"Content-Length": str(len(invalid)), "Content-Type": "application/json"},
+            )
+            self.assertEqual(status, 400)
 
     def test_generated_response_size_is_bounded(self) -> None:
         self.server.application.max_response_body = 64

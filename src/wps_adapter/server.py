@@ -36,6 +36,7 @@ from .provider import (
     UnsupportedOperationError,
 )
 from .storage import WpsStorage, join_remote_path, split_remote_path
+from .settings import WebSettings, validate_root_name
 from .web import render_web_app
 from .workspace import WorkspaceConfigError, validate_workspace_identifier
 
@@ -234,12 +235,15 @@ class AdapterApplication:
     max_control_body: int = 1024 * 1024
     max_response_body: int = 16 * 1024 * 1024
     web_root_name: str = "WPS Enterprise Drive"
+    web_settings: WebSettings | None = None
 
     def __post_init__(self) -> None:
         self.dav_prefix = self._normalise_prefix(self.dav_prefix)
         self.rest_prefix = self._normalise_prefix(self.rest_prefix)
         if not self.web_root_name:
             self.web_root_name = "WPS Enterprise Drive"
+        if self.web_settings is not None:
+            self._apply_web_root_name(self.web_settings.name)
         if self.max_propfind_entries <= 0:
             raise ValueError("max_propfind_entries must be positive")
         if self.max_propfind_depth <= 0:
@@ -254,6 +258,26 @@ class AdapterApplication:
         if not value.startswith("/"):
             value = "/" + value
         return value.rstrip("/") or "/"
+
+    def _apply_web_root_name(self, name: str) -> None:
+        self.web_root_name = name
+        set_root_name = getattr(self.storage, "set_root_name", None)
+        if callable(set_root_name):
+            set_root_name(name)
+
+    def current_web_root_name(self) -> str:
+        if self.web_settings is not None:
+            name = self.web_settings.name
+            if name != self.web_root_name:
+                self._apply_web_root_name(name)
+        return self.web_root_name
+
+    def set_web_root_name(self, value: object) -> str:
+        name = validate_root_name(value)
+        if self.web_settings is not None:
+            self.web_settings.set_name(name)
+        self._apply_web_root_name(name)
+        return name
 
 
 class _LimitedReader:
@@ -678,7 +702,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def _handle_web_app(self) -> None:
         self._send_bytes(
             HTTPStatus.OK,
-            render_web_app(self.application.web_root_name).encode("utf-8"),
+            render_web_app(self.application.current_web_root_name()).encode("utf-8"),
             content_type="text/html; charset=utf-8",
             headers={
                 "Content-Security-Policy": (
@@ -1190,6 +1214,13 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(HTTPStatus.NO_CONTENT)
 
     def _do_rest_get(self, route: str, query: dict[str, list[str]]) -> None:
+        if route == "settings":
+            self._discard_body()
+            self._send_json(
+                HTTPStatus.OK,
+                {"status": "ok", "name": self.application.current_web_root_name()},
+            )
+            return
         path = self._query_path(query)
         if route in {"entries", "list"}:
             entry = self.application.storage.metadata(path)
@@ -1322,6 +1353,15 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(HTTPStatus.NO_CONTENT)
 
     def _do_rest_patch(self, route: str, query: dict[str, list[str]]) -> None:
+        if route == "settings":
+            payload = self._json_body()
+            if payload is None:
+                return
+            if set(payload) != {"name"}:
+                raise ValueError("JSON field 'name' is required")
+            name = self.application.set_web_root_name(payload["name"])
+            self._send_json(HTTPStatus.OK, {"status": "ok", "name": name})
+            return
         if route not in {"entries", "files"}:
             self._discard_body()
             self._send_error(HTTPStatus.NOT_FOUND, "unknown REST route", rest=True)

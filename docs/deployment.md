@@ -4,7 +4,7 @@
 
 ## One-command install
 
-下面两个脚本都可以通过一行命令启动。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
+下面两个脚本都可以通过一行命令启动。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。云盘显示名称安装后直接在网页右上角齿轮中修改，不需要编辑配置文件。
 
 ```bash
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
@@ -124,7 +124,9 @@ ADAPTER_PORT=18080
 
 `ADAPTER_PORT` 可以改成任意未被占用的端口。`auto` 表示登录助手从当前官方 WPS 企业云盘地址识别企业和群组，并默认使用企业云盘根目录 `0`；只有登录助手显式使用 `--workspace-url` 时才会选择具体文件夹。也可以把两个变量改成固定 ID 做手工部署。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
 
-`WPS_ROOT_NAME` 只控制网页标题、左上角品牌、根目录面包屑、根目录标题以及适配器返回的根目录元数据，不会重命名 WPS 远端文件夹。修改 `/etc/wps-adapter/wps-adapter.env` 后重启服务即可生效：Native 执行 `sudo systemctl restart wps-adapter`，Docker 执行 `sudo docker restart wps-adapter`。
+`WPS_ROOT_NAME` 是网页设置尚未保存时使用的默认名称；名称会显示在网页标题、左上角品牌、根目录面包屑、根目录标题以及适配器返回的根目录元数据中，不会重命名 WPS 远端文件夹。修改配置文件后重启服务即可生效：Native 执行 `sudo systemctl restart wps-adapter`，Docker 执行 `sudo docker restart wps-adapter`。
+
+更推荐直接打开网页点击右上角齿轮修改名称。网页保存的值位于 `/etc/wps-adapter/secrets/web-settings.json`，优先级高于 `WPS_ROOT_NAME`，并且不需要重启服务。
 
 检查配置不会访问 WPS：
 

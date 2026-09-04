@@ -6,7 +6,7 @@
 WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 ```
 
-当前版本：`0.9.6`，项目仍处于实验性阶段。
+当前版本：`0.9.7`，项目仍处于实验性阶段。
 
 ## 项目定位
 
@@ -31,7 +31,7 @@ WPS 相关接口不是公开稳定 API。本项目只根据本人账号的真实
 - WebDAV `PROPFIND`、`GET`、`HEAD`、`PUT`、`MKCOL`、`DELETE`、`MOVE`、`COPY`、`LOCK`、`UNLOCK`
 - `Depth: 0`、`1`、`infinity`，带条目数和深度保护
 - 网页拖动上传和上传速度显示
-- 网页标题、品牌和根目录支持自定义显示名称
+- 网页内直接修改云盘显示名称，所有客户端统一生效
 - Native 和 Docker 两种部署方式
 - 自定义监听端口
 - 一个统一的 Native/Docker 卸载脚本
@@ -151,7 +151,7 @@ curl -u <适配器用户名> \
 http://<VPS-IP>:<端口>/
 ```
 
-登录后可以浏览目录、进入文件夹、拖动上传、查看上传进度和速度、下载、创建文件夹、重命名、移动和删除。
+登录后可以浏览目录、进入文件夹、拖动上传、查看上传进度和速度、下载、创建文件夹、重命名、移动和删除。点击右上角的齿轮按钮即可修改云盘显示名称，不需要命令行；保存后会立即更新当前页面，并在服务重启后继续保留。
 
 ## WebDAV
 
@@ -239,13 +239,14 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 
 ## 配置
 
-安装器会生成：
+安装器会生成下面的文件；网页首次保存云盘名称后，还会生成 `web-settings.json`：
 
 ```text
 /etc/wps-adapter/wps-adapter.env
 /etc/wps-adapter/secrets/wps-cookie
 /etc/wps-adapter/secrets/wps-csrf
 /etc/wps-adapter/secrets/wps-workspace.json
+/etc/wps-adapter/secrets/web-settings.json
 /etc/wps-adapter/secrets/adapter-username
 /etc/wps-adapter/secrets/adapter-password
 ```
@@ -256,7 +257,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 | --- | --- | --- |
 | `WPS_GROUP_ID` | `auto` | 登录助手自动识别企业群组 |
 | `WPS_ROOT_ID` | `auto` | `auto` 使用工作区文件，默认根目录为 `0` |
-| `WPS_ROOT_NAME` | `WPS Enterprise Drive` | 网页和适配器根目录的显示名称，不会修改 WPS 远端名称 |
+| `WPS_ROOT_NAME` | `WPS Enterprise Drive` | 网页首次使用时的默认显示名称；网页修改后以页面保存值为准 |
 | `WPS_WORKSPACE_FILE` | `/etc/wps-adapter/secrets/wps-workspace.json` | 群组和根目录选择 |
 | `WPS_AUTO_REFRESH` | `true` | 上游 `401` 后自动续期 |
 | `WPS_MULTIPART_THRESHOLD` | `52428800` | 分片上传阈值，单位字节 |
@@ -270,13 +271,15 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 
 完整配置模板见 [`.env.example`](.env.example)。不要把密钥直接写入公开配置或 shell 历史。
 
-`WPS_ROOT_NAME` 是网页端显示的云盘名称，会显示在浏览器标题、左上角品牌、根目录面包屑和根目录标题中。例如：
+最简单的修改方式是打开网页后点击右上角齿轮，输入新的云盘名称并点击“保存”。名称会写入 `/etc/wps-adapter/secrets/web-settings.json`，因此对其他浏览器、WebDAV 和 REST 根目录元数据也保持一致。这个操作不修改 WPS 远端文件夹名称。
+
+如果还没有打开网页，也可以把 `WPS_ROOT_NAME` 作为首次默认名称写入配置：
 
 ```dotenv
 WPS_ROOT_NAME="我的学校云盘"
 ```
 
-它只改变适配器的显示名称，不会重命名 WPS 中的远端文件夹。修改后重启适配器服务，网页刷新后即可生效；Native 使用 `sudo systemctl restart wps-adapter`，Docker 使用 `sudo docker restart wps-adapter`。
+网页保存的名称优先于 `WPS_ROOT_NAME`；删除网页设置文件后才会回退到配置中的默认值。
 
 ## 当前限制
 
