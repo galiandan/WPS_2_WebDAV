@@ -314,4 +314,4 @@ git diff --check
 
 ## License
 
-[MIT License](LICENSE)。WPS 商标、服务和接口归其各自权利人所有；本项目不代表 WPS 官方立场。
+本项目采用 [GNU General Public License v3.0 or later (GPL-3.0-or-later)](LICENSE) 发布。WPS 商标、服务和接口归其各自权利人所有；本项目不代表 WPS 官方立场。

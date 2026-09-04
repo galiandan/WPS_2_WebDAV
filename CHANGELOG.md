@@ -2,6 +2,12 @@
 
 本项目遵循 Keep a Changelog 风格。版本号用于记录适配器行为变化，不代表 WPS 官方兼容性承诺。
 
+## [Unreleased]
+
+### Changed
+
+- 项目开源协议从 MIT 改为 GNU GPL-3.0-or-later。
+
 ## [0.9.7] - 2026-09-04
 
 ### Added
