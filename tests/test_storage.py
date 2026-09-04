@@ -61,6 +61,7 @@ class CopyClient(FakeClient):
         super().__init__()
         self.children["root"] = (
             RemoteEntry(id="source", name="source.txt", kind="file", parent_id="root", size=11),
+            RemoteEntry(id="docs", name="docs", kind="folder", parent_id="root", size=0),
         )
         self.source_bytes = b"copy source"
 
@@ -80,6 +81,16 @@ class CopyClient(FakeClient):
                 self.body.close()
 
         return DownloadStream(Response(self.source_bytes), "finished", "text/plain", 11)
+
+
+class NativeCopyClient(CopyClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.copy_calls = []
+
+    def copy(self, file_id: str, target_parent_id: str):
+        self.copy_calls.append((file_id, target_parent_id))
+        return "native-copy"
 
 
 class FailingFolderCopyClient(FakeClient):
@@ -217,6 +228,27 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result.name, "copied.txt")
         self.assertEqual(client.download_calls[0][0], "source")
         self.assertEqual(client.upload_calls[0][0:3], ("root", "copied.txt", b"copy source"))
+
+    def test_native_copy_is_used_only_when_destination_preserves_name(self) -> None:
+        client = NativeCopyClient()
+        storage = WpsStorage(client, root_id="root", cache_ttl=60)
+
+        result = storage.copy_path("/source.txt", "/docs/source.txt", depth="0")
+
+        self.assertEqual(result.id, "native-copy")
+        self.assertEqual(client.copy_calls, [("source", "docs")])
+        self.assertEqual(client.download_calls, [])
+        self.assertEqual(client.upload_calls, [])
+
+    def test_renamed_file_copy_uses_relay_instead_of_native_copy(self) -> None:
+        client = NativeCopyClient()
+        storage = WpsStorage(client, root_id="root", cache_ttl=60)
+
+        result = storage.copy_path("/source.txt", "/renamed.txt", depth="0")
+
+        self.assertEqual(result.name, "renamed.txt")
+        self.assertEqual(client.copy_calls, [])
+        self.assertEqual(client.upload_calls[0][0:3], ("root", "renamed.txt", b"copy source"))
 
     def test_recursive_copy_attempts_to_clean_a_new_root_after_failure(self) -> None:
         client = FailingFolderCopyClient()

@@ -192,6 +192,13 @@ health_check() {
 archive_members_are_safe() {
     local archive="$1"
     local member
+    # Names alone do not reveal symlinks, hardlinks, devices, or FIFOs.  Do
+    # this check before extraction so a malicious archive cannot influence
+    # extraction through a special entry.
+    tar -tvzf "$archive" | awk '
+        { type = substr($1, 1, 1); if (type != "-" && type != "d") bad = 1 }
+        END { exit bad }
+    ' || return 1
     while IFS= read -r member; do
         member="${member%/}"
         [[ -z "$member" ]] && continue

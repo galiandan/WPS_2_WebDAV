@@ -540,7 +540,14 @@ class WpsStorage:
             )
 
         native_copy = getattr(self.client, "copy", None)
-        if source.kind == "file" and callable(native_copy):
+        # The captured WPS COPY API accepts only a destination parent.  It
+        # always preserves the source name, so using it for a destination
+        # with a different basename would report a path that does not exist.
+        if (
+            source.kind == "file"
+            and destination_name == source.name
+            and callable(native_copy)
+        ):
             copied_id = native_copy(source.id, destination_parent.id)
             self.invalidate()
             return RemoteEntry(
