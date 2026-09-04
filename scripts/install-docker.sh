@@ -5,8 +5,8 @@ set -Eeuo pipefail
 # the image contains only the dependency-free application code.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-fe8daf477ac80788995c32821e33121e3b438c6e}"
-SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-565ba5d7b678ccbd9e0285dd5d635b2ebb4ed339550bd9ddf6fd54964245f894}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-52be4d8e1b51147cae93687a89a01e2567808ad5}"
+SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-5edb532427996c75fc2398ae79c5572b40b86ac53345e3ffc0f7de1c8c655d31}"
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
