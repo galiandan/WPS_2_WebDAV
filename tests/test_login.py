@@ -627,6 +627,15 @@ class LoginHelperTests(unittest.TestCase):
         session.navigate("https://365.kdocs.cn/space/tenant/group/")
         self.assertEqual(calls, [("Page.navigate", {"url": "https://365.kdocs.cn/space/tenant/group/"})])
 
+    def test_chrome_session_close_ignores_cache_cleanup_race(self) -> None:
+        class Profile:
+            def cleanup(self) -> None:
+                raise OSError("directory not empty")
+
+        session = ChromeLoginSession()
+        session._profile = Profile()  # type: ignore[assignment]
+        session.close()
+
     def test_login_target_is_validated_before_browser_starts(self) -> None:
         with patch("wps_adapter.login.ChromeLoginSession") as session:
             with self.assertRaisesRegex(LoginError, "绝对路径"):

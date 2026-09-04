@@ -992,7 +992,12 @@ class ChromeLoginSession:
         if self.startup_timeout <= 0:
             raise LoginError("Chrome 启动超时时间必须为正数")
         browser = find_browser(self.browser)
-        self._profile = tempfile.TemporaryDirectory(prefix="wps-login-")
+        # Chrome can keep cache files briefly after its process exits. Python
+        # 3.11+ can safely ignore that cleanup race without failing login.
+        self._profile = tempfile.TemporaryDirectory(
+            prefix="wps-login-",
+            ignore_cleanup_errors=True,
+        )
         port = _find_free_port()
         command = [
             browser,
@@ -1072,7 +1077,13 @@ class ChromeLoginSession:
         profile = self._profile
         self._profile = None
         if profile is not None:
-            profile.cleanup()
+            try:
+                profile.cleanup()
+            except OSError:
+                # A Chrome cache child can still hold a file briefly. The
+                # profile is isolated and disposable, so cleanup must not
+                # turn a successful credential sync into a login failure.
+                pass
 
     def __exit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
         self.close()
