@@ -5,8 +5,8 @@ set -Eeuo pipefail
 # falls back to a portable background process on systems without systemd.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-a16f62289a00bbc5e4ffb11b757e13ab043019c7}"
-SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-7c96d26599c6ce7e60e4667853d1a5807230c0f5bf77cb2ceb2ca3d3aab4824c}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-fe8daf477ac80788995c32821e33121e3b438c6e}"
+SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-565ba5d7b678ccbd9e0285dd5d635b2ebb4ed339550bd9ddf6fd54964245f894}"
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
