@@ -4,49 +4,18 @@
 
 ## One-command install
 
-下面两个脚本都可以通过国内加速节点下载，失败后自动回退到 GitHub 直连。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
-
-先在当前终端定义下载函数：
+下面两个脚本都可以通过一行命令启动。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
 
 ```bash
-download_and_run() {
-  SCRIPT_PATH="$1"
-  shift
-  RAW_URL="https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/$SCRIPT_PATH"
-  INSTALLER="$(mktemp -t wps-adapter-installer.XXXXXX)" || return 1
-  DOWNLOADED=0
-  for URL in "https://gh-proxy.com/$RAW_URL" "https://ghfast.top/$RAW_URL" "$RAW_URL"; do
-    : > "$INSTALLER"
-    printf '下载安装器：%s\n' "$URL"
-    if curl --fail --show-error --location --progress-bar --connect-timeout 10 --max-time 60 --retry 1 --max-filesize 1048576 --proto '=https' --proto-redir '=https' --tlsv1.2 "$URL" -o "$INSTALLER" && bash -n "$INSTALLER"; then
-      DOWNLOADED=1
-      if sudo bash "$INSTALLER" "$@"; then
-        STATUS=0
-      else
-        STATUS="$?"
-      fi
-      rm -f "$INSTALLER"
-      return "$STATUS"
-    fi
-  done
-  if (( ! DOWNLOADED )); then
-    rm -f "$INSTALLER"
-    echo '安装器下载失败' >&2
-    return 1
-  fi
-}
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
 ```
 
-Native：
-
-```bash
-download_and_run scripts/install-native.sh --port 18080
-```
+上面是 Native 安装。把最后的 `18080` 换成你想使用的端口即可。
 
 Docker：
 
 ```bash
-download_and_run scripts/install-docker.sh --port 18080
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080
 ```
 
 安装脚本会从脚本内固定的 40 位 Git 提交归档下载代码，并校验归档内置的 SHA-256 文件清单，不要求 VPS 已安装 `git`；可用 `--source-ref` 和对应的 `--source-manifest-sha256` 指定另一个完整提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
@@ -54,8 +23,10 @@ download_and_run scripts/install-docker.sh --port 18080
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
 ```bash
-download_and_run scripts/install-docker.sh --port 18080 --replace-native
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080 --replace-native
 ```
+
+如果 `gh-proxy.com` 无法访问，把命令中的 `gh-proxy.com` 替换为 `ghfast.top`。安装器运行后会从固定提交归档下载项目，并自行校验文件清单。
 
 建议先下载脚本检查内容，再执行；不要把未知来源的内容直接通过管道交给 root。国内加速节点只用于传输，项目归档会按固定清单校验。安装器内部的所有下载都有连接超时和总超时，并会在候选地址之间自动回退。
 

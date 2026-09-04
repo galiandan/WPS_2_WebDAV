@@ -81,63 +81,31 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 
 适合不想使用 Docker 的 VPS。主机有 systemd 时会注册开机启动；没有 systemd 时会使用便携后台模式，并提示你手动处理开机启动。
 
-先定义一个下载并执行函数。它会优先使用国内加速节点，失败后自动切换到另一个节点，最后才尝试 GitHub 直连：
+直接复制对应的一行命令即可。命令会显示下载进度；安装器启动后会校验固定版本，并在下载项目归档时自动切换国内节点和 GitHub 直连：
 
 ```bash
-download_and_run() {
-  SCRIPT_PATH="$1"
-  shift
-  RAW_URL="https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/$SCRIPT_PATH"
-  INSTALLER="$(mktemp -t wps-adapter-installer.XXXXXX)" || return 1
-  DOWNLOADED=0
-  for URL in "https://gh-proxy.com/$RAW_URL" "https://ghfast.top/$RAW_URL" "$RAW_URL"; do
-    : > "$INSTALLER"
-    printf '下载安装器：%s\n' "$URL"
-    if curl --fail --show-error --location --progress-bar \
-        --connect-timeout 10 --max-time 60 --retry 1 --max-filesize 1048576 \
-        --proto '=https' --proto-redir '=https' --tlsv1.2 \
-        "$URL" -o "$INSTALLER" && bash -n "$INSTALLER"; then
-      DOWNLOADED=1
-      if sudo bash "$INSTALLER" "$@"; then
-        STATUS=0
-      else
-        STATUS="$?"
-      fi
-      rm -f "$INSTALLER"
-      return "$STATUS"
-    fi
-  done
-  if (( ! DOWNLOADED )); then
-    rm -f "$INSTALLER"
-    echo '安装器下载失败' >&2
-    return 1
-  fi
-}
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
 ```
 
-安装 Native，默认端口 `54321`：
-
-```bash
-download_and_run scripts/install-native.sh --port 54321
-```
-
-自定义端口时，把最后的端口参数改成目标端口，例如 `--port 18080`。
+默认端口是 `54321`。自定义端口时，只把命令最后的 `54321` 改成目标端口，例如 `--port 18080`。
 
 ### 方式二：Docker
 
 适合已经使用 Docker 的 VPS。若没有 Docker，脚本会根据检测到的包管理器安装对应软件包，并支持 systemd、OpenRC 和 SysV service 启动 Docker daemon：
 
 ```bash
-download_and_run scripts/install-docker.sh --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ```
 
 如果当前正在运行 Native 服务，切换到 Docker 时明确加上：
 
 ```bash
-download_and_run scripts/install-docker.sh --port 54321 --replace-native
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321 --replace-native
 ```
 
 两种安装器都会保留 `/etc/wps-adapter/secrets/` 中的凭据。Docker 安装器在构建或健康检查失败时，会尝试恢复原来的服务或容器。
+
+如果 `gh-proxy.com` 无法访问，把命令中的 `gh-proxy.com` 替换为 `ghfast.top`，其他内容不变。
 
 > 一键脚本会从国内加速节点开始尝试下载脚本内固定的 40 位 Git 提交归档，失败后回退到 GitHub 直连；不会直接信任可变的 `main` 分支，并在 root 文件操作前校验归档内容清单。第三方加速节点只用于传输，归档内容仍会通过固定清单校验。升级时先检查脚本内容；也可以用 `--source-ref <40位提交号> --source-manifest-sha256 <64位摘要>` 指定另一个不可变版本。
 
@@ -166,36 +134,13 @@ REST：   http://<VPS-IP>:54321/api/v1/
 
 安装器只负责部署服务，不会替你登录 WPS。登录助手必须在你自己的电脑上运行，因为 WPS 登录 Cookie 不能由适配器网页跨域读取。
 
-登录助手是一个独立的单文件脚本，不需要 clone 整个项目。网络受限时也按同样顺序尝试国内节点：
+登录助手是一个独立的单文件脚本，不需要 clone 整个项目。直接下载并运行：
 
 ```bash
-LOGIN_RAW_URL="https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py"
-LOGIN_FILE="$(mktemp -t wps-login.XXXXXX)"
-LOGIN_DOWNLOADED=0
-for URL in "https://gh-proxy.com/$LOGIN_RAW_URL" "https://ghfast.top/$LOGIN_RAW_URL" "$LOGIN_RAW_URL"; do
-  : > "$LOGIN_FILE"
-  if curl --fail --show-error --location --progress-bar \
-      --connect-timeout 10 --max-time 60 --retry 1 --max-filesize 5242880 \
-      --proto '=https' --proto-redir '=https' --tlsv1.2 \
-      "$URL" -o "$LOGIN_FILE"; then
-    LOGIN_DOWNLOADED=1
-    break
-  fi
-done
-if (( LOGIN_DOWNLOADED )); then
-  mv "$LOGIN_FILE" wps_login.py
-else
-  rm -f "$LOGIN_FILE"
-  echo '登录助手下载失败' >&2
-  exit 1
-fi
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
 ```
 
-然后运行向导：
-
-```bash
-python3 wps_login.py
-```
+如果 `gh-proxy.com` 无法访问，把命令中的 `gh-proxy.com` 替换为 `ghfast.top`。如果已经下载过脚本，也可以只运行 `python3 wps_login.py`。
 
 如果你已经 clone 了项目，也可以直接运行仓库根目录中的同名文件。登录助手只依赖本机 Python 和 Chrome/Chromium，不需要安装项目本身。
 

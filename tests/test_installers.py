@@ -95,7 +95,10 @@ class InstallerTemplateTests(unittest.TestCase):
             self.assertIn("ghfast.top", document)
             self.assertIn("--connect-timeout 10", document)
             self.assertIn("--max-time 60", document)
-            self.assertIn("download_and_run", document)
+            self.assertNotIn("download_and_run", document)
+            self.assertIn("set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1", document)
+            self.assertIn("scripts/install-native.sh", document)
+            self.assertIn("scripts/install-docker.sh", document)
 
         self.assertIn('awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP"', native)
         self.assertIn('--user "$RUN_UID:$RUN_GID"', docker)
