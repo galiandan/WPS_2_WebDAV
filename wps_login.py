@@ -1525,7 +1525,7 @@ __all__ = [
 ]
 
 
-__version__ = '0.9.4'
+__version__ = '0.9.5'
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

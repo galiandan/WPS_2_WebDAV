@@ -59,7 +59,7 @@ class InstallerTemplateTests(unittest.TestCase):
         self.assertIn("/etc/wps-adapter/secrets/", script)
         self.assertIn("com.galiandan.wps-adapter.managed", script)
         self.assertIn("Description=WPS enterprise cloud drive WebDAV adapter", script)
-        self.assertIn("ExecStart=/usr/bin/python3 -m wps_adapter serve", script)
+        self.assertIn("python3(\\.[0-9]+)* -m wps_adapter serve", script)
         self.assertIn("不会删除 WPS 云盘上的远端文件", script)
         self.assertNotIn("rm -rf / ", script)
 

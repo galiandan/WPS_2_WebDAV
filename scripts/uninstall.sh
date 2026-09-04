@@ -129,7 +129,11 @@ validate_unit() {
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     grep -Fqx 'WorkingDirectory=/opt/wps-adapter' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
-    grep -Fqx 'ExecStart=/usr/bin/python3 -m wps_adapter serve' "$SERVICE_FILE" \
+    grep -Eq '^ExecStart=/[^[:space:]]*/python3(\.[0-9]+)* -m wps_adapter serve$' "$SERVICE_FILE" \
+        || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
+    grep -Fqx 'EnvironmentFile=-/etc/wps-adapter/wps-adapter.env' "$SERVICE_FILE" \
+        || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
+    grep -Fqx 'Environment=PYTHONPATH=/opt/wps-adapter/src' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     UNIT_MANAGED=1
 }
