@@ -21,6 +21,7 @@ from wps_adapter.provider import (
 )
 from wps_adapter.server import AdapterApplication, AdapterHTTPServer, BasicAuth, DavLockStore
 from wps_adapter.storage import split_remote_path
+from wps_adapter.web import render_web_app
 from wps_adapter.workspace import WorkspaceState
 
 
@@ -128,6 +129,12 @@ class ImportCredentialSource:
     def replace_credentials(self, credentials: WpsCredentials) -> bool:
         self.credentials = credentials
         return True
+
+
+class WebRenderTests(unittest.TestCase):
+    def test_render_web_app_uses_default_for_empty_root_name(self) -> None:
+        rendered = render_web_app("")
+        self.assertIn("WPS Enterprise Drive", rendered)
 
 
 class ServerTests(unittest.TestCase):
@@ -289,7 +296,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn("Content-Security-Policy", headers)
-        self.assertIn("WPS 企业云盘".encode("utf-8"), body)
+        self.assertIn(b"WPS Enterprise Drive", body)
         self.assertIn(b'const apiRoot = "/api/v1/";', body)
         self.assertIn(b"drop-overlay", body)
         self.assertIn(b"window.addEventListener(\"drop\"", body)
@@ -299,6 +306,20 @@ class ServerTests(unittest.TestCase):
         self.assertIn("WPS 未连接".encode("utf-8"), body)
         self.assertIn("wps_login.py 同步凭据".encode("utf-8"), body)
         self.assertIn(b'wps_unavailable', body)
+
+    def test_web_file_manager_uses_configured_root_name(self) -> None:
+        self.server.application.web_root_name = "学校云盘 <script>alert('x')</script> \"资料\""
+        status, _headers, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(
+            "学校云盘 &lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt; &quot;资料&quot;".encode("utf-8"),
+            body,
+        )
+        self.assertIn(
+            'const rootName = "学校云盘 \\u003cscript\\u003ealert(\'x\')\\u003c/script\\u003e'.encode("utf-8"),
+            body,
+        )
+        self.assertNotIn(b"<script>alert('x')</script>", body)
 
     def test_generated_response_size_is_bounded(self) -> None:
         self.server.application.max_response_body = 64

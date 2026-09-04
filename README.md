@@ -6,7 +6,7 @@
 WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 ```
 
-当前版本：`0.9.5`，项目仍处于实验性阶段。
+当前版本：`0.9.6`，项目仍处于实验性阶段。
 
 ## 项目定位
 
@@ -31,6 +31,7 @@ WPS 相关接口不是公开稳定 API。本项目只根据本人账号的真实
 - WebDAV `PROPFIND`、`GET`、`HEAD`、`PUT`、`MKCOL`、`DELETE`、`MOVE`、`COPY`、`LOCK`、`UNLOCK`
 - `Depth: 0`、`1`、`infinity`，带条目数和深度保护
 - 网页拖动上传和上传速度显示
+- 网页标题、品牌和根目录支持自定义显示名称
 - Native 和 Docker 两种部署方式
 - 自定义监听端口
 - 一个统一的 Native/Docker 卸载脚本
@@ -255,6 +256,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 | --- | --- | --- |
 | `WPS_GROUP_ID` | `auto` | 登录助手自动识别企业群组 |
 | `WPS_ROOT_ID` | `auto` | `auto` 使用工作区文件，默认根目录为 `0` |
+| `WPS_ROOT_NAME` | `WPS Enterprise Drive` | 网页和适配器根目录的显示名称，不会修改 WPS 远端名称 |
 | `WPS_WORKSPACE_FILE` | `/etc/wps-adapter/secrets/wps-workspace.json` | 群组和根目录选择 |
 | `WPS_AUTO_REFRESH` | `true` | 上游 `401` 后自动续期 |
 | `WPS_MULTIPART_THRESHOLD` | `52428800` | 分片上传阈值，单位字节 |
@@ -267,6 +269,14 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 | `ADAPTER_PASSWORD_FILE` | `/etc/wps-adapter/secrets/adapter-password` | Basic Auth 密码文件 |
 
 完整配置模板见 [`.env.example`](.env.example)。不要把密钥直接写入公开配置或 shell 历史。
+
+`WPS_ROOT_NAME` 是网页端显示的云盘名称，会显示在浏览器标题、左上角品牌、根目录面包屑和根目录标题中。例如：
+
+```dotenv
+WPS_ROOT_NAME="我的学校云盘"
+```
+
+它只改变适配器的显示名称，不会重命名 WPS 中的远端文件夹。修改后重启适配器服务，网页刷新后即可生效；Native 使用 `sudo systemctl restart wps-adapter`，Docker 使用 `sudo docker restart wps-adapter`。
 
 ## 当前限制
 

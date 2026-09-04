@@ -1,6 +1,6 @@
 """Experiment-first WPS enterprise adapter package."""
 
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 
 from .client import (
     CredentialSource,

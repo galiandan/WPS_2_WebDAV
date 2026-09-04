@@ -112,6 +112,7 @@ sudoedit /etc/wps-adapter/wps-adapter.env
 ```dotenv
 WPS_GROUP_ID=auto
 WPS_ROOT_ID=auto
+WPS_ROOT_NAME="WPS Enterprise Drive"
 WPS_WORKSPACE_FILE=/etc/wps-adapter/secrets/wps-workspace.json
 WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
 WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
@@ -122,6 +123,8 @@ ADAPTER_PORT=18080
 ```
 
 `ADAPTER_PORT` 可以改成任意未被占用的端口。`auto` 表示登录助手从当前官方 WPS 企业云盘地址识别企业和群组，并默认使用企业云盘根目录 `0`；只有登录助手显式使用 `--workspace-url` 时才会选择具体文件夹。也可以把两个变量改成固定 ID 做手工部署。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
+
+`WPS_ROOT_NAME` 只控制网页标题、左上角品牌、根目录面包屑、根目录标题以及适配器返回的根目录元数据，不会重命名 WPS 远端文件夹。修改 `/etc/wps-adapter/wps-adapter.env` 后重启服务即可生效：Native 执行 `sudo systemctl restart wps-adapter`，Docker 执行 `sudo docker restart wps-adapter`。
 
 检查配置不会访问 WPS：
 

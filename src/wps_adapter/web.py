@@ -2,13 +2,25 @@
 
 from __future__ import annotations
 
+import html
+import json
+import re
 
-WEB_APP_HTML = r"""<!doctype html>
+
+_DEFAULT_ROOT_NAME = "WPS Enterprise Drive"
+_ROOT_NAME_HTML_TOKEN = "__WPS_ROOT_NAME_HTML__"
+_ROOT_NAME_JSON_TOKEN = "__WPS_ROOT_NAME_JSON__"
+_ROOT_NAME_TOKEN_PATTERN = re.compile(
+    rf"{re.escape(_ROOT_NAME_HTML_TOKEN)}|{re.escape(_ROOT_NAME_JSON_TOKEN)}"
+)
+
+
+WEB_APP_TEMPLATE = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WPS 企业云盘</title>
+  <title>__WPS_ROOT_NAME_HTML__</title>
   <style>
     :root {
       color-scheme: light;
@@ -222,7 +234,7 @@ WEB_APP_HTML = r"""<!doctype html>
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">W</span>
         <div class="brand-copy">
-          <div class="brand-title">WPS 企业云盘</div>
+          <div class="brand-title">__WPS_ROOT_NAME_HTML__</div>
           <div class="brand-subtitle">WebDAV Adapter</div>
         </div>
       </div>
@@ -240,8 +252,8 @@ WEB_APP_HTML = r"""<!doctype html>
     <section class="workspace-head" aria-labelledby="folder-title">
       <div>
         <div class="eyebrow">企业空间</div>
-        <h1 id="folder-title">根目录</h1>
-        <p id="folder-note" class="workspace-note">管理 WPS 企业云盘中的文件和文件夹</p>
+        <h1 id="folder-title">__WPS_ROOT_NAME_HTML__</h1>
+        <p id="folder-note" class="workspace-note">管理 __WPS_ROOT_NAME_HTML__ 中的文件和文件夹</p>
       </div>
       <div id="connection" class="connection checking" role="status" aria-live="polite">
         <span class="connection-dot" aria-hidden="true"></span><span id="connection-label">正在检查 WPS</span>
@@ -305,6 +317,7 @@ WEB_APP_HTML = r"""<!doctype html>
       const state = { path: "/", entries: [], busy: false, search: "", connection: "checking" };
       const $ = (id) => document.getElementById(id);
       const apiRoot = "/api/v1/";
+      const rootName = __WPS_ROOT_NAME_JSON__;
       let modalResolve = null;
       let modalMode = "input";
 
@@ -425,7 +438,7 @@ WEB_APP_HTML = r"""<!doctype html>
         const root = document.createElement("button");
         root.className = "crumb" + (parts.length ? "" : " current");
         root.type = "button";
-        root.textContent = "根目录";
+        root.textContent = rootName;
         root.disabled = !parts.length;
         root.addEventListener("click", () => load("/"));
         nav.append(root);
@@ -444,9 +457,9 @@ WEB_APP_HTML = r"""<!doctype html>
           crumb.addEventListener("click", () => load(target));
           nav.append(crumb);
         });
-        const title = parts.length ? parts[parts.length - 1] : "根目录";
+        const title = parts.length ? parts[parts.length - 1] : rootName;
         $("folder-title").textContent = title;
-        $("folder-note").textContent = parts.length ? "当前文件夹中的文件和文件夹" : "管理 WPS 企业云盘中的文件和文件夹";
+        $("folder-note").textContent = parts.length ? "当前文件夹中的文件和文件夹" : `管理 ${rootName} 中的文件和文件夹`;
         $("path-value").textContent = state.path;
         $("drop-target").textContent = state.path;
         updateControls();
@@ -829,4 +842,36 @@ WEB_APP_HTML = r"""<!doctype html>
 """
 
 
-__all__ = ["WEB_APP_HTML"]
+def _safe_root_name_json(root_name: str) -> str:
+    """Encode a configured name for an inline script without ending it."""
+
+    return (
+        json.dumps(root_name, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def render_web_app(root_name: str = _DEFAULT_ROOT_NAME) -> str:
+    """Render the same-origin file manager with the configured root name."""
+
+    if not isinstance(root_name, str):
+        raise TypeError("root_name must be a string")
+    display_name = root_name or _DEFAULT_ROOT_NAME
+    replacements = {
+        _ROOT_NAME_HTML_TOKEN: html.escape(display_name, quote=True),
+        _ROOT_NAME_JSON_TOKEN: _safe_root_name_json(display_name),
+    }
+    return _ROOT_NAME_TOKEN_PATTERN.sub(
+        lambda match: replacements[match.group(0)],
+        WEB_APP_TEMPLATE,
+    )
+
+
+WEB_APP_HTML = render_web_app()
+
+
+__all__ = ["WEB_APP_HTML", "WEB_APP_TEMPLATE", "render_web_app"]

@@ -29,6 +29,7 @@ def _env_float(name: str, default: float) -> float:
 def _application() -> AdapterApplication:
     client_config = WpsClientConfig.from_env()
     workspace = client_config.workspace
+    root_name = os.environ.get("WPS_ROOT_NAME", "WPS Enterprise Drive")
     root_id = (
         workspace.root_id
         if workspace is not None
@@ -38,7 +39,7 @@ def _application() -> AdapterApplication:
     storage = WpsStorage(
         WpsDriveClient(client_config),
         root_id=root_id,
-        root_name=os.environ.get("WPS_ROOT_NAME", "WPS Enterprise Drive"),
+        root_name=root_name,
         list_count=_env_int("WPS_LIST_COUNT", 20),
         max_list_entries=_env_int("WPS_MAX_LIST_ENTRIES", 10000),
         cache_ttl=_env_float("WPS_CACHE_TTL", 2.0),
@@ -50,6 +51,7 @@ def _application() -> AdapterApplication:
     )
     return AdapterApplication(
         storage,
+        web_root_name=root_name,
         auth=BasicAuth(
             username=os.environ.get("ADAPTER_USERNAME", ""),
             password=os.environ.get("ADAPTER_PASSWORD", ""),

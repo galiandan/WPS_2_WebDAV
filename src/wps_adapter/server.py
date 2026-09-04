@@ -36,7 +36,7 @@ from .provider import (
     UnsupportedOperationError,
 )
 from .storage import WpsStorage, join_remote_path, split_remote_path
-from .web import WEB_APP_HTML
+from .web import render_web_app
 from .workspace import WorkspaceConfigError, validate_workspace_identifier
 
 
@@ -233,10 +233,13 @@ class AdapterApplication:
     max_propfind_depth: int = 64
     max_control_body: int = 1024 * 1024
     max_response_body: int = 16 * 1024 * 1024
+    web_root_name: str = "WPS Enterprise Drive"
 
     def __post_init__(self) -> None:
         self.dav_prefix = self._normalise_prefix(self.dav_prefix)
         self.rest_prefix = self._normalise_prefix(self.rest_prefix)
+        if not self.web_root_name:
+            self.web_root_name = "WPS Enterprise Drive"
         if self.max_propfind_entries <= 0:
             raise ValueError("max_propfind_entries must be positive")
         if self.max_propfind_depth <= 0:
@@ -675,7 +678,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def _handle_web_app(self) -> None:
         self._send_bytes(
             HTTPStatus.OK,
-            WEB_APP_HTML.encode("utf-8"),
+            render_web_app(self.application.web_root_name).encode("utf-8"),
             content_type="text/html; charset=utf-8",
             headers={
                 "Content-Security-Policy": (
