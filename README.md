@@ -183,6 +183,7 @@ Docker 镜像需要额外添加 `--remove-image`。卸载不会删除 WPS 云盘
 - [`docs/api.md`](docs/api.md)：REST、WebDAV 和状态码
 - [`docs/integration.md`](docs/integration.md)：Windows、NAS 和验收
 - [`docs/architecture.md`](docs/architecture.md)：组件和数据流
+- [`docs/language-migration.md`](docs/language-migration.md)：后端语言迁移和原生前端重构规划
 - [`docs/research/`](docs/research/)：脱敏抓包记录和实验边界
 - [`SECURITY.md`](SECURITY.md)：安全问题报告
 
