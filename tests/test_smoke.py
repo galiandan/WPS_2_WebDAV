@@ -859,12 +859,76 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(InsufficientStorageError):
             client._multipart_part_size(
                 100 * 1024 * 1024,
-                {
-                    "min_part_size": 5 * 1024 * 1024,
-                    "max_part_size": 5 * 1024 * 1024 * 1024,
-                    "max_parts": 10000,
-                },
-            )
+                {"min_part_size": 5 * 1024 * 1024,
+                 "max_part_size": 5 * 1024 * 1024 * 1024,
+                 "max_parts": 10000},
+        )
+
+    def test_multipart_checkpoint_is_reused_after_restart(self) -> None:
+        content = b"abcdefghij"
+        full_sha1 = sha1(content).hexdigest()
+        md5_one = md5(content[:5]).digest()
+        md5_two = md5(content[5:]).digest()
+
+        def instruction(part: int, digest: bytes) -> FakeResponse:
+            return FakeResponse(json.dumps({
+                "result": "ok", "method": "PUT", "request": {
+                    "body_type": "file", "headers": {
+                        "Content-MD5": base64.b64encode(digest).decode(),
+                        "Content-Type": "application/octet-stream",
+                    },
+                }, "response": {"expect_code": [200]},
+                "url": f"https://hwc-bj.ag.kdocs.cn/p{part}",
+            }).encode())
+
+        class StopAfterFirstPart(FakeOpener):
+            def open(self, request, timeout):
+                if len(self.requests) == 3:
+                    self.requests.append((request, timeout))
+                    raise HTTPError(request.full_url, 503, "stop", {}, BytesIO())
+                return super().open(request, timeout)
+
+        with TemporaryDirectory() as directory:
+            first_opener = StopAfterFirstPart([
+                FakeResponse(b'{"result":"ok"}'),
+                FakeResponse(json.dumps({"result":"ok", "key":full_sha1,
+                    "store":"obscn", "upload_id":"u1", "limit":{
+                        "max_parts":10000, "min_part_size":5, "max_part_size":100}}).encode()),
+                instruction(1, md5_one),
+            ])
+            first_connection = PlannedHttpsConnection(etag='"e1"')
+            config = WpsClientConfig(group_id="1", cookie="Cookie-secret",
+                csrf_token="csrf-secret", multipart_threshold=1,
+                multipart_part_size=5, upload_retries=0, upload_resume_dir=directory)
+            first = WpsDriveClient(config, opener=first_opener,
+                https_connection_factory=lambda *_: first_connection)
+            with self.assertRaises(WpsApiError):
+                first.upload("3", "resume.bin", BytesIO(content))
+            checkpoint = list(Path(directory).glob("*.json"))
+            self.assertEqual(len(checkpoint), 1)
+            saved = checkpoint[0].read_text()
+            self.assertEqual(json.loads(saved)["parts"], {"1": "e1"})
+            self.assertNotIn("Cookie-secret", saved)
+
+            merge_xml = "<CompleteMultipartUploadResult><ETag>merged</ETag></CompleteMultipartUploadResult>"
+            second_opener = FakeOpener([
+                FakeResponse(b'{"result":"ok"}'), instruction(2, md5_two),
+                FakeResponse(json.dumps({"result":"ok", "method":"POST", "request":{
+                    "body_type":"data", "body_data":"<merge/>",
+                    "headers":{"Content-Type":"application/xml"}},
+                    "response":{"expect_code":[200]},
+                    "url":"https://hwc-bj.ag.kdocs.cn/complete"}).encode()),
+                FakeResponse(b'{"id":9,"fname":"resume.bin","ftype":"file",'
+                    b'"parentid":3,"fsize":10,"result":"ok"}'),
+            ])
+            part_two = PlannedHttpsConnection(etag='"e2"')
+            merge = PlannedHttpsConnection(body=merge_xml.encode())
+            connections = [part_two, merge]
+            second = WpsDriveClient(config, opener=second_opener,
+                https_connection_factory=lambda *_: connections.pop(0))
+            self.assertEqual(second.upload("3", "resume.bin", BytesIO(content)).id, "9")
+            self.assertEqual(part_two.body.getvalue(), content[5:])
+            self.assertEqual(list(Path(directory).glob("*.json")), [])
 
     def test_create_folder_uses_confirmed_json_body(self) -> None:
         opener = FakeOpener([

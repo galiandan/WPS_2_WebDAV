@@ -14,6 +14,9 @@ ENV PYTHONPATH=/app/src \
     APP_UID=${APP_UID} \
     APP_GID=${APP_GID}
 
+RUN mkdir -p /var/lib/wps-adapter/uploads \
+    && chown -R ${APP_UID}:${APP_GID} /var/lib/wps-adapter
+
 # Run with the invoking host user's numeric identity so the mounted secret
 # directory does not need to be writable by root inside the container.
 USER ${APP_UID}:${APP_GID}

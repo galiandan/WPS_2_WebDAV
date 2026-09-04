@@ -29,5 +29,6 @@ services:
       # Basic Auth files as read-only mounts. Keep custom file names in sync
       # with the two entries below if the env file overrides their paths.
       - /etc/wps-adapter/secrets:/etc/wps-adapter/secrets:rw
+      - /var/lib/wps-adapter/uploads:/var/lib/wps-adapter/uploads:rw
       - /etc/wps-adapter/secrets/adapter-username:/etc/wps-adapter/secrets/adapter-username:ro
       - /etc/wps-adapter/secrets/adapter-password:/etc/wps-adapter/secrets/adapter-password:ro

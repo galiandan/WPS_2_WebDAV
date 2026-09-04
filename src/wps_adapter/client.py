@@ -521,6 +521,7 @@ class WpsClientConfig:
     multipart_part_size: int = 10 * 1024 * 1024
     enable_range: bool = True
     upload_spool_dir: str | None = None
+    upload_resume_dir: str | None = None
     upload_min_free_bytes: int = 512 * 1024 * 1024
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     upload_retries: int = 2
@@ -586,6 +587,7 @@ class WpsClientConfig:
             multipart_part_size=int(os.environ.get("WPS_MULTIPART_PART_SIZE", str(10 * 1024 * 1024))),
             enable_range=_env_bool("WPS_ENABLE_RANGE", default=True),
             upload_spool_dir=os.environ.get("WPS_UPLOAD_SPOOL_DIR") or None,
+            upload_resume_dir=os.environ.get("WPS_UPLOAD_RESUME_DIR") or None,
             upload_min_free_bytes=int(
                 os.environ.get("WPS_UPLOAD_MIN_FREE_BYTES", str(512 * 1024 * 1024))
             ),
@@ -1966,46 +1968,88 @@ class WpsDriveClient:
         sha1_hex: str,
         options: UploadOptions,
         csrf: str,
+        resume_identity: str,
     ) -> RemoteEntry:
         """Upload a large file through the captured block/multipart flow."""
 
         group_text = str(self.group_id)
         parent_text = str(parent_id)
-        init_body = {
-            "with_rapid": options.with_rapid,
-            "hash": sha1_hex,
-            "size": total,
-            "group_id": group_text,
-            "name": name,
-            "parent_id": parent_text,
-            "tried_store": list(options.tried_store),
-            "csrfmiddlewaretoken": csrf,
-        }
-        init_payload = self._request_json(
-            "/3rd/drive/api/v5/files/upload/block",
-            method="POST",
-            body=json.dumps(init_body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
-        )
-        if init_payload.get("result") not in {None, "ok"}:
-            raise WpsApiError("initialize multipart upload")
-        upload_id = init_payload.get("upload_id")
-        key = init_payload.get("key")
-        store = init_payload.get("store")
-        limit = init_payload.get("limit")
-        if not isinstance(upload_id, str) or not upload_id:
-            raise WpsApiError("multipart initialization missing upload ID")
-        if not isinstance(key, str) or not key:
-            raise WpsApiError("multipart initialization missing key")
-        if not isinstance(store, str) or not store:
-            raise WpsApiError("multipart initialization missing store")
-        if not isinstance(limit, Mapping):
-            raise WpsApiError("multipart initialization missing limits")
-        part_size = self._multipart_part_size(total, limit)
-        part_infos: list[dict[str, int | str]] = []
+        resume_path: Path | None = None
+        if self.config.upload_resume_dir:
+            resume_root = Path(self.config.upload_resume_dir)
+            if not resume_root.is_absolute():
+                raise ValueError("upload_resume_dir must be absolute")
+            resume_path = resume_root / (sha256(resume_identity.encode()).hexdigest() + ".json")
 
-        spool.seek(0)
+        state: dict[str, Any] | None = None
+        if resume_path is not None:
+            try:
+                metadata = resume_path.stat()
+                if metadata.st_mode & 0o077 or metadata.st_uid not in {0, os.getuid()}:
+                    raise OSError("insecure resume checkpoint permissions")
+                candidate = json.loads(resume_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("version") == 1
+                    and candidate.get("identity") == resume_identity
+                    and isinstance(candidate.get("parts"), dict)
+                    and all(isinstance(k, str) and k.isdigit() and isinstance(v, str)
+                            for k, v in candidate["parts"].items())
+                ):
+                    state = candidate
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                state = None
+
+        def save_state() -> None:
+            if resume_path is None or state is None:
+                return
+            resume_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = resume_path.with_name("." + resume_path.name + ".tmp")
+            temporary.write_text(json.dumps(state, ensure_ascii=True, sort_keys=True), encoding="utf-8")
+            temporary.chmod(0o600)
+            temporary.replace(resume_path)
+
+        if state is None or not all(
+            isinstance(state.get(k), str) and state[k]
+            for k in ("upload_id", "key", "store")
+        ):
+            init_body = {
+                "with_rapid": options.with_rapid, "hash": sha1_hex, "size": total,
+                "group_id": group_text, "name": name, "parent_id": parent_text,
+                "tried_store": list(options.tried_store), "csrfmiddlewaretoken": csrf,
+            }
+            init_payload = self._request_json(
+                "/3rd/drive/api/v5/files/upload/block", method="POST",
+                body=json.dumps(init_body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+            )
+            if init_payload.get("result") not in {None, "ok"}:
+                raise WpsApiError("initialize multipart upload")
+            upload_id, key, store, limit = (init_payload.get(k) for k in ("upload_id", "key", "store", "limit"))
+            if not all(isinstance(v, str) and v for v in (upload_id, key, store)) or not isinstance(limit, Mapping):
+                raise WpsApiError("multipart initialization response is incomplete")
+            part_size = self._multipart_part_size(total, limit)
+            state = {"version": 1, "identity": resume_identity, "upload_id": upload_id,
+                     "key": key, "store": store, "part_size": part_size, "parts": {}}
+            save_state()
+        else:
+            upload_id, key, store = state["upload_id"], state["key"], state["store"]
+            try:
+                part_size = int(state["part_size"])
+            except (KeyError, TypeError, ValueError):
+                raise WpsApiError("invalid multipart resume checkpoint")
+        part_infos: list[dict[str, int | str]] = []
+        completed = state["parts"]
+
         part_number = 1
         while True:
+            known_etag = completed.get(str(part_number))
+            if known_etag:
+                part_infos.append({"etag": known_etag, "part_number": part_number})
+                part_number += 1
+                if (part_number - 1) * part_size >= total:
+                    break
+                continue
+            spool.seek((part_number - 1) * part_size)
             data = spool.read(part_size)
             if not data:
                 break
@@ -2013,6 +2057,7 @@ class WpsDriveClient:
                 raise TypeError("upload spool must return bytes")
             part_md5_hex = md5(data).hexdigest()
             last_error: Exception | None = None
+            session_reset = False
             for attempt in range(self.config.upload_retries + 1):
                 try:
                     block_body = {
@@ -2059,12 +2104,49 @@ class WpsDriveClient:
                     break
                 except (OSError, WpsApiError) as exc:
                     last_error = exc
+                    if (
+                        isinstance(exc, WpsApiError)
+                        and exc.status in {400, 404, 410}
+                        and resume_path is not None
+                        and not session_reset
+                    ):
+                        init_body = {
+                            "with_rapid": options.with_rapid, "hash": sha1_hex,
+                            "size": total, "group_id": group_text, "name": name,
+                            "parent_id": parent_text,
+                            "tried_store": list(options.tried_store),
+                            "csrfmiddlewaretoken": csrf,
+                        }
+                        fresh = self._request_json(
+                            "/3rd/drive/api/v5/files/upload/block", method="POST",
+                            body=json.dumps(init_body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+                        )
+                        if fresh.get("result") not in {None, "ok"}:
+                            raise WpsApiError("reinitialize multipart upload")
+                        new_upload, new_key, new_store = (fresh.get(k) for k in ("upload_id", "key", "store"))
+                        limit = fresh.get("limit")
+                        if not all(isinstance(v, str) and v for v in (new_upload, new_key, new_store)) or not isinstance(limit, Mapping):
+                            raise WpsApiError("reinitialize multipart response is incomplete")
+                        upload_id, key, store = new_upload, new_key, new_store
+                        part_size = self._multipart_part_size(total, limit)
+                        completed.clear()
+                        part_infos.clear()
+                        state.update({"upload_id": upload_id, "key": key, "store": store,
+                                      "part_size": part_size})
+                        save_state()
+                        session_reset = True
+                        break
                     if attempt >= self.config.upload_retries:
                         raise
                     self._retry_delay(attempt + 1)
             else:
                 raise last_error or WpsApiError("multipart part upload")
+            if session_reset:
+                part_number = 1
+                continue
             part_infos.append({"etag": etag, "part_number": part_number})
+            completed[str(part_number)] = etag
+            save_state()
             part_number += 1
 
         merge_body = {
@@ -2130,7 +2212,13 @@ class WpsDriveClient:
         )
         if final_payload.get("result") not in {None, "ok"}:
             raise WpsApiError("register multipart file")
-        return self._entry_from_item(final_payload)
+        entry = self._entry_from_item(final_payload)
+        if resume_path is not None:
+            try:
+                resume_path.unlink()
+            except FileNotFoundError:
+                pass
+        return entry
 
     def upload(
         self,
@@ -2248,6 +2336,7 @@ class WpsDriveClient:
                     sha1_hex=sha1_hex,
                     options=options,
                     csrf=csrf,
+                    resume_identity=f"{group_value}:{parent_value}:{name}:{total}:{sha1_hex}",
                 )
 
             create_body = {

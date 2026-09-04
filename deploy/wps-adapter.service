@@ -22,7 +22,7 @@ ProtectSystem=strict
 ProtectHome=true
 # The optional root-managed credential refresh helper atomically replaces
 # these files after a confirmed WPS session refresh.
-ReadWritePaths=/etc/wps-adapter/secrets
+ReadWritePaths=/etc/wps-adapter/secrets /var/lib/wps-adapter/uploads
 
 [Install]
 WantedBy=multi-user.target

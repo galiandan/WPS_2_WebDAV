@@ -10,6 +10,7 @@ SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-410644e466fe9e47be
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
+RESUME_DIR="/var/lib/wps-adapter/uploads"
 ENV_FILE="$ETC_DIR/wps-adapter.env"
 IMAGE_NAME="wps-enterprise-adapter:latest"
 CONTAINER_NAME="wps-adapter"
@@ -672,6 +673,9 @@ trap rollback EXIT
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
 mkdir -p "$SOURCE_DIR"
+mkdir -p /var/lib/wps-adapter/uploads
+chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
+install -d -m 700 "$RESUME_DIR"
 progress_step "下载并显示项目归档进度"
 download_archive
 progress_step "校验归档清单和文件完整性"
@@ -861,6 +865,7 @@ docker run --detach \
     --env-file "$ENV_FILE" \
     --env ADAPTER_BIND=0.0.0.0 \
     --volume "$SECRET_DIR:/etc/wps-adapter/secrets:rw" \
+    --volume "$RESUME_DIR:/var/lib/wps-adapter/uploads:rw" \
     --volume "$USER_FILE:/etc/wps-adapter/secrets/$USER_BASENAME:ro" \
     --volume "$PASSWORD_FILE:/etc/wps-adapter/secrets/$PASSWORD_BASENAME:ro" \
     --publish "$BIND:$PORT:$PORT" \

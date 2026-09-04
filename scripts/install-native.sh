@@ -10,6 +10,7 @@ SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-410644e466fe9e47be
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
+RESUME_DIR="/var/lib/wps-adapter/uploads"
 ENV_FILE="$ETC_DIR/wps-adapter.env"
 
 PORT_ARG=""
@@ -605,6 +606,9 @@ trap 'rm -rf -- "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
 mkdir -p "$SOURCE_DIR"
+mkdir -p /var/lib/wps-adapter/uploads
+chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
+install -d -m 700 "$RESUME_DIR"
 progress_step "下载并显示项目归档进度"
 download_archive
 progress_step "校验归档清单和文件完整性"

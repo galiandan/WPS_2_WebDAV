@@ -12,7 +12,7 @@
 | [`openlist-reference.md`](openlist-reference.md) | OpenList 借鉴总览、优先级和统一研究流程 |
 | [`01-native-copy.md`](01-native-copy.md) | P0：原生 COPY |
 | [`02-large-directory-depth.md`](02-large-directory-depth.md) | P0：大目录分页和 `Depth: infinity` |
-| [`03-resumable-multipart.md`](03-resumable-multipart.md) | P1：分片失败续传 |
+| [`03-resumable-multipart.md`](03-resumable-multipart.md) | P1：分片失败续传（基础检查点已实现） |
 | [`04-upload-resource-protection.md`](04-upload-resource-protection.md) | P1：上传并发、缓存和资源保护 |
 | [`05-duplicate-file-policy.md`](05-duplicate-file-policy.md) | P1：重复文件处理策略 |
 
