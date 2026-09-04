@@ -9,5 +9,6 @@
 | [`findings.md`](findings.md) | 已观察、重放和推断的请求事实 |
 | [`prototype.md`](prototype.md) | 当前原型状态与研究边界 |
 | [`request-record-template.md`](request-record-template.md) | 脱敏实验记录模板 |
+| [`openlist-reference.md`](openlist-reference.md) | OpenList WPS 驱动参考与四方向演进设计 |
 
 每条 WPS 相关结论都应绑定实验编号和证据等级。没有本人账号实验支持的行为只能标记为 `unknown` 或 `inferred`，不能当成稳定 API。

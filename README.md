@@ -298,6 +298,7 @@ WPS_ROOT_NAME="我的学校云盘"
 - [`docs/integration.md`](docs/integration.md)：Windows、NAS 和验收流程
 - [`docs/architecture.md`](docs/architecture.md)：组件和数据流
 - [`docs/research/`](docs/research/)：抓包记录、实验结论和安全边界
+- [`docs/research/openlist-reference.md`](docs/research/openlist-reference.md)：OpenList WPS 参考和四方向演进设计
 - [`SECURITY.md`](SECURITY.md)：安全问题报告
 
 运行测试：

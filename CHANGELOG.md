@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- 增加 OpenList WPS 驱动参考和四方向演进设计文档，覆盖登录预检、企业群组自动发现、WPS 原生文件操作和根目录选择。
+
 ### Changed
 
 - 项目开源协议从 MIT 改为 GNU GPL-3.0-or-later。
