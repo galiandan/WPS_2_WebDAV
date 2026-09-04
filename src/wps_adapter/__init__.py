@@ -1,6 +1,6 @@
 """Experiment-first WPS enterprise adapter package."""
 
-__version__ = "0.9.7"
+__version__ = "0.9.8"
 
 from .client import (
     CredentialSource,
@@ -13,6 +13,7 @@ from .client import (
     WpsClientConfig,
     WpsCredentials,
     WpsDriveClient,
+    WpsStatus,
 )
 from .storage import WpsStorage
 
@@ -27,6 +28,7 @@ __all__ = [
     "WpsClientConfig",
     "WpsCredentials",
     "WpsDriveClient",
+    "WpsStatus",
     "WpsStorage",
     "__version__",
 ]

@@ -12,6 +12,7 @@
 | WebDAV | `https://<adapter-host>/dav/` |
 | REST | `https://<adapter-host>/api/v1/` |
 | Health | `https://<adapter-host>/healthz` |
+| WPS status | `https://<adapter-host>/api/v1/status` |
 
 所有 WebDAV 和 REST 请求都使用适配器 Basic Auth。健康检查不需要认证，但只用于检查进程状态，不代表 WPS 会话有效。
 

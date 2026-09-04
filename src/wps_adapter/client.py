@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from hashlib import md5, sha1, sha256
 from http.client import HTTPSConnection
 from http.cookies import CookieError, SimpleCookie
+from math import ceil
 from pathlib import Path
 from typing import Any, BinaryIO, Protocol
 from urllib.error import HTTPError, URLError
@@ -445,14 +446,27 @@ class StaticCredentialSource:
 class WpsApiError(RuntimeError):
     """An API or transport error without echoing response contents."""
 
-    def __init__(self, operation: str, *, status: int | None = None) -> None:
+    def __init__(
+        self,
+        operation: str,
+        *,
+        status: int | None = None,
+        category: str = "upstream",
+    ) -> None:
         self.operation = operation
         self.status = status
+        self.category = category
         suffix = f" (HTTP {status})" if status is not None else ""
         super().__init__(f"WPS operation failed: {operation}{suffix}")
 
 
-def _read_limited_response(response: Any, *, max_bytes: int, operation: str) -> bytes:
+def _read_limited_response(
+    response: Any,
+    *,
+    max_bytes: int,
+    operation: str,
+    error_category: str = "upstream",
+) -> bytes:
     """Read a bounded upstream control response without trusting its length."""
 
     if max_bytes <= 0:
@@ -464,22 +478,22 @@ def _read_limited_response(response: Any, *, max_bytes: int, operation: str) -> 
         except (AttributeError, TypeError, ValueError):
             declared = None
         if declared is not None and (declared < 0 or declared > max_bytes):
-            raise WpsApiError(operation)
+            raise WpsApiError(operation, category=error_category)
 
     body = bytearray()
     while len(body) <= max_bytes:
         try:
             chunk = response.read(min(64 * 1024, max_bytes + 1 - len(body)))
         except (OSError, ValueError) as exc:
-            raise WpsApiError(operation) from exc
+            raise WpsApiError(operation, category=error_category) from exc
         if not chunk:
             return bytes(body)
         if not isinstance(chunk, bytes):
-            raise WpsApiError(operation)
+            raise WpsApiError(operation, category=error_category)
         body.extend(chunk)
         if len(body) > max_bytes:
-            raise WpsApiError(operation)
-    raise WpsApiError(operation)
+            raise WpsApiError(operation, category=error_category)
+    raise WpsApiError(operation, category=error_category)
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +513,8 @@ class WpsClientConfig:
     origin: str | None = None
     cid: str | None = None
     timeout: float = 30.0
+    status_probe_ttl: float = 30.0
+    status_failure_backoff: float = 5.0
     upload_spool_memory: int = 8 * 1024 * 1024
     stream_chunk_size: int = 1024 * 1024
     multipart_threshold: int = 50 * 1024 * 1024
@@ -560,6 +576,10 @@ class WpsClientConfig:
             origin=os.environ.get("WPS_ORIGIN") or None,
             cid=os.environ.get("WPS_CID") or None,
             timeout=float(os.environ.get("WPS_TIMEOUT", "30")),
+            status_probe_ttl=float(os.environ.get("WPS_STATUS_PROBE_TTL", "30")),
+            status_failure_backoff=float(
+                os.environ.get("WPS_STATUS_FAILURE_BACKOFF", "5")
+            ),
             upload_spool_memory=int(os.environ.get("WPS_UPLOAD_SPOOL_MEMORY", str(8 * 1024 * 1024))),
             stream_chunk_size=int(os.environ.get("WPS_STREAM_CHUNK_SIZE", str(1024 * 1024))),
             multipart_threshold=int(os.environ.get("WPS_MULTIPART_THRESHOLD", str(50 * 1024 * 1024))),
@@ -591,6 +611,38 @@ class ListPage:
     next_offset: int | None
     next_filter: str | None
     result: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WpsStatus:
+    """A deliberately redacted result of the WPS session preflight."""
+
+    status: str
+    wps: str
+    workspace: str
+    account_type: str
+    last_checked_at: int | None
+    retry_after: int = 0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "wps": self.wps,
+            "workspace": self.workspace,
+            "account_type": self.account_type,
+            "last_checked_at": self.last_checked_at,
+            "retry_after": self.retry_after,
+        }
+
+    def with_retry_after(self, value: int) -> "WpsStatus":
+        return WpsStatus(
+            status=self.status,
+            wps=self.wps,
+            workspace=self.workspace,
+            account_type=self.account_type,
+            last_checked_at=self.last_checked_at,
+            retry_after=max(0, int(value)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -693,10 +745,19 @@ class WpsDriveClient:
             object_suffix == "kdocs.cn" or object_suffix.endswith(".kdocs.cn")
         ):
             raise ValueError("object_storage_host_suffix must be within kdocs.cn")
+        if config.status_probe_ttl < 0:
+            raise ValueError("status_probe_ttl must not be negative")
+        if config.status_failure_backoff < 0:
+            raise ValueError("status_failure_backoff must not be negative")
         self.config = config
         self._opener = opener or build_opener(_NoRedirectHandler())
         self._signed_opener = self._opener
         self._credential_refresh_lock = threading.Lock()
+        self._status_condition = threading.Condition()
+        self._status_inflight = False
+        self._status_cache: WpsStatus | None = None
+        self._status_cache_until = 0.0
+        self._status_cache_marker: tuple[str, str, str, str] | None = None
         self._spool_reservation_lock = threading.Lock()
         self._reserved_spool_bytes = 0
         self._https_connection_factory = https_connection_factory or (
@@ -746,6 +807,265 @@ class WpsDriveClient:
                 csrf_token=_csrf_from_cookie(credentials.cookie),
             )
         return _validate_credential_values(credentials)
+
+    def _status_credentials_are_missing(self) -> bool:
+        source = self.config.credential_source
+        paths: list[str] = []
+        if isinstance(source, FileCredentialSource):
+            paths.extend(
+                path
+                for path in (source.cookie_path, source.csrf_token_path)
+                if path
+            )
+        else:
+            paths.extend(
+                path
+                for path in (self.config.cookie_file, self.config.csrf_token_file)
+                if path
+            )
+        if paths:
+            return any(not os.path.exists(path) for path in paths)
+        return not bool(self.config.cookie)
+
+    @staticmethod
+    def _status_truth(value: object) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value != 0
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            if normalized in {"1", "true", "yes", "on", "ok", "success", "logged_in"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "logout", "logged_out"}:
+                return False
+        return None
+
+    @classmethod
+    def _status_account_type(cls, payload: Mapping[str, Any]) -> str:
+        for key in ("is_company_account", "is_business_account"):
+            if key not in payload:
+                continue
+            marker = cls._status_truth(payload[key])
+            if marker is True:
+                return "business"
+            if marker is False:
+                return "personal"
+        for key in ("companyid", "current_companyid", "company_id"):
+            value = payload.get(key)
+            if value is None or value == 0:
+                continue
+            if isinstance(value, str) and value.strip() in {"", "0"}:
+                continue
+            return "business"
+        return "unknown"
+
+    def _login_preflight(self) -> str:
+        """Check the account session without starting a refresh grant."""
+
+        payload = self._request_json(
+            "/api/v3/islogin",
+            base_url=self._account_base_url(),
+            retry_on_401=False,
+        )
+        # The observed/OpenList-compatible response does not consistently
+        # include a boolean marker. Treat a successful JSON object as logged
+        # in, while honoring the marker when a deployment provides it.
+        if "islogin" in payload:
+            logged_in = self._status_truth(payload["islogin"])
+            if logged_in is None:
+                raise WpsApiError("parse WPS login status", category="invalid_response")
+            if not logged_in:
+                raise WpsApiError(
+                    "WPS login preflight",
+                    status=401,
+                    category="session_expired",
+                )
+        return self._status_account_type(payload)
+
+    def check_login(self) -> str:
+        """Run the read-only WPS account login check.
+
+        The return value is the coarse account type only; response identifiers
+        remain inside the client for later workspace discovery.
+        """
+
+        return self._login_preflight()
+
+    @staticmethod
+    def _status_from_error(
+        exc: WpsApiError,
+        *,
+        workspace_phase: bool,
+        account_type: str,
+        checked_at: int,
+    ) -> WpsStatus:
+        if exc.status == 401 or exc.category == "session_expired":
+            return WpsStatus(
+                status="session_expired",
+                wps="session_expired",
+                workspace="unknown",
+                account_type=account_type,
+                last_checked_at=checked_at,
+            )
+        if workspace_phase and exc.status in {403, 404}:
+            return WpsStatus(
+                status="permission_denied",
+                wps="connected",
+                workspace="permission_denied",
+                account_type=account_type,
+                last_checked_at=checked_at,
+            )
+        if exc.category == "invalid_response":
+            return WpsStatus(
+                status="invalid_response",
+                wps="unknown",
+                workspace="unknown",
+                account_type=account_type,
+                last_checked_at=checked_at,
+            )
+        return WpsStatus(
+            status="upstream_unavailable",
+            wps="unknown",
+            workspace="unknown",
+            account_type=account_type,
+            last_checked_at=checked_at,
+        )
+
+    def _probe_status(self, *, root_id: str, checked_at: int) -> WpsStatus:
+        try:
+            account_type = self.check_login()
+        except WpsApiError as exc:
+            return self._status_from_error(
+                exc,
+                workspace_phase=False,
+                account_type="unknown",
+                checked_at=checked_at,
+            )
+
+        try:
+            # A single root listing proves that the selected group/root is
+            # readable without fetching a complete directory.
+            self.list_entries(root_id, count=1)
+        except WpsApiError as exc:
+            return self._status_from_error(
+                exc,
+                workspace_phase=True,
+                account_type=account_type,
+                checked_at=checked_at,
+            )
+        return WpsStatus(
+            status="connected",
+            wps="connected",
+            workspace="ready",
+            account_type=account_type,
+            last_checked_at=checked_at,
+        )
+
+    def check_status(self, *, root_id: str = "0") -> WpsStatus:
+        """Return a cached, redacted WPS login and workspace status.
+
+        The account preflight is read-only and deliberately does not trigger
+        the refresh-token grant. Normal file requests retain the existing
+        refresh-on-401 behavior.
+        """
+
+        if not isinstance(root_id, str) or not root_id:
+            raise ValueError("root_id is required")
+        checked_at = int(time.time())
+        try:
+            credentials = self._credentials()
+        except WpsApiError:
+            if self._status_credentials_are_missing():
+                return WpsStatus(
+                    status="not_configured",
+                    wps="not_configured",
+                    workspace="not_configured",
+                    account_type="unknown",
+                    last_checked_at=checked_at,
+                )
+            return WpsStatus(
+                status="invalid_response",
+                wps="unknown",
+                workspace="unknown",
+                account_type="unknown",
+                last_checked_at=checked_at,
+            )
+        if not credentials.cookie:
+            return WpsStatus(
+                status="not_configured",
+                wps="not_configured",
+                workspace="not_configured",
+                account_type="unknown",
+                last_checked_at=checked_at,
+            )
+        try:
+            group_id = self.group_id
+        except WpsApiError:
+            return WpsStatus(
+                status="not_configured",
+                wps="not_configured",
+                workspace="not_configured",
+                account_type="unknown",
+                last_checked_at=checked_at,
+            )
+        marker = (credentials.cookie, credentials.csrf_token, group_id, root_id)
+
+        with self._status_condition:
+            if marker != self._status_cache_marker:
+                self._status_cache = None
+                self._status_cache_until = 0.0
+                self._status_cache_marker = marker
+            now = time.monotonic()
+            if self._status_cache is not None and self._status_cache_until > now:
+                remaining = ceil(self._status_cache_until - now)
+                return self._status_cache.with_retry_after(
+                    0 if self._status_cache.status == "connected" else remaining
+                )
+            if self._status_inflight:
+                deadline = now + max(self.config.timeout, 1.0) + 1.0
+                while self._status_inflight:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return WpsStatus(
+                            status="upstream_unavailable",
+                            wps="unknown",
+                            workspace="unknown",
+                            account_type="unknown",
+                            last_checked_at=checked_at,
+                            retry_after=1,
+                        )
+                    self._status_condition.wait(timeout=remaining)
+                now = time.monotonic()
+                if self._status_cache is not None and self._status_cache_until > now:
+                    remaining = ceil(self._status_cache_until - now)
+                    return self._status_cache.with_retry_after(
+                        0 if self._status_cache.status == "connected" else remaining
+                    )
+            self._status_inflight = True
+
+        try:
+            result = self._probe_status(root_id=root_id, checked_at=checked_at)
+        except Exception:
+            result = WpsStatus(
+                status="upstream_unavailable",
+                wps="unknown",
+                workspace="unknown",
+                account_type="unknown",
+                last_checked_at=checked_at,
+            )
+        with self._status_condition:
+            self._status_cache = result
+            cache_duration = (
+                self.config.status_probe_ttl
+                if result.status == "connected"
+                else self.config.status_failure_backoff
+            )
+            self._status_cache_until = time.monotonic() + cache_duration
+            self._status_cache_marker = marker
+            self._status_inflight = False
+            self._status_condition.notify_all()
+        return result
 
     def _refresh_credentials(self) -> bool:
         # Several request threads can observe the same expired session. Keep
@@ -854,8 +1174,14 @@ class WpsDriveClient:
         payload["csrfmiddlewaretoken"] = csrf_token
         return json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
-    def _url(self, path: str, query: Sequence[tuple[str, str]] = ()) -> str:
-        url = self.config.base_url.rstrip("/") + "/" + path.lstrip("/")
+    def _url(
+        self,
+        path: str,
+        query: Sequence[tuple[str, str]] = (),
+        *,
+        base_url: str | None = None,
+    ) -> str:
+        url = (base_url or self.config.base_url).rstrip("/") + "/" + path.lstrip("/")
         encoded_query = urlencode(query)
         return f"{url}?{encoded_query}" if encoded_query else url
 
@@ -866,8 +1192,10 @@ class WpsDriveClient:
         method: str = "GET",
         query: Sequence[tuple[str, str]] = (),
         body: bytes | None = None,
+        base_url: str | None = None,
+        retry_on_401: bool = True,
     ) -> dict[str, Any]:
-        url = self._url(path, query)
+        url = self._url(path, query, base_url=base_url)
         credentials = self._credentials()
         response = None
         for attempt in range(2):
@@ -889,15 +1217,17 @@ class WpsDriveClient:
             except HTTPError as exc:
                 rotated = self._persist_set_cookie_headers(exc.headers)
                 exc.close()
-                if exc.code == 401 and attempt == 0 and (
+                if exc.code == 401 and retry_on_401 and attempt == 0 and (
                     rotated or self._refresh_credentials()
                 ):
                     credentials = self._credentials()
                     body = self._refresh_json_body(body, credentials.csrf_token)
                     continue
-                raise WpsApiError(path, status=exc.code) from None
+                raise WpsApiError(path, status=exc.code, category="http") from None
             except URLError as exc:
-                raise WpsApiError(path) from exc
+                raise WpsApiError(path, category="unavailable") from exc
+            except OSError as exc:
+                raise WpsApiError(path, category="unavailable") from exc
 
         if response is None:
             raise WpsApiError(path, status=401)
@@ -907,6 +1237,7 @@ class WpsDriveClient:
                 response,
                 max_bytes=self.config.max_json_response_bytes,
                 operation=path,
+                error_category="invalid_response",
             )
         finally:
             response.close()
@@ -914,9 +1245,9 @@ class WpsDriveClient:
         try:
             decoded = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise WpsApiError(path) from exc
+            raise WpsApiError(path, category="invalid_response") from exc
         if not isinstance(decoded, dict):
-            raise WpsApiError(path)
+            raise WpsApiError(path, category="invalid_response")
         return decoded
 
     @staticmethod

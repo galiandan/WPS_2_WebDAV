@@ -154,6 +154,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now wps-adapter
 systemctl status wps-adapter --no-pager
 curl http://127.0.0.1:18080/healthz
+curl -u <适配器用户名> http://127.0.0.1:18080/api/v1/status
 ```
 
 查看不包含 Cookie、Token、完整 URL 或文件内容的日志：

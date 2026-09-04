@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from xml.etree import ElementTree
 
 from . import __version__
-from .client import WpsApiError
+from .client import WpsApiError, WpsStatus
 from .client import _read_credential_file
 from .login import credentials_from_cookies
 from .provider import (
@@ -278,6 +278,32 @@ class AdapterApplication:
             self.web_settings.set_name(name)
         self._apply_web_root_name(name)
         return name
+
+    def current_wps_status(self) -> WpsStatus:
+        """Run the client's redacted WPS preflight for the mapped root."""
+
+        client = getattr(self.storage, "client", None)
+        checker = getattr(client, "check_status", None)
+        if not callable(checker):
+            return WpsStatus(
+                status="not_configured",
+                wps="not_configured",
+                workspace="not_configured",
+                account_type="unknown",
+                last_checked_at=int(time.time()),
+            )
+        try:
+            root = getattr(self.storage, "root")
+            root_id = str(getattr(root, "id"))
+            return checker(root_id=root_id)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return WpsStatus(
+                status="invalid_response",
+                wps="unknown",
+                workspace="unknown",
+                account_type="unknown",
+                last_checked_at=int(time.time()),
+            )
 
 
 class _LimitedReader:
@@ -1214,6 +1240,10 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(HTTPStatus.NO_CONTENT)
 
     def _do_rest_get(self, route: str, query: dict[str, list[str]]) -> None:
+        if route == "status":
+            self._discard_body()
+            self._send_json(HTTPStatus.OK, self.application.current_wps_status().as_dict())
+            return
         if route == "settings":
             self._discard_body()
             self._send_json(

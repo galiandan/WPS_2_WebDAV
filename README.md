@@ -6,7 +6,7 @@
 WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 ```
 
-当前版本：`0.9.7`，项目仍处于实验性阶段。
+当前版本：`0.9.8`，项目仍处于实验性阶段。
 
 ## 项目定位
 
@@ -32,6 +32,7 @@ WPS 相关接口不是公开稳定 API。本项目只根据本人账号的真实
 - `Depth: 0`、`1`、`infinity`，带条目数和深度保护
 - 网页拖动上传和上传速度显示
 - 网页内直接修改云盘显示名称，所有客户端统一生效
+- 网页和 REST 的 WPS 登录状态预检，区分未配置、登录过期、无权访问和上游故障
 - Native 和 Docker 两种部署方式
 - 自定义监听端口
 - 一个统一的 Native/Docker 卸载脚本
@@ -134,14 +135,22 @@ REST：   http://<VPS-IP>:54321/api/v1/
 
 网页、WebDAV 和 REST 共用适配器 Basic Auth。
 
-先验证连接：
+先验证 WPS 连接状态：
 
 ```bash
 curl -u <适配器用户名> \
-  'http://<VPS-IP>:54321/api/v1/entries?path=/'
+  'http://<VPS-IP>:54321/api/v1/status'
 ```
 
-`curl` 会隐藏询问密码。若返回 `WPS 未连接` 或上游 `401`，先重新运行 `wps_login.py`；新凭据写入后不需要重启服务。
+正常时会返回 `status: "connected"`。首次安装、Cookie 尚未同步时返回 `not_configured`；Cookie 过期时返回 `session_expired`。接口不会返回 Cookie、CSRF、企业 ID、群组 ID 或上游响应正文。
+
+进程健康检查仍然是独立的：
+
+```bash
+curl 'http://<VPS-IP>:54321/healthz'
+```
+
+`/healthz` 只表示适配器进程能够响应，不代表 WPS 会话有效。目录接口仍可用于实际验证：若返回 `WPS 未连接` 或上游 `401`，先重新运行 `wps_login.py`；新凭据写入后不需要重启服务。
 
 ## 网页文件管理器
 
@@ -260,6 +269,8 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 | `WPS_ROOT_NAME` | `WPS Enterprise Drive` | 网页首次使用时的默认显示名称；网页修改后以页面保存值为准 |
 | `WPS_WORKSPACE_FILE` | `/etc/wps-adapter/secrets/wps-workspace.json` | 群组和根目录选择 |
 | `WPS_AUTO_REFRESH` | `true` | 上游 `401` 后自动续期 |
+| `WPS_STATUS_PROBE_TTL` | `30` | 成功的 WPS 状态预检缓存秒数 |
+| `WPS_STATUS_FAILURE_BACKOFF` | `5` | 失败预检的短暂退避秒数 |
 | `WPS_MULTIPART_THRESHOLD` | `52428800` | 分片上传阈值，单位字节 |
 | `WPS_MAX_UPLOAD_BYTES` | `1073741824` | 单次上传上限，`0` 表示不限制 |
 | `WPS_MAX_UPLOADS` | `2` | 并发上传上限 |

@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from wps_adapter.client import WpsApiError, WpsCredentials
+from wps_adapter.client import WpsApiError, WpsCredentials, WpsStatus
 from wps_adapter.provider import (
     EntryNotFoundError,
     InvalidPathError,
@@ -163,6 +163,37 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
         self.assertEqual(json.loads(body)["status"], "ok")
 
+    def test_wps_status_is_redacted_and_uses_the_mapped_root(self) -> None:
+        calls = []
+
+        def check_status(*, root_id: str) -> WpsStatus:
+            calls.append(root_id)
+            return WpsStatus(
+                status="connected",
+                wps="connected",
+                workspace="ready",
+                account_type="business",
+                last_checked_at=123,
+            )
+
+        self.storage.client.check_status = check_status
+        status, headers, body = self.request("GET", "/api/v1/status")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(
+            json.loads(body),
+            {
+                "status": "connected",
+                "wps": "connected",
+                "workspace": "ready",
+                "account_type": "business",
+                "last_checked_at": 123,
+                "retry_after": 0,
+            },
+        )
+        self.assertEqual(calls, ["root"])
+
     def test_rest_reports_wps_connection_state_errors(self) -> None:
         self.storage.wps_error = WpsApiError("list files")
         status, _headers, body = self.request("GET", "/api/v1/entries?path=%2F")
@@ -304,9 +335,11 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"upload-speed", body)
         self.assertIn(b"formatRate", body)
         self.assertIn(b'id="connection"', body)
-        self.assertIn("WPS 未连接".encode("utf-8"), body)
+        self.assertIn("WPS 尚未连接".encode("utf-8"), body)
         self.assertIn("wps_login.py 同步凭据".encode("utf-8"), body)
         self.assertIn(b'wps_unavailable', body)
+        self.assertIn(b'apiRequest("status")', body)
+        self.assertIn(b'window.setInterval', body)
         self.assertIn(b'id="settings-button"', body)
 
     def test_web_file_manager_uses_configured_root_name(self) -> None:
@@ -672,6 +705,14 @@ class ServerTests(unittest.TestCase):
             response.read()
             token = base64.b64encode(b"u:p").decode("ascii")
             connection.request("GET", "/healthz")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            connection.request("GET", "/api/v1/status")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 401)
+            response.read()
+            connection.request("GET", "/api/v1/status", headers={"Authorization": f"Basic {token}"})
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
             response.read()

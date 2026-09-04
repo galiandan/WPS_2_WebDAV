@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from email.message import Message
 import json
+import threading
 import unittest
 from io import BytesIO
 from hashlib import md5, sha1
@@ -148,6 +149,187 @@ class FailingObjectConnection(FakeHttpsConnection):
 
 
 class ClientTests(unittest.TestCase):
+    def test_status_preflight_checks_login_and_workspace_once(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(b'{"companyid":691045587,"is_company_account":true}'),
+            FakeResponse(b'{"files":[],"next_offset":-1,"result":"ok"}'),
+        ])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        first = client.check_status(root_id="0")
+        second = client.check_status(root_id="0")
+
+        self.assertEqual(first.status, "connected")
+        self.assertEqual(first.wps, "connected")
+        self.assertEqual(first.workspace, "ready")
+        self.assertEqual(first.account_type, "business")
+        self.assertEqual(first.retry_after, 0)
+        self.assertEqual(second, first)
+        self.assertEqual(len(opener.requests), 2)
+        account_request = opener.requests[0][0]
+        self.assertEqual(urlsplit(account_request.full_url).hostname, "account.kdocs.cn")
+        self.assertEqual(urlsplit(account_request.full_url).path, "/api/v3/islogin")
+        self.assertEqual(account_request.get_header("Cookie"), "Cookie-secret")
+        workspace_request = opener.requests[1][0]
+        self.assertEqual(
+            parse_qsl(urlsplit(workspace_request.full_url).query)[0],
+            ("parentid", "0"),
+        )
+
+    def test_status_without_credentials_does_not_call_wps(self) -> None:
+        opener = FakeOpener([])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1"),
+            opener=opener,
+        )
+
+        result = client.check_status(root_id="0")
+
+        self.assertEqual(result.status, "not_configured")
+        self.assertEqual(result.wps, "not_configured")
+        self.assertEqual(result.workspace, "not_configured")
+        self.assertEqual(opener.requests, [])
+
+    def test_status_treats_missing_credential_files_as_not_configured(self) -> None:
+        with TemporaryDirectory() as directory:
+            client = WpsDriveClient(
+                WpsClientConfig(
+                    group_id="group-1",
+                    cookie_file=str(Path(directory) / "cookie"),
+                    csrf_token_file=str(Path(directory) / "csrf"),
+                ),
+                opener=FakeOpener([]),
+            )
+
+            result = client.check_status(root_id="0")
+
+        self.assertEqual(result.status, "not_configured")
+
+    def test_status_marks_an_expired_session_without_refreshing(self) -> None:
+        class ExpiredOpener:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def open(self, request, timeout: float):
+                self.requests.append((request, timeout))
+                raise HTTPError(request.full_url, 401, "expired", {}, BytesIO())
+
+        opener = ExpiredOpener()
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        result = client.check_status(root_id="0")
+
+        self.assertEqual(result.status, "session_expired")
+        self.assertEqual(len(opener.requests), 1)
+        self.assertEqual(urlsplit(opener.requests[0][0].full_url).path, "/api/v3/islogin")
+
+    def test_status_distinguishes_workspace_permission_failure(self) -> None:
+        class PermissionOpener:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def open(self, request, timeout: float):
+                self.requests.append((request, timeout))
+                if len(self.requests) == 1:
+                    return FakeResponse(b'{"islogin":true,"is_company_account":true}')
+                raise HTTPError(request.full_url, 403, "forbidden", {}, BytesIO())
+
+        opener = PermissionOpener()
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        result = client.check_status(root_id="private-root")
+
+        self.assertEqual(result.status, "permission_denied")
+        self.assertEqual(result.wps, "connected")
+        self.assertEqual(result.workspace, "permission_denied")
+
+    def test_status_marks_malformed_login_response(self) -> None:
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=FakeOpener([FakeResponse(b"[]")]),
+        )
+
+        result = client.check_status(root_id="0")
+
+        self.assertEqual(result.status, "invalid_response")
+
+    def test_status_failure_backoff_reuses_the_last_failure(self) -> None:
+        class ExpiredOpener:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def open(self, request, timeout: float):
+                self.requests.append((request, timeout))
+                raise HTTPError(request.full_url, 401, "expired", {}, BytesIO())
+
+        opener = ExpiredOpener()
+        client = WpsDriveClient(
+            WpsClientConfig(
+                group_id="group-1",
+                cookie="Cookie-secret",
+                status_failure_backoff=30,
+            ),
+            opener=opener,
+        )
+
+        first = client.check_status(root_id="0")
+        second = client.check_status(root_id="0")
+
+        self.assertEqual(first.status, "session_expired")
+        self.assertEqual(second.status, "session_expired")
+        self.assertGreaterEqual(second.retry_after, 1)
+        self.assertEqual(len(opener.requests), 1)
+
+    def test_status_singleflight_merges_concurrent_checks(self) -> None:
+        class SlowOpener:
+            def __init__(self) -> None:
+                self.requests = []
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def open(self, request, timeout: float):
+                self.requests.append((request, timeout))
+                if len(self.requests) == 1:
+                    self.started.set()
+                    self.release.wait(timeout=2)
+                    return FakeResponse(b'{"islogin":true}')
+                return FakeResponse(b'{"files":[],"next_offset":-1,"result":"ok"}')
+
+        opener = SlowOpener()
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret", timeout=2),
+            opener=opener,
+        )
+        results = []
+
+        first_thread = threading.Thread(
+            target=lambda: results.append(client.check_status(root_id="0"))
+        )
+        second_thread = threading.Thread(
+            target=lambda: results.append(client.check_status(root_id="0"))
+        )
+        first_thread.start()
+        self.assertTrue(opener.started.wait(timeout=2))
+        second_thread.start()
+        opener.release.set()
+        first_thread.join(timeout=3)
+        second_thread.join(timeout=3)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result.status == "connected" for result in results))
+        self.assertEqual(len(opener.requests), 2)
+
     def test_client_config_repr_does_not_expose_cookie(self) -> None:
         config = WpsClientConfig(group_id="group-1", cookie="Cookie-secret")
         self.assertNotIn("Cookie-secret", repr(config))

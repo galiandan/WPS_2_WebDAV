@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wps-enterprise-adapter"
-version = "0.9.7"
+version = "0.9.8"
 description = "Experimental WebDAV and REST adapter for an authorized WPS enterprise drive"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }

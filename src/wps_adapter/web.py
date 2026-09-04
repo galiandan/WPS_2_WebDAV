@@ -357,6 +357,15 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         return responseData(response);
       }
 
+      async function apiRequest(route, options = {}) {
+        const response = await fetch(apiUrl(route), {
+          cache: "no-store",
+          credentials: "same-origin",
+          ...options,
+        });
+        return responseData(response);
+      }
+
       function setStatus(message, kind = "") {
         const status = $("status");
         status.textContent = message;
@@ -384,17 +393,42 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       }
 
       function setConnection(value) {
-        state.connection = value;
+        const known = new Set([
+          "checking", "connected", "not_configured", "session_expired",
+          "permission_denied", "upstream_unavailable", "invalid_response", "unknown",
+        ]);
+        state.connection = known.has(value) ? value : "unknown";
         const badge = $("connection");
         const labels = {
           checking: "正在检查 WPS",
           connected: "WPS 已连接",
-          disconnected: "WPS 未连接",
+          not_configured: "WPS 尚未连接",
+          session_expired: "WPS 登录已过期",
+          permission_denied: "无权访问当前工作区",
+          upstream_unavailable: "WPS 暂时不可用",
+          invalid_response: "WPS 响应异常",
           unknown: "WPS 状态未知",
         };
-        badge.className = "connection " + value;
-        $("connection-label").textContent = labels[value] || labels.checking;
+        const visualClass = state.connection === "connected"
+          ? "connected"
+          : ["not_configured", "session_expired", "permission_denied"].includes(state.connection)
+            ? "disconnected"
+            : "unknown";
+        badge.className = "connection " + visualClass;
+        $("connection-label").textContent = labels[state.connection] || labels.unknown;
         updateControls();
+      }
+
+      function connectionMessage(value) {
+        const messages = {
+          not_configured: "WPS 尚未连接，请先在自己的电脑运行 wps_login.py 同步凭据，然后点击刷新",
+          session_expired: "WPS 登录已过期，请重新运行 wps_login.py 同步凭据，然后点击刷新",
+          permission_denied: "无权访问当前工作区，请检查登录账号或重新选择工作区",
+          upstream_unavailable: "WPS 暂时不可用，请稍后点击刷新重试",
+          invalid_response: "WPS 返回了无法识别的响应，请稍后点击刷新重试",
+          unknown: "暂时无法判断 WPS 状态，请点击刷新重试",
+        };
+        return messages[value] || messages.unknown;
       }
 
       function isWpsError(error) {
@@ -410,11 +444,11 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
 
       function showError(error) {
         if (isWpsError(error)) {
-          setConnection("disconnected");
-          const message = error.code === "wps_session_expired"
-            ? "WPS 未连接（登录已过期），请重新运行 wps_login.py 同步凭据，然后点击刷新"
-            : "WPS 未连接，请先在自己的电脑运行 wps_login.py 登录并同步凭据，然后点击刷新";
-          setStatus(message, "error");
+          const connection = error.code === "wps_session_expired"
+            ? "session_expired"
+            : "upstream_unavailable";
+          setConnection(connection);
+          setStatus(connectionMessage(connection), "error");
           return;
         }
         if (state.connection === "checking") setConnection("unknown");
@@ -525,17 +559,20 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         empty.classList.toggle("hidden", entries.length !== 0);
         if (!entries.length) {
           const title = document.createElement("strong");
-          title.textContent = state.connection === "disconnected"
-            ? "WPS 尚未连接"
-            : state.connection === "unknown"
-              ? "暂时无法读取目录"
-              : state.entries.length ? "没有匹配的项目" : "这个文件夹还是空的";
+          const unavailable = state.connection !== "connected" && state.connection !== "checking";
+          title.textContent = unavailable
+            ? state.connection === "permission_denied"
+              ? "无权访问当前工作区"
+              : state.connection === "session_expired"
+                ? "WPS 登录已过期"
+                : state.connection === "not_configured"
+                  ? "WPS 尚未连接"
+                  : "暂时无法读取目录"
+            : state.entries.length ? "没有匹配的项目" : "这个文件夹还是空的";
           const note = document.createElement("span");
-          note.textContent = state.connection === "disconnected"
-            ? "请先运行 wps_login.py 同步凭据，然后点击刷新"
-            : state.connection === "unknown"
-              ? "请点击刷新重试"
-              : state.entries.length ? "换一个关键词试试" : "上传文件或新建文件夹开始使用";
+          note.textContent = unavailable
+            ? connectionMessage(state.connection)
+            : state.entries.length ? "换一个关键词试试" : "上传文件或新建文件夹开始使用";
           empty.replaceChildren(title, note);
         }
         entries.forEach((entry) => {
@@ -584,6 +621,22 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
           : `<strong>${total}</strong> 个项目`;
       }
 
+      async function checkConnection(quiet = false) {
+        setConnection("checking");
+        try {
+          const data = await apiRequest("status");
+          const value = data && typeof data.status === "string" ? data.status : "invalid_response";
+          setConnection(value);
+          if (value !== "connected" && (!quiet || state.entries.length === 0)) {
+            setStatus(connectionMessage(state.connection), "error");
+          }
+          return state.connection;
+        } catch (error) {
+          showError(error);
+          return state.connection;
+        }
+      }
+
       async function load(path, quiet = false, force = false) {
         if (state.busy && !force) return;
         state.path = canonicalPath(path);
@@ -592,7 +645,12 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         renderBreadcrumbs();
         if (!quiet) setStatus("正在读取...");
         try {
-          setConnection("checking");
+          const connection = await checkConnection(quiet);
+          if (connection !== "connected") {
+            state.entries = [];
+            renderEntries();
+            return;
+          }
           const data = await api("entries", state.path);
           state.entries = Array.isArray(data.entries) ? data.entries : [];
           setConnection("connected");
@@ -862,6 +920,17 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         hideDropOverlay();
         if (!state.busy) uploadFiles(Array.from(event.dataTransfer.files || []));
       });
+      window.setInterval(async () => {
+        if (state.busy) return;
+        const previous = state.connection;
+        const current = await checkConnection(true);
+        if (current !== "connected") {
+          state.entries = [];
+          renderEntries();
+        } else if (previous !== "connected") {
+          await load(state.path, true, true);
+        }
+      }, 30000);
       renderBreadcrumbs();
       load("/");
     })();

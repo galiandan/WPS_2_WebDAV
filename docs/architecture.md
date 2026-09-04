@@ -28,7 +28,8 @@ WebDAV clients / REST clients / browser UI
 4. `WpsDriveClient` 从 secret 文件读取当前 Cookie/CSRF，调用已经从本人账号观察并记录的 WPS 请求形状。
 5. 文件上传和下载尽量通过流式中继完成；签名对象存储请求不会收到 WPS Cookie。
 6. 上游 `401` 时，文件凭据源优先检测管理员替换，然后按已观察的 SDK `grant_token` 流程尝试续期并重试一次。
-7. 网页的云盘显示名称通过同源、Basic Auth 保护的设置接口写入本机状态文件，不依赖 WPS 请求。
+7. `/api/v1/status` 使用缓存的只读 `islogin` 预检和一次最小根目录列表，网页据此区分进程健康与 WPS 会话状态。
+8. 网页的云盘显示名称通过同源、Basic Auth 保护的设置接口写入本机状态文件，不依赖 WPS 请求。
 
 登录助手在本机临时 Chrome 中完成官方登录后，读取当前官方 WPS `/space/<tenant>/<group>/<folder>` 页面地址，调用受 Basic Auth 保护的 `POST /api/v1/session/import`。该接口更新 Cookie、CSRF 和工作区状态文件，不参与普通 WebDAV/REST 文件请求；后续请求和轮换 Cookie 仍由服务进程直接处理。工作区状态会在运行中重新加载，服务无需重启。
 

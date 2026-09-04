@@ -42,6 +42,7 @@ WebDAV `PUT` 对同名文件执行覆盖更新；REST `PUT` 默认不覆盖同�
 GET  /api/v1/entries?path=/
 GET  /api/v1/metadata?path=/folder/file.txt
 GET  /api/v1/download?path=/folder/file.txt
+GET  /api/v1/status
 PUT  /api/v1/upload?path=/folder/new.txt
 PUT  /api/v1/upload?path=/folder/file.txt&overwrite=true
 POST /api/v1/folders?path=/folder/new-folder
@@ -55,6 +56,23 @@ POST  /api/v1/session/import
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
 
 其中 `GET entries`、`metadata`、`download`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到当前 WPS 原型；`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+
+### WPS status
+
+`GET /api/v1/status` 使用适配器 Basic Auth，执行低频、只读的 WPS 会话预检。它先请求账号服务的 `api/v3/islogin`，再对当前映射的群组根目录做一次最小列表验证。成功结果会缓存 30 秒，失败结果会短暂退避；并发请求会共享同一次预检。状态检查本身不会主动调用刷新令牌，文件接口遇到上游 `401` 时仍按原有规则执行自动续期。
+
+```json
+{
+  "status": "connected",
+  "wps": "connected",
+  "workspace": "ready",
+  "account_type": "business",
+  "last_checked_at": 1788350000,
+  "retry_after": 0
+}
+```
+
+`status` 可能是 `connected`、`not_configured`、`session_expired`、`permission_denied`、`upstream_unavailable` 或 `invalid_response`。响应不会包含 Cookie、CSRF、`rtk`、企业/群组/用户 ID、签名 URL 或 WPS 原始正文。`/healthz` 仍然只检查适配器进程，不访问 WPS。
 
 ### Web settings
 
@@ -103,6 +121,6 @@ Content-Type: application/json
 - `502`: WPS 或对象存储请求失败；响应不会包含上游响应正文或签名 URL。
 - `503`: WPS 会话过期且自动续期失败、反向代理/外部健康检查产生，或适配器的传输槽等待超时。
 
-REST 遇到 WPS 请求失败时还会返回 `code: "wps_unavailable"`；WPS 返回 `401` 且自动续期失败时返回 `code: "wps_session_expired"`。网页会据此显示“WPS 未连接”或“登录已过期”，不会把适配器进程在线误认为 WPS 已连接。
+REST 遇到 WPS 请求失败时还会返回 `code: "wps_unavailable"`；WPS 返回 `401` 且自动续期失败时返回 `code: "wps_session_expired"`。网页会据此显示“WPS 尚未连接”“登录已过期”或“WPS 暂时不可用”，不会把适配器进程在线误认为 WPS 已连接。
 
 `GET /healthz` 不访问 WPS，只返回进程健康状态。
