@@ -27,6 +27,7 @@ from wps_adapter.login import (
     wait_for_login_snapshot,
     write_local_credentials,
     write_local_workspace,
+    workspace_root_from_page_url,
     workspace_from_page_url,
 )
 
@@ -52,6 +53,7 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--adapter-url", completed.stdout)
         self.assertIn("--allow-http", completed.stdout)
+        self.assertIn("--workspace-url", completed.stdout)
 
     def test_cookie_snapshot_keeps_wps_refresh_cookie_and_filters_other_domains(self) -> None:
         credentials, names = credentials_from_cookies(
@@ -110,6 +112,17 @@ class LoginHelperTests(unittest.TestCase):
         self.assertIsNone(workspace_from_page_url("https://365.kdocs.cn/space/"))
         with self.assertRaisesRegex(LoginError, "WPS"):
             workspace_from_page_url("https://example.com/space/a/b/c")
+
+    def test_workspace_root_page_url_ignores_restored_folder(self) -> None:
+        self.assertEqual(
+            workspace_root_from_page_url("https://365.kdocs.cn/space/tenant-1/group-2/root-3"),
+            WpsWorkspaceSelection(tenant_id="tenant-1", group_id="group-2", root_id="0"),
+        )
+        self.assertEqual(
+            workspace_root_from_page_url("https://365.kdocs.cn/space/tenant-1/group-2/"),
+            WpsWorkspaceSelection(tenant_id="tenant-1", group_id="group-2", root_id="0"),
+        )
+        self.assertIsNone(workspace_root_from_page_url("https://365.kdocs.cn/space/"))
 
     def test_local_workspace_is_written_with_restricted_mode(self) -> None:
         workspace = WpsWorkspaceSelection("tenant", "group", "root")
@@ -387,7 +400,7 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(credentials.csrf_token, "csrf")
         self.assertEqual(len(selected), 2)
 
-    def test_login_snapshot_requires_a_concrete_wps_space_page(self) -> None:
+    def test_login_snapshot_defaults_to_enterprise_root(self) -> None:
         class Session:
             def current_url(self):
                 return "https://365.kdocs.cn/space/tenant/group/root"
@@ -408,6 +421,50 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(names, ("csrf", "rtk"))
         self.assertEqual(len(selected), 2)
         self.assertEqual(workspace.group_id, "group")
+        self.assertEqual(workspace.root_id, "0")
+
+    def test_login_snapshot_accepts_an_explicit_folder_url(self) -> None:
+        class Session:
+            def current_url(self):
+                return "https://365.kdocs.cn/space/tenant/group/root"
+
+            def cookies(self):
+                return [
+                    {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/"},
+                    {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
+                ]
+
+        _credentials, _names, _selected, workspace = wait_for_login_snapshot(
+            Session(),
+            login_url="https://365.kdocs.cn/space/",
+            domain_suffix="kdocs.cn",
+            timeout=1,
+            workspace_url="https://365.kdocs.cn/space/tenant/group/root?view=list",
+        )
+        self.assertEqual(
+            workspace,
+            WpsWorkspaceSelection(tenant_id="tenant", group_id="group", root_id="root"),
+        )
+
+    def test_login_snapshot_rejects_a_different_explicit_folder(self) -> None:
+        class Session:
+            def current_url(self):
+                return "https://365.kdocs.cn/space/tenant/group/other-root"
+
+            def cookies(self):
+                return [
+                    {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/"},
+                    {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
+                ]
+
+        with self.assertRaisesRegex(LoginError, "workspace-url"):
+            wait_for_login_snapshot(
+                Session(),
+                login_url="https://365.kdocs.cn/space/",
+                domain_suffix="kdocs.cn",
+                timeout=0.01,
+                workspace_url="https://365.kdocs.cn/space/tenant/group/root",
+            )
 
     def test_chrome_session_reads_current_url_via_runtime_evaluate(self) -> None:
         calls = []

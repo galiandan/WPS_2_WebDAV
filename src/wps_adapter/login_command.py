@@ -30,6 +30,11 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     """Add login-helper arguments to a parser."""
 
     parser.add_argument("--login-url", default=DEFAULT_LOGIN_URL)
+    parser.add_argument(
+        "--workspace-url",
+        default=None,
+        help="指定具体 WPS 文件夹 URL；省略时使用企业云盘根目录",
+    )
     parser.add_argument("--browser", default=None, help="local Chrome/Chromium executable")
     parser.add_argument("--domain-suffix", default=DEFAULT_COOKIE_DOMAIN_SUFFIX)
     parser.add_argument("--wait-timeout", type=float, default=300.0)
@@ -220,6 +225,7 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         adapter_password = getpass.getpass("适配器密码（不会显示）: ")
     login_and_sync(
         login_url=args.login_url,
+        workspace_url=args.workspace_url,
         browser=args.browser,
         domain_suffix=args.domain_suffix,
         wait_timeout=args.wait_timeout,

@@ -17,7 +17,7 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 - 并发大文件上传会预留各自的临时盘空间，空间不足时会拒绝新传输。
 - 公网部署建议使用 HTTPS 反向代理。没有域名或证书时也可以直接使用 HTTP，但 Cookie、Basic Auth 和文件内容都会明文传输，只适合可信网络。
 
-当前版本：`0.9.2`（原型阶段）
+当前版本：`0.9.3`（原型阶段）
 
 ## 能做什么
 
@@ -154,12 +154,33 @@ curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh
 
 1. 只在官方 WPS 页面登录自己的账号。
 2. 正常完成学校 SSO、扫码、验证码或二次验证。
-3. 登录完成后，在同一个窗口进入你想挂载的企业云盘文件夹。页面地址应类似 `/space/<企业ID>/<群组ID>/<文件夹ID>`。
-4. 脚本自动读取当前页面地址和登录 Cookie，不需要回终端按回车；群组 ID、根目录 ID 会随 Cookie 一起同步。
-5. 脚本只保留匹配 WPS 云盘域名的 Cookie，并要求存在 `rtk` 和 `csrf`。
-6. 凭据写入 VPS 后，适配器无需重启。
+3. 默认不需要手动切换文件夹。WPS 登录后可能自动恢复上次打开的文件夹，即使该页面显示无权访问，脚本也会忽略这个文件夹，只使用当前企业和群组的企业云盘根目录。
+4. 脚本自动读取当前页面地址和登录 Cookie，不需要回终端按回车；群组 ID 和根目录 `0` 会随 Cookie 一起同步。
+5. 如果你确实要把某个有权限的子文件夹作为适配器根目录，使用 `--workspace-url` 指定它，示例见下方。
+6. 脚本只保留匹配 WPS 云盘域名的 Cookie，并要求存在 `rtk` 和 `csrf`。
+7. 凭据写入 VPS 后，适配器无需重启。
 
 脚本不会显示 Cookie 值，也不会把 Cookie 放入命令参数、URL 或日志。临时浏览器配置会在流程结束后删除。
+
+### 指定目标文件夹（可选）
+
+默认目标是企业云盘根目录。如果要挂载某个具体文件夹，先从 WPS 页面复制该文件夹地址，地址应类似：
+
+```text
+https://365.kdocs.cn/space/<企业ID>/<群组ID>/<文件夹ID>
+```
+
+然后把它作为 `--workspace-url` 传给脚本。脚本会直接打开这个地址，并校验登录后页面仍然是同一个文件夹：
+
+```bash
+python3 wps_login.py \
+  --workspace-url 'https://365.kdocs.cn/space/<企业ID>/<群组ID>/<文件夹ID>' \
+  --adapter-url http://<VPS-IP>:54321 \
+  --adapter-user <适配器用户名> \
+  --allow-http
+```
+
+不指定 `--workspace-url` 就是根目录模式；不要为了让脚本继续而进入一个无权访问的文件夹。
 
 ### HTTPS 同步
 
@@ -331,7 +352,7 @@ curl -u <适配器用户名> \
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
 | `WPS_GROUP_ID` | WPS 企业群组 ID；`auto` 由登录助手识别 | `auto` |
-| `WPS_ROOT_ID` | 映射到适配器的根文件夹 ID；`auto` 使用登录时所在文件夹 | `auto` |
+| `WPS_ROOT_ID` | 映射到适配器的根文件夹 ID；`auto` 使用登录助手写入的选择，默认是企业云盘根目录 `0` | `auto` |
 | `WPS_WORKSPACE_FILE` | 自动保存群组和根目录选择的文件 | `/etc/wps-adapter/secrets/wps-workspace.json` |
 | `WPS_COOKIE_FILE` | WPS Cookie 文件 | `/etc/wps-adapter/secrets/wps-cookie` |
 | `WPS_CSRF_TOKEN_FILE` | CSRF 文件 | `/etc/wps-adapter/secrets/wps-csrf` |

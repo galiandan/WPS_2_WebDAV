@@ -328,7 +328,7 @@ GET /3rd/drive/api/v5/files/batch/task/progress?taskuuid=<taskuuid>
 
 ## A-03 本地交互式登录引导
 
-普通适配器网页不能直接读取 `365.kdocs.cn` 的登录 Cookie：两个页面不同源，且关键的 `rtk` Cookie 为 HttpOnly。`0.5.0` 的本地 `wps_login.py` 助手使用 Chrome/Chromium 的本地 DevTools Protocol 启动临时隔离配置，用户在官方 WPS 页面完成登录后，助手自动检测会话中的 Cookie，只保留匹配云盘主机和 `kdocs.cn` 域名后缀的 Cookie，并要求同时存在 `rtk` 和 `csrf`。现在助手还读取当前官方页面地址，只接受已观察的 `/space/<企业ID>/<群组ID>/<文件夹ID>` 形状，从中取得群组和映射根目录。优先通过受 Basic Auth 保护的 HTTPS 接口发送 Cookie 快照和工作区选择，SSH 标准输入仍可作为备用通道；Cookie、CSRF 和工作区文件都以临时文件加重命名方式更新。Cookie 值不进入命令参数、日志或仓库。此流程是本人账号的交互式引导，不代填密码，不绕过 SSO、验证码或风控。
+普通适配器网页不能直接读取 `365.kdocs.cn` 的登录 Cookie：两个页面不同源，且关键的 `rtk` Cookie 为 HttpOnly。`0.5.0` 的本地 `wps_login.py` 助手使用 Chrome/Chromium 的本地 DevTools Protocol 启动临时隔离配置，用户在官方 WPS 页面完成登录后，助手自动检测会话中的 Cookie，只保留匹配云盘主机和 `kdocs.cn` 域名后缀的 Cookie，并要求同时存在 `rtk` 和 `csrf`。现在助手还读取当前官方页面地址：默认接受 `/space/<企业ID>/<群组ID>` 或带有 WPS 自动恢复文件夹的 `/space/<企业ID>/<群组ID>/<文件夹ID>`，但只保存企业云盘根目录 `root_id=0`；使用 `--workspace-url` 时才严格选择具体文件夹。优先通过受 Basic Auth 保护的 HTTPS 接口发送 Cookie 快照和工作区选择，SSH 标准输入仍可作为备用通道；Cookie、CSRF 和工作区文件都以临时文件加重命名方式更新。Cookie 值不进入命令参数、日志或仓库。此流程是本人账号的交互式引导，不代填密码，不绕过 SSO、验证码或风控。
 
 ## 记录规则
 

@@ -75,7 +75,7 @@ class WpsWorkspaceSelection:
 
 _WORKSPACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
 _SPACE_PATH_PATTERN = re.compile(
-    r"^/space/([^/]+)/([^/]+)/([^/]+)/?$",
+    r"^/space/([^/]+)/([^/]+)(?:/([^/]+))?/?$",
     re.IGNORECASE,
 )
 
@@ -95,17 +95,57 @@ def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, str]:
     }
 
 
-def workspace_from_page_url(url: str) -> WpsWorkspaceSelection | None:
-    """Extract tenant/group/root IDs from an observed WPS space URL."""
+def _workspace_parts_from_page_url(
+    url: str,
+) -> tuple[str, str, str | None] | None:
+    """Parse the workspace context and optional folder from a WPS URL."""
 
     _host_from_url(url)
     match = _SPACE_PATH_PATTERN.fullmatch(urlsplit(url).path)
     if match is None:
         return None
+    tenant_id = _workspace_id(match.group(1), field_name="企业 ID")
+    group_id = _workspace_id(match.group(2), field_name="群组 ID")
+    folder_id = match.group(3)
+    return (
+        tenant_id,
+        group_id,
+        None if folder_id is None else _workspace_id(folder_id, field_name="目录 ID"),
+    )
+
+
+def workspace_from_page_url(url: str) -> WpsWorkspaceSelection | None:
+    """Extract a concrete folder selection from an observed WPS space URL."""
+
+    parts = _workspace_parts_from_page_url(url)
+    if parts is None or parts[2] is None:
+        return None
+    tenant_id, group_id, folder_id = parts
+    assert folder_id is not None
     return WpsWorkspaceSelection(
-        tenant_id=_workspace_id(match.group(1), field_name="企业 ID"),
-        group_id=_workspace_id(match.group(2), field_name="群组 ID"),
-        root_id=_workspace_id(match.group(3), field_name="目录 ID"),
+        tenant_id=tenant_id,
+        group_id=group_id,
+        root_id=folder_id,
+    )
+
+
+def workspace_root_from_page_url(url: str) -> WpsWorkspaceSelection | None:
+    """Extract the enterprise/group context and select the WPS root directory.
+
+    WPS may restore the last folder in the URL after login. That folder is a
+    browser navigation detail, not an appropriate default for the adapter, so
+    both the group URL and a group URL with an optional folder map to
+    ``root_id=0`` here.
+    """
+
+    parts = _workspace_parts_from_page_url(url)
+    if parts is None:
+        return None
+    tenant_id, group_id, _folder_id = parts
+    return WpsWorkspaceSelection(
+        tenant_id=tenant_id,
+        group_id=group_id,
+        root_id="0",
     )
 
 
@@ -1054,24 +1094,43 @@ def wait_for_login_snapshot(
     login_url: str,
     domain_suffix: str,
     timeout: float,
+    workspace_url: str | None = None,
 ) -> tuple[
     WpsCredentials,
     tuple[str, ...],
     list[Mapping[str, object]],
     WpsWorkspaceSelection,
 ]:
-    """Wait for credentials and a concrete enterprise-drive page selection."""
+    """Wait for credentials and either the WPS root or an explicit folder."""
 
     if timeout <= 0:
         raise LoginError("登录等待时间必须为正数")
-    _host_from_url(login_url)
+    login_host = _host_from_url(login_url)
+    expected_workspace: WpsWorkspaceSelection | None = None
+    if workspace_url is not None:
+        if _host_from_url(workspace_url) != login_host:
+            raise LoginError("--workspace-url 必须与登录地址使用同一个 WPS 主机")
+        expected_workspace = workspace_from_page_url(workspace_url)
+        if expected_workspace is None:
+            raise LoginError(
+                "--workspace-url 必须是具体文件夹地址：/space/<企业ID>/<群组ID>/<文件夹ID>"
+            )
     deadline = time.monotonic() + timeout
     last_error: LoginError | None = None
     while True:
         try:
-            workspace = workspace_from_page_url(session.current_url())
+            current_url = session.current_url()
+            workspace = (
+                workspace_from_page_url(current_url)
+                if expected_workspace is not None
+                else workspace_root_from_page_url(current_url)
+            )
             if workspace is None:
-                raise LoginError("请在临时 WPS 窗口进入要挂载的企业云盘文件夹")
+                if expected_workspace is not None:
+                    raise LoginError("请在临时 WPS 窗口打开 --workspace-url 指定的文件夹")
+                raise LoginError("请等待临时 WPS 窗口进入企业云盘；默认会使用企业云盘根目录")
+            if expected_workspace is not None and workspace != expected_workspace:
+                raise LoginError("当前 WPS 页面不是 --workspace-url 指定的文件夹")
             all_cookies = session.cookies()
             selected = _select_cookies(
                 all_cookies,
@@ -1088,7 +1147,11 @@ def wait_for_login_snapshot(
             last_error = exc
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            detail = "请完成 WPS 登录，并在同一窗口进入要挂载的企业云盘文件夹"
+            detail = (
+                "请完成 WPS 登录，并在同一窗口打开 --workspace-url 指定的文件夹"
+                if expected_workspace is not None
+                else "请完成 WPS 登录并进入企业云盘；默认目标是企业云盘根目录"
+            )
             if last_error is not None and "没有 rtk" in str(last_error):
                 detail = "登录成功但没有找到 rtk，请确认已进入云盘页面后重试"
             raise LoginError("等待 WPS 登录和工作区选择超时；" + detail) from last_error
@@ -1115,6 +1178,7 @@ def login_and_sync(
     adapter_password: str | None = None,
     adapter_timeout: float = 30.0,
     allow_insecure_http: bool = False,
+    workspace_url: str | None = None,
 ) -> tuple[str, ...]:
     """Open WPS, wait for a human login, then sync a safe credential snapshot."""
 
@@ -1125,6 +1189,16 @@ def login_and_sync(
         raise LoginError("登录等待时间必须为正数")
     if output_dir is not None and not Path(output_dir).is_absolute():
         raise LoginError("本地凭据目录必须是绝对路径")
+    browser_url = login_url
+    if workspace_url is not None:
+        login_host = _host_from_url(login_url)
+        if _host_from_url(workspace_url) != login_host:
+            raise LoginError("--workspace-url 必须与登录地址使用同一个 WPS 主机")
+        if workspace_from_page_url(workspace_url) is None:
+            raise LoginError(
+                "--workspace-url 必须是具体文件夹地址：/space/<企业ID>/<群组ID>/<文件夹ID>"
+            )
+        browser_url = workspace_url
     if adapter_url:
         _adapter_url_parts(
             adapter_url,
@@ -1133,15 +1207,25 @@ def login_and_sync(
         _validate_adapter_auth(adapter_user, adapter_password or "")
         if adapter_timeout <= 0:
             raise LoginError("适配器同步超时时间必须为正数")
-    with ChromeLoginSession(login_url=login_url, browser=browser) as session:
+    with ChromeLoginSession(login_url=browser_url, browser=browser) as session:
         print("WPS 登录窗口已打开。请只在这个官方 WPS 窗口中完成登录。", flush=True)
-        print("登录后请进入要挂载的企业云盘文件夹；脚本会自动识别当前目录，无需回到终端操作。", flush=True)
+        if workspace_url is None:
+            print(
+                "登录后脚本会使用企业云盘根目录；WPS 自动跳转到的旧文件夹不会被当作目标。",
+                flush=True,
+            )
+        else:
+            print(
+                "登录后请在临时 WPS 窗口打开 --workspace-url 指定的文件夹；脚本会校验当前目录。",
+                flush=True,
+            )
         try:
             credentials, names, selected_cookies, workspace = wait_for_login_snapshot(
                 session,
-                login_url=login_url,
+                login_url=browser_url,
                 domain_suffix=domain_suffix,
                 timeout=wait_timeout,
+                workspace_url=workspace_url,
             )
         except KeyboardInterrupt as exc:
             raise LoginError("已取消登录同步") from exc
@@ -1202,6 +1286,11 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     """Add login-helper arguments to a parser."""
 
     parser.add_argument("--login-url", default=DEFAULT_LOGIN_URL)
+    parser.add_argument(
+        "--workspace-url",
+        default=None,
+        help="指定具体 WPS 文件夹 URL；省略时使用企业云盘根目录",
+    )
     parser.add_argument("--browser", default=None, help="local Chrome/Chromium executable")
     parser.add_argument("--domain-suffix", default=DEFAULT_COOKIE_DOMAIN_SUFFIX)
     parser.add_argument("--wait-timeout", type=float, default=300.0)
@@ -1392,6 +1481,7 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         adapter_password = getpass.getpass("适配器密码（不会显示）: ")
     login_and_sync(
         login_url=args.login_url,
+        workspace_url=args.workspace_url,
         browser=args.browser,
         domain_suffix=args.domain_suffix,
         wait_timeout=args.wait_timeout,
@@ -1435,7 +1525,7 @@ __all__ = [
 ]
 
 
-__version__ = '0.9.2'
+__version__ = '0.9.3'
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

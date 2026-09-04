@@ -53,12 +53,33 @@ python3 wps_login.py \
 
 1. 只在官方 WPS 页面登录自己的账号。
 2. 正常完成学校 SSO、扫码、验证码或二次验证。
-3. 登录完成后，在同一个窗口进入想要挂载的企业云盘文件夹。脚本只接受类似 `/space/<企业ID>/<群组ID>/<文件夹ID>` 的官方 WPS 地址；停留在登录页或空间首页时会继续等待。
-4. 脚本自动读取当前页面地址和有效会话，不需要回终端按回车，并从地址中取得群组 ID 和根目录 ID。
-5. 脚本只保留匹配 WPS 云盘域名的 Cookie，并通过 HTTP 或 HTTPS 发送到适配器；SSH 方式也会同步工作区文件。
-6. 适配器原子更新 `wps-cookie`、`wps-csrf` 和 `wps-workspace.json`，服务无需重启。
+3. 默认不需要手动切换文件夹。WPS 登录后可能自动恢复上次打开的文件夹，即使该页面显示无权访问，脚本也会忽略这个文件夹，只选择当前企业和群组的企业云盘根目录 `root_id=0`。
+4. 脚本自动读取当前页面地址和有效会话，不需要回终端按回车；它从地址中取得企业/群组上下文，停留在登录页或空间首页时会继续等待。
+5. 如果要挂载具体子文件夹，使用 `--workspace-url`；脚本会直接打开并校验该地址，具体用法见下方。
+6. 脚本只保留匹配 WPS 云盘域名的 Cookie，并通过 HTTP 或 HTTPS 发送到适配器；SSH 方式也会同步工作区文件。
+7. 适配器原子更新 `wps-cookie`、`wps-csrf` 和 `wps-workspace.json`，服务无需重启。
 
 脚本不会显示 Cookie 值，也不会把 Cookie 放入命令参数、URL、日志或仓库。临时浏览器配置在流程结束后删除。
+
+## Target folder (optional)
+
+省略 `--workspace-url` 时，适配器映射企业云盘根目录，不采用 WPS 自动恢复的旧文件夹。若要映射具体文件夹，从 WPS 页面复制类似下面的官方地址：
+
+```text
+https://365.kdocs.cn/space/<企业ID>/<群组ID>/<文件夹ID>
+```
+
+运行时添加：
+
+```bash
+python3 wps_login.py \
+  --workspace-url 'https://365.kdocs.cn/space/<企业ID>/<群组ID>/<文件夹ID>' \
+  --adapter-url https://<adapter-host> \
+  --adapter-port 18080 \
+  --adapter-user <adapter-user>
+```
+
+指定后，登录助手只接受同一企业、群组和文件夹的页面；如果地址无权访问或登录后跳到了其他位置，脚本会超时失败，不会悄悄改用其他目录。
 
 ## SSH fallback
 
@@ -102,7 +123,7 @@ curl 会提示输入适配器 Basic Auth 密码。不要把密码写在命令中
 
 ## Persistent refresh
 
-首次同步得到的 `rtk` 会保存在 VPS secret 文件中，当前选中的群组和目录保存在 `wps-workspace.json`。适配器遇到 WPS `401` 时，会按已经观察到的 `grant_token` 刷新流程更新轮换 Cookie，并重试原请求。只有 WPS 撤销刷新票据、要求重新登录或登录策略改变时，才需要再次运行助手。
+首次同步得到的 `rtk` 会保存在 VPS secret 文件中，群组和目录选择保存在 `wps-workspace.json`。默认目录是企业云盘根目录 `0`；只有使用 `--workspace-url` 时才会保存具体文件夹 ID。适配器遇到 WPS `401` 时，会按已经观察到的 `grant_token` 刷新流程更新轮换 Cookie，并重试原请求。只有 WPS 撤销刷新票据、要求重新登录或登录策略改变时，才需要再次运行助手。
 
 ## Troubleshooting
 

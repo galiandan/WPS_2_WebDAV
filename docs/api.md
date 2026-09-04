@@ -66,12 +66,12 @@ POST  /api/v1/session/import
   ],
   "workspace": {
     "group_id": "<group-id-from-current-space-url>",
-    "root_id": "<folder-id-from-current-space-url>"
+    "root_id": "0"
   }
 }
 ```
 
-服务端会再次限制 WPS 域名、检查 `rtk`/`csrf` 和工作区 ID，然后更新配置的 `WPS_COOKIE_FILE`、`WPS_CSRF_TOKEN_FILE` 和 `WPS_WORKSPACE_FILE`。发送 `workspace` 时必须已配置 `WPS_GROUP_ID=auto` 或 `WPS_ROOT_ID=auto`；成功响应为 `200` JSON，服务会立即切换自动根目录并清理目录缓存。凭据更新后不需要重启服务。通过 HTTP 访问时，Cookie 和 Basic Auth 会明文传输。
+登录助手默认发送 `root_id=0`，表示企业云盘根目录；只有使用 `--workspace-url` 时才发送具体文件夹 ID。服务端会再次限制 WPS 域名、检查 `rtk`/`csrf` 和工作区 ID，然后更新配置的 `WPS_COOKIE_FILE`、`WPS_CSRF_TOKEN_FILE` 和 `WPS_WORKSPACE_FILE`。发送 `workspace` 时必须已配置 `WPS_GROUP_ID=auto` 或 `WPS_ROOT_ID=auto`；成功响应为 `200` JSON，服务会立即切换自动根目录并清理目录缓存。凭据更新后不需要重启服务。通过 HTTP 访问时，Cookie 和 Basic Auth 会明文传输。
 
 所有写操作如果带有 `Origin` 或 `Referer`，适配器会要求其主机与当前请求的 `Host` 一致，用于阻止浏览器缓存 Basic Auth 后的跨站写入；没有这两个头的 WebDAV、curl 和 NAS 请求仍可正常使用。
 
