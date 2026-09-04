@@ -19,7 +19,13 @@ from wps_adapter.provider import (
     ServiceBusyError,
     UnsupportedOperationError,
 )
-from wps_adapter.server import AdapterApplication, AdapterHTTPServer, BasicAuth, DavLockStore
+from wps_adapter.server import (
+    AdapterApplication,
+    AdapterHTTPServer,
+    AdapterRequestHandler,
+    BasicAuth,
+    DavLockStore,
+)
 from wps_adapter.settings import WebSettings
 from wps_adapter.storage import split_remote_path
 from wps_adapter.web import render_web_app
@@ -728,6 +734,21 @@ class ServerTests(unittest.TestCase):
 
 
 class PathTests(unittest.TestCase):
+    def test_client_disconnect_probe_does_not_consume_data(self) -> None:
+        first, second = socket.socketpair()
+        try:
+            handler = object.__new__(AdapterRequestHandler)
+            handler.connection = first
+            self.assertFalse(AdapterRequestHandler._client_disconnected(handler))
+            second.send(b"next request")
+            self.assertFalse(AdapterRequestHandler._client_disconnected(handler))
+            self.assertEqual(first.recv(12), b"next request")
+            second.close()
+            self.assertTrue(AdapterRequestHandler._client_disconnected(handler))
+        finally:
+            first.close()
+            second.close()
+
     def test_split_path_decodes_names_and_rejects_traversal(self) -> None:
         self.assertEqual(split_remote_path("/docs/%E4%B8%AD%E6%96%87/"), ("docs", "中文"))
         with self.assertRaises(InvalidPathError):

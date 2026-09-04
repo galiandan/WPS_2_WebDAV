@@ -141,6 +141,7 @@ class WpsStorage:
         list_count: int = 20,
         max_list_entries: int = 10000,
         cache_ttl: float = 2.0,
+        max_cached_folders: int = 1024,
         max_uploads: int = 2,
         max_downloads: int = 4,
         transfer_wait_timeout: float = 30.0,
@@ -157,6 +158,8 @@ class WpsStorage:
             raise ValueError("list_count must not exceed max_list_entries")
         if cache_ttl < 0:
             raise ValueError("cache_ttl must not be negative")
+        if max_cached_folders <= 0:
+            raise ValueError("max_cached_folders must be positive")
         if max_uploads <= 0:
             raise ValueError("max_uploads must be positive")
         if max_downloads <= 0:
@@ -173,6 +176,7 @@ class WpsStorage:
         self.list_count = list_count
         self.max_list_entries = max_list_entries
         self.cache_ttl = cache_ttl
+        self.max_cached_folders = max_cached_folders
         self.max_copy_entries = max_copy_entries
         self.max_copy_depth = max_copy_depth
         self._cache: dict[str, tuple[float, tuple[RemoteEntry, ...]]] = {}
@@ -242,6 +246,9 @@ class WpsStorage:
             )
         )
         with self._lock:
+            if parent_id not in self._cache and len(self._cache) >= self.max_cached_folders:
+                oldest_parent = min(self._cache, key=lambda key: self._cache[key][0])
+                del self._cache[oldest_parent]
             self._cache[parent_id] = (time.monotonic() + self.cache_ttl, entries)
         return entries
 

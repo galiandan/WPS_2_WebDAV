@@ -130,6 +130,16 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(entry.id, "readme")
         self.assertEqual([item.name for item in storage.list_path("/")], ["docs", "top.txt"])
 
+    def test_metadata_cache_has_a_folder_count_bound(self) -> None:
+        client = FakeClient()
+        storage = WpsStorage(client, root_id="root", cache_ttl=60, max_cached_folders=1)
+
+        storage.list_path("/")
+        storage.list_path("/docs")
+
+        self.assertEqual(len(storage._cache), 1)
+        self.assertIn("docs", storage._cache)
+
     def test_uploads_new_path_and_rejects_collision(self) -> None:
         client = FakeClient()
         storage = WpsStorage(client, root_id="root", cache_ttl=60)

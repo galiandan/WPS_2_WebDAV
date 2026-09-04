@@ -280,6 +280,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 | `WPS_AUTO_REFRESH` | `true` | 上游 `401` 后自动续期 |
 | `WPS_STATUS_PROBE_TTL` | `30` | 成功的 WPS 状态预检缓存秒数 |
 | `WPS_STATUS_FAILURE_BACKOFF` | `5` | 失败预检的短暂退避秒数 |
+| `WPS_MAX_CACHED_FOLDERS` | `1024` | 内存中最多保留的目录元数据页面数 |
 | `WPS_MULTIPART_THRESHOLD` | `52428800` | 分片上传阈值，单位字节 |
 | `WPS_MAX_UPLOAD_BYTES` | `1073741824` | 单次上传上限，`0` 表示不限制 |
 | `WPS_MAX_UPLOADS` | `2` | 并发上传上限 |

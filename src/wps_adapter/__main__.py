@@ -46,6 +46,7 @@ def _application() -> AdapterApplication:
         list_count=_env_int("WPS_LIST_COUNT", 20),
         max_list_entries=_env_int("WPS_MAX_LIST_ENTRIES", 10000),
         cache_ttl=_env_float("WPS_CACHE_TTL", 2.0),
+        max_cached_folders=_env_int("WPS_MAX_CACHED_FOLDERS", 1024),
         max_uploads=_env_int("WPS_MAX_UPLOADS", 2),
         max_downloads=_env_int("WPS_MAX_DOWNLOADS", 4),
         transfer_wait_timeout=_env_float("WPS_TRANSFER_WAIT_TIMEOUT", 30.0),

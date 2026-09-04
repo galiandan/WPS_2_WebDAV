@@ -10,6 +10,8 @@ import json
 import logging
 import mimetypes
 import re
+import select
+import socket
 import threading
 import time
 import uuid
@@ -346,6 +348,10 @@ class _RequestBodyTooLarge(ValueError):
         super().__init__("request body is too large")
 
 
+class _ClientDisconnected(Exception):
+    """Stop work after the WebDAV client has closed its connection."""
+
+
 class AdapterHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -430,6 +436,20 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         path = "".join(char if ord(char) >= 0x20 and char != "\x7f" else "?" for char in path)
         LOG.info("%s %s", self.command, path)
+
+    def _client_disconnected(self) -> bool:
+        """Check for EOF without consuming a pipelined request."""
+
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            if not readable:
+                return False
+            data = self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
+        except BlockingIOError:
+            return False
+        except (OSError, ValueError):
+            return True
+        return data == b""
 
     def _is_health(self) -> bool:
         return urlsplit(self.path).path == "/healthz"
@@ -795,11 +815,13 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             while True:
+                if self._client_disconnected():
+                    return
                 chunk = stream.read(self.application.storage.client.config.stream_chunk_size)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout):
             self.close_connection = True
         finally:
             stream.close()
@@ -848,6 +870,8 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         visited_ids: set[str] = set()
 
         def visit(current_path: str, current_parts: tuple[str, ...], current_entry: RemoteEntry, level: int) -> None:
+            if self._client_disconnected():
+                raise _ClientDisconnected()
             if current_entry.id in visited_ids:
                 raise WpsApiError("PROPFIND encountered a repeated entry ID")
             visited_ids.add(current_entry.id)
@@ -862,6 +886,8 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             if level >= self.application.max_propfind_depth:
                 raise InsufficientStorageError("PROPFIND exceeds the configured depth limit")
             for child in self.application.storage.list_path(current_path):
+                if self._client_disconnected():
+                    raise _ClientDisconnected()
                 child_parts = current_parts + (child.name,)
                 child_path = join_remote_path(
                     child_parts,
@@ -1029,11 +1055,15 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
 
     def _do_propfind(self, path: str) -> None:
         self._discard_body()
+        if self._client_disconnected():
+            raise _ClientDisconnected()
         depth = self.headers.get("Depth", "1").strip().lower()
         if depth not in {"0", "1", "infinity"}:
             self._send_error(HTTPStatus.BAD_REQUEST, "Depth must be 0, 1 or infinity")
             return
         body = self._propfind_body(self._webdav_entries(path, depth))
+        if self._client_disconnected():
+            raise _ClientDisconnected()
         self._send_bytes(
             HTTPStatus.MULTI_STATUS,
             body,
@@ -1500,6 +1530,8 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             self._do_propfind(path)
+        except _ClientDisconnected:
+            self.close_connection = True
         except Exception as exc:
             self._handle_exception(exc)
 
