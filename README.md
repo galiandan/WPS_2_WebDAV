@@ -66,16 +66,16 @@ VPS 需要常见 Linux 发行版、root 或 `sudo` 权限、一个未被占用�
 Native：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
 ```
 
 Docker：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ```
 
-自定义端口时，把最后的 `54321` 改成目标端口，例如 `--port 18080`。如果 `gh-proxy.com` 无法访问，将 URL 中的 `gh-proxy.com` 替换为 `ghfast.top`。
+自定义端口时，把最后的 `54321` 改成目标端口，例如 `--port 18080`。如果 VPS 无法访问 GitHub Raw，可将 URL 替换为 `https://gh-proxy.com/https://raw.githubusercontent.com/...`，或使用 `https://ghfast.top/https://raw.githubusercontent.com/...`。
 
 安装器会显示阶段进度和下载进度，并校验固定版本的文件清单。首次安装会询问适配器 Basic Auth 用户名和密码；密码不会显示。安装器默认使用执行 `sudo` 的当前用户运行服务。
 
@@ -84,7 +84,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 Docker 安装器如果检测到正在运行的 Native 服务，会拒绝覆盖。确认切换时：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321 --replace-native
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321 --replace-native
 ```
 
 ### 2. 登录并同步 WPS
@@ -94,7 +94,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 下载并运行独立脚本：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
 ```
 
 向导会询问 VPS 地址、SSH 或 HTTP/HTTPS 连接方式、端口和适配器账号。随后会打开一个临时隔离的 Chrome 窗口：
@@ -242,13 +242,13 @@ curl -u <适配器用户名> \
 统一卸载脚本会同时检查 Native 和 Docker 安装。默认删除服务、应用代码和本项目管理的 Docker 容器，但保留配置及凭据，方便以后重新安装：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ```
 
 删除配置、Cookie、CSRF、Basic Auth 和工作区文件时，明确添加 `--purge`：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge
 ```
 
 卸载 Docker 镜像需要额外添加 `--remove-image`。自动化执行可以添加 `--yes`，但 `--purge --yes` 会不可恢复地删除本机凭据，请确认目标服务器后再使用。
