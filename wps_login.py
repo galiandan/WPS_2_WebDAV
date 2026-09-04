@@ -22,6 +22,7 @@ import ipaddress
 import json
 import os
 import posixpath
+import re
 import secrets
 import shlex
 import shutil
@@ -53,6 +54,7 @@ DEFAULT_LOGIN_URL = "https://365.kdocs.cn/space/"
 DEFAULT_COOKIE_DOMAIN_SUFFIX = "kdocs.cn"
 DEFAULT_REMOTE_COOKIE_PATH = "/etc/wps-adapter/secrets/wps-cookie"
 DEFAULT_REMOTE_CSRF_PATH = "/etc/wps-adapter/secrets/wps-csrf"
+DEFAULT_REMOTE_WORKSPACE_PATH = "/etc/wps-adapter/secrets/wps-workspace.json"
 REMOTE_SECRET_DIR = "/etc/wps-adapter/secrets"
 MAX_COOKIE_SNAPSHOT_BYTES = 4 * 1024 * 1024
 MAX_ADAPTER_RESPONSE_BYTES = 1 * 1024 * 1024
@@ -60,6 +62,51 @@ MAX_ADAPTER_RESPONSE_BYTES = 1 * 1024 * 1024
 
 class LoginError(RuntimeError):
     """A safe, user-facing error from the interactive login helper."""
+
+
+@dataclass(frozen=True, slots=True)
+class WpsWorkspaceSelection:
+    """Workspace IDs read from the current official WPS page URL."""
+
+    tenant_id: str
+    group_id: str
+    root_id: str
+
+
+_WORKSPACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
+_SPACE_PATH_PATTERN = re.compile(
+    r"^/space/([^/]+)/([^/]+)/([^/]+)/?$",
+    re.IGNORECASE,
+)
+
+
+def _workspace_id(value: str, *, field_name: str) -> str:
+    if not _WORKSPACE_ID_PATTERN.fullmatch(value):
+        raise LoginError(f"WPS {field_name} 格式不正确")
+    return value
+
+
+def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, str]:
+    if not isinstance(selection, WpsWorkspaceSelection):
+        raise LoginError("WPS 工作区信息无效")
+    return {
+        "group_id": _workspace_id(selection.group_id, field_name="群组 ID"),
+        "root_id": _workspace_id(selection.root_id, field_name="目录 ID"),
+    }
+
+
+def workspace_from_page_url(url: str) -> WpsWorkspaceSelection | None:
+    """Extract tenant/group/root IDs from an observed WPS space URL."""
+
+    _host_from_url(url)
+    match = _SPACE_PATH_PATTERN.fullmatch(urlsplit(url).path)
+    if match is None:
+        return None
+    return WpsWorkspaceSelection(
+        tenant_id=_workspace_id(match.group(1), field_name="企业 ID"),
+        group_id=_workspace_id(match.group(2), field_name="群组 ID"),
+        root_id=_workspace_id(match.group(3), field_name="目录 ID"),
+    )
 
 
 def _host_from_url(url: str) -> str:
@@ -240,6 +287,24 @@ def write_local_credentials(
     return cookie_path, csrf_path
 
 
+def write_local_workspace(
+    workspace: WpsWorkspaceSelection,
+    *,
+    output_dir: str | Path,
+) -> Path:
+    """Write the selected WPS workspace next to local credentials."""
+
+    directory = Path(output_dir)
+    if not directory.is_absolute():
+        raise LoginError("本地凭据目录必须是绝对路径")
+    workspace_path = directory / "wps-workspace.json"
+    _atomic_write(
+        workspace_path,
+        json.dumps(_workspace_payload(workspace), ensure_ascii=True, separators=(",", ":")),
+    )
+    return workspace_path
+
+
 _REMOTE_WRITE_SCRIPT = r'''import json, os, stat, sys, tempfile
 
 SECRET_DIR = "/etc/wps-adapter/secrets"
@@ -261,6 +326,13 @@ def validate_secret_path(path):
     if not stat.S_ISDIR(directory_stat.st_mode):
         raise ValueError("adapter secret path is not a directory")
     return path
+
+def validate_workspace_id(value):
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise ValueError("invalid workspace identifier")
+    if not all("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in ".-_" for char in value):
+        raise ValueError("invalid workspace identifier")
+    return value
 
 def atomic_write(path, value):
     target = validate_secret_path(path)
@@ -311,8 +383,37 @@ if any(any(ord(char) < 0x20 or ord(char) == 0x7f for char in item) for item in (
     raise ValueError("invalid credential value")
 atomic_write(cookie_path, cookie)
 atomic_write(csrf_path, csrf)
+workspace_path = data.get("workspace_path")
+workspace = data.get("workspace")
+if workspace_path is not None or workspace is not None:
+    workspace_path = validate_secret_path(workspace_path)
+    if not isinstance(workspace, dict):
+        raise ValueError("invalid workspace payload")
+    group_id = validate_workspace_id(workspace.get("group_id"))
+    root_id = validate_workspace_id(workspace.get("root_id"))
+    atomic_write(
+        workspace_path,
+        json.dumps({"group_id": group_id, "root_id": root_id}, ensure_ascii=True, separators=(",", ":")),
+    )
 print("credentials-updated")
 '''
+
+
+def _validate_remote_secret_path(path: str, *, label: str) -> None:
+    if not isinstance(path, str) or not path.startswith(REMOTE_SECRET_DIR + "/"):
+        raise LoginError(f"远程{label}路径必须位于 /etc/wps-adapter/secrets 目录")
+    relative = path[len(REMOTE_SECRET_DIR) + 1:]
+    if (
+        not relative
+        or "/" in relative
+        or relative in {".", ".."}
+        or any(
+            not ("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in "._-")
+            for char in relative
+        )
+        or posixpath.normpath(path) != path
+    ):
+        raise LoginError(f"远程{label}路径必须是 secret 目录下的普通文件名")
 
 
 def push_credentials_over_ssh(
@@ -321,6 +422,8 @@ def push_credentials_over_ssh(
     ssh_target: str,
     cookie_path: str = DEFAULT_REMOTE_COOKIE_PATH,
     csrf_path: str = DEFAULT_REMOTE_CSRF_PATH,
+    workspace: WpsWorkspaceSelection | None = None,
+    workspace_path: str = DEFAULT_REMOTE_WORKSPACE_PATH,
     identity_file: str | None = None,
     port: int = 22,
     password_auth: bool = False,
@@ -336,34 +439,28 @@ def push_credentials_over_ssh(
         raise LoginError("SSH 端口必须在 1 到 65535 之间")
     if timeout <= 0:
         raise LoginError("SSH 超时时间必须为正数")
-    for path in (cookie_path, csrf_path):
-        if not isinstance(path, str) or not path.startswith(REMOTE_SECRET_DIR + "/"):
-            raise LoginError("远程凭据路径必须位于 /etc/wps-adapter/secrets 目录")
-        relative = path[len(REMOTE_SECRET_DIR) + 1:]
-        if (
-            not relative
-            or "/" in relative
-            or relative in {".", ".."}
-            or any(
-                not ("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in "._-")
-                for char in relative
-            )
-            or posixpath.normpath(path) != path
-        ):
-            raise LoginError("远程凭据路径必须是 secret 目录下的普通文件名")
+    _validate_remote_secret_path(cookie_path, label="凭据")
+    _validate_remote_secret_path(csrf_path, label="凭据")
+    if workspace is not None:
+        _validate_remote_secret_path(workspace_path, label="工作区")
+        workspace_data = _workspace_payload(workspace)
+    else:
+        workspace_data = None
     if cookie_path == csrf_path:
         raise LoginError("远程 Cookie 和 CSRF 路径必须不同")
+    if workspace is not None and workspace_path in {cookie_path, csrf_path}:
+        raise LoginError("远程工作区和凭据路径不能重复")
 
-    payload = json.dumps(
-        {
-            "cookie_path": cookie_path,
-            "csrf_path": csrf_path,
-            "cookie": credentials.cookie,
-            "csrf": credentials.csrf_token,
-        },
-        ensure_ascii=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    payload_data: dict[str, object] = {
+        "cookie_path": cookie_path,
+        "csrf_path": csrf_path,
+        "cookie": credentials.cookie,
+        "csrf": credentials.csrf_token,
+    }
+    if workspace_data is not None:
+        payload_data["workspace_path"] = workspace_path
+        payload_data["workspace"] = workspace_data
+    payload = json.dumps(payload_data, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
     remote_command = (
         "python3 -c "
         + shlex.quote(_REMOTE_WRITE_SCRIPT)
@@ -516,6 +613,7 @@ def push_credentials_over_https(
     credentials: WpsCredentials,
     *,
     cookies: Sequence[Mapping[str, object]],
+    workspace: WpsWorkspaceSelection | None = None,
     adapter_url: str,
     username: str,
     password: str,
@@ -539,11 +637,10 @@ def push_credentials_over_https(
         raise LoginError("适配器同步超时时间必须为正数")
     if not credentials.cookie or not credentials.csrf_token:
         raise LoginError("WPS 登录凭据不完整")
-    body = json.dumps(
-        {"cookies": _cookie_payload(cookies)},
-        ensure_ascii=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    payload_data: dict[str, object] = {"cookies": _cookie_payload(cookies)}
+    if workspace is not None:
+        payload_data["workspace"] = _workspace_payload(workspace)
+    body = json.dumps(payload_data, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
     authorization = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
     if connection_factory is None:
         connection_factory = (
@@ -871,6 +968,24 @@ class ChromeLoginSession:
             raise LoginError("Chrome 没有返回 Cookie")
         return [item for item in cookies if isinstance(item, Mapping)]
 
+    def current_url(self) -> str:
+        """Read the visible page URL from the isolated official WPS tab."""
+
+        if self._connection is None:
+            raise LoginError("Chrome 登录会话未启动")
+        result = self._connection.call(
+            "Runtime.evaluate",
+            {
+                "expression": "location.href",
+                "returnByValue": True,
+                "awaitPromise": False,
+            },
+        )
+        value = result.get("result")
+        if not isinstance(value, Mapping) or not isinstance(value.get("value"), str):
+            raise LoginError("Chrome 没有返回当前页面地址")
+        return value["value"]
+
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
@@ -933,6 +1048,53 @@ def wait_for_login_credentials(
         time.sleep(min(0.5, remaining))
 
 
+def wait_for_login_snapshot(
+    session: ChromeLoginSession,
+    *,
+    login_url: str,
+    domain_suffix: str,
+    timeout: float,
+) -> tuple[
+    WpsCredentials,
+    tuple[str, ...],
+    list[Mapping[str, object]],
+    WpsWorkspaceSelection,
+]:
+    """Wait for credentials and a concrete enterprise-drive page selection."""
+
+    if timeout <= 0:
+        raise LoginError("登录等待时间必须为正数")
+    _host_from_url(login_url)
+    deadline = time.monotonic() + timeout
+    last_error: LoginError | None = None
+    while True:
+        try:
+            workspace = workspace_from_page_url(session.current_url())
+            if workspace is None:
+                raise LoginError("请在临时 WPS 窗口进入要挂载的企业云盘文件夹")
+            all_cookies = session.cookies()
+            selected = _select_cookies(
+                all_cookies,
+                host=_host_from_url(login_url),
+                domain_suffix=domain_suffix,
+            )
+            credentials, names = credentials_from_cookies(
+                selected,
+                base_url=login_url,
+                domain_suffix=domain_suffix,
+            )
+            return credentials, names, selected, workspace
+        except LoginError as exc:
+            last_error = exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = "请完成 WPS 登录，并在同一窗口进入要挂载的企业云盘文件夹"
+            if last_error is not None and "没有 rtk" in str(last_error):
+                detail = "登录成功但没有找到 rtk，请确认已进入云盘页面后重试"
+            raise LoginError("等待 WPS 登录和工作区选择超时；" + detail) from last_error
+        time.sleep(min(0.5, remaining))
+
+
 def login_and_sync(
     *,
     login_url: str = DEFAULT_LOGIN_URL,
@@ -942,6 +1104,7 @@ def login_and_sync(
     ssh_target: str = "",
     ssh_cookie_path: str = DEFAULT_REMOTE_COOKIE_PATH,
     ssh_csrf_path: str = DEFAULT_REMOTE_CSRF_PATH,
+    ssh_workspace_path: str = DEFAULT_REMOTE_WORKSPACE_PATH,
     ssh_identity: str | None = None,
     ssh_port: int = 22,
     ssh_password_auth: bool = False,
@@ -972,9 +1135,9 @@ def login_and_sync(
             raise LoginError("适配器同步超时时间必须为正数")
     with ChromeLoginSession(login_url=login_url, browser=browser) as session:
         print("WPS 登录窗口已打开。请只在这个官方 WPS 窗口中完成登录。", flush=True)
-        print("完成登录后脚本会自动检测，无需回到终端操作。", flush=True)
+        print("登录后请进入要挂载的企业云盘文件夹；脚本会自动识别当前目录，无需回到终端操作。", flush=True)
         try:
-            credentials, names, selected_cookies = wait_for_login_credentials(
+            credentials, names, selected_cookies, workspace = wait_for_login_snapshot(
                 session,
                 login_url=login_url,
                 domain_suffix=domain_suffix,
@@ -993,6 +1156,8 @@ def login_and_sync(
             ssh_target=ssh_target,
             cookie_path=ssh_cookie_path,
             csrf_path=ssh_csrf_path,
+            workspace=workspace,
+            workspace_path=ssh_workspace_path,
             identity_file=ssh_identity,
             port=ssh_port,
             password_auth=ssh_password_auth,
@@ -1003,6 +1168,7 @@ def login_and_sync(
         push_credentials_over_https(
             credentials,
             cookies=selected_cookies,
+            workspace=workspace,
             adapter_url=adapter_url,
             username=adapter_user,
             password=adapter_password or "",
@@ -1013,7 +1179,8 @@ def login_and_sync(
         print(f"已通过 {scheme} 更新适配器凭据，服务无需重启。", flush=True)
     else:
         cookie_path, csrf_path = write_local_credentials(credentials, output_dir=output_dir or "")
-        print(f"已写入本地凭据文件：{cookie_path}、{csrf_path}", flush=True)
+        workspace_path = write_local_workspace(workspace, output_dir=output_dir or "")
+        print(f"已写入本地凭据文件：{cookie_path}、{csrf_path}；工作区信息：{workspace_path}", flush=True)
     return names
 
 
@@ -1074,11 +1241,12 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--ssh-cookie-path", default=DEFAULT_REMOTE_COOKIE_PATH)
     parser.add_argument("--ssh-csrf-path", default=DEFAULT_REMOTE_CSRF_PATH)
+    parser.add_argument("--ssh-workspace-path", default=DEFAULT_REMOTE_WORKSPACE_PATH)
     parser.add_argument("--ssh-timeout", type=float, default=30.0)
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="write wps-cookie and wps-csrf to this local absolute directory",
+        help="write credentials and wps-workspace.json to this local absolute directory",
     )
 
 
@@ -1230,6 +1398,7 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         ssh_target=interactive_target.ssh_target,
         ssh_cookie_path=args.ssh_cookie_path,
         ssh_csrf_path=args.ssh_csrf_path,
+        ssh_workspace_path=args.ssh_workspace_path,
         ssh_identity=interactive_target.ssh_identity,
         ssh_port=interactive_target.ssh_port,
         ssh_password_auth=interactive_target.ssh_password_auth,
@@ -1266,7 +1435,7 @@ __all__ = [
 ]
 
 
-__version__ = '0.8.1'
+__version__ = '0.9.0'
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

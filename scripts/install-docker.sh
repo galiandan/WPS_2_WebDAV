@@ -34,8 +34,8 @@ usage() {
 选项：
   --port PORT          适配器监听端口，默认 54321
   --bind ADDRESS      宿主机监听地址，默认 0.0.0.0
-  --group-id ID       WPS 企业群组 ID
-  --root-id ID        WPS 根目录 ID，默认 0
+  --group-id ID       WPS 企业群组 ID（可选，默认自动识别）
+  --root-id ID        WPS 根目录 ID（可选，默认自动识别）
   --adapter-user USER 适配器 Basic Auth 用户名
   --run-user USER      容器运行用户，默认执行 sudo 的当前用户
   --source-ref SHA     要安装的 40 位 Git 提交号（默认使用脚本内固定版本）
@@ -222,6 +222,7 @@ OLD_PORT="$(read_env_value ADAPTER_PORT || true)"
 OLD_BIND="$(read_env_value ADAPTER_BIND || true)"
 OLD_GROUP_ID="$(read_env_value WPS_GROUP_ID || true)"
 OLD_ROOT_ID="$(read_env_value WPS_ROOT_ID || true)"
+OLD_WORKSPACE_FILE="$(read_env_value WPS_WORKSPACE_FILE || true)"
 OLD_COOKIE_FILE="$(read_env_value WPS_COOKIE_FILE || true)"
 OLD_CSRF_FILE="$(read_env_value WPS_CSRF_TOKEN_FILE || true)"
 OLD_USER_FILE="$(read_env_value ADAPTER_USERNAME_FILE || true)"
@@ -237,21 +238,18 @@ validate_port "$PORT"
 BIND="${BIND_ARG:-${OLD_BIND:-0.0.0.0}}"
 [[ "$BIND" =~ ^\[?[A-Za-z0-9.:-]+\]?$ ]] || die "监听地址格式不正确"
 
-GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-}}"
-if [[ -z "$GROUP_ID" ]]; then
-    ask_value "WPS 企业群组 ID"
-    GROUP_ID="$REPLY"
-fi
+GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-auto}}"
 validate_safe_value "WPS 企业群组 ID" "$GROUP_ID"
 
-ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-0}}"
+ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"
 validate_safe_value "WPS 根目录 ID" "$ROOT_ID"
 
+WORKSPACE_FILE="${OLD_WORKSPACE_FILE:-$SECRET_DIR/wps-workspace.json}"
 COOKIE_FILE="${OLD_COOKIE_FILE:-$SECRET_DIR/wps-cookie}"
 CSRF_FILE="${OLD_CSRF_FILE:-$SECRET_DIR/wps-csrf}"
 USER_FILE="${OLD_USER_FILE:-$SECRET_DIR/adapter-username}"
 PASSWORD_FILE="${OLD_PASSWORD_FILE:-$SECRET_DIR/adapter-password}"
-for secret_path in "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
+for secret_path in "$WORKSPACE_FILE" "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
     [[ "$secret_path" == /* ]] || die "secret 文件路径必须是绝对路径"
     [[ "$secret_path" == "$SECRET_DIR"/* ]] || die "secret 文件必须位于 $SECRET_DIR 目录内"
     relative_path="${secret_path#"$SECRET_DIR"/}"
@@ -262,7 +260,9 @@ for secret_path in "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
         die "secret 路径必须是普通文件且不能是符号链接：$secret_path"
     fi
 done
-[[ "$COOKIE_FILE" != "$CSRF_FILE" && "$COOKIE_FILE" != "$USER_FILE" \
+[[ "$WORKSPACE_FILE" != "$COOKIE_FILE" && "$WORKSPACE_FILE" != "$CSRF_FILE" \
+    && "$WORKSPACE_FILE" != "$USER_FILE" && "$WORKSPACE_FILE" != "$PASSWORD_FILE" \
+    && "$COOKIE_FILE" != "$CSRF_FILE" && "$COOKIE_FILE" != "$USER_FILE" \
     && "$COOKIE_FILE" != "$PASSWORD_FILE" && "$CSRF_FILE" != "$USER_FILE" \
     && "$CSRF_FILE" != "$PASSWORD_FILE" && "$USER_FILE" != "$PASSWORD_FILE" ]] \
     || die "secret 文件路径不能重复"
@@ -299,10 +299,12 @@ USER_BASENAME="$(basename -- "$USER_FILE")"
 PASSWORD_BASENAME="$(basename -- "$PASSWORD_FILE")"
 COOKIE_BACKUP="$TMP_DIR/cookie.before"
 CSRF_BACKUP="$TMP_DIR/csrf.before"
+WORKSPACE_BACKUP="$TMP_DIR/workspace.before"
 USER_BACKUP="$TMP_DIR/user.before"
 PASSWORD_BACKUP="$TMP_DIR/password.before"
 COOKIE_WAS_PRESENT=0
 CSRF_WAS_PRESENT=0
+WORKSPACE_WAS_PRESENT=0
 USER_WAS_PRESENT=0
 PASSWORD_WAS_PRESENT=0
 directory_state() {
@@ -340,6 +342,7 @@ rollback() {
         fi
         if (( SECRET_MUTATION_STARTED )); then
             for pair in \
+                "$WORKSPACE_FILE:$WORKSPACE_BACKUP:$WORKSPACE_WAS_PRESENT" \
                 "$COOKIE_FILE:$COOKIE_BACKUP:$COOKIE_WAS_PRESENT" \
                 "$CSRF_FILE:$CSRF_BACKUP:$CSRF_WAS_PRESENT" \
                 "$USER_FILE:$USER_BACKUP:$USER_WAS_PRESENT" \
@@ -439,6 +442,7 @@ fi
 ENV_TARGET_FILE="$TMP_DIR/wps-adapter.env"
 set_env_value WPS_GROUP_ID "$GROUP_ID"
 set_env_value WPS_ROOT_ID "$ROOT_ID"
+set_env_value WPS_WORKSPACE_FILE "$WORKSPACE_FILE"
 set_env_value WPS_COOKIE_FILE "$COOKIE_FILE"
 set_env_value WPS_CSRF_TOKEN_FILE "$CSRF_FILE"
 set_env_value ADAPTER_USERNAME_FILE "$USER_FILE"
@@ -463,6 +467,7 @@ docker build \
 
 STAGED_COOKIE="$TMP_DIR/wps-cookie"
 STAGED_CSRF="$TMP_DIR/wps-csrf"
+STAGED_WORKSPACE="$TMP_DIR/wps-workspace.json"
 STAGED_USER="$TMP_DIR/adapter-username"
 STAGED_PASSWORD="$TMP_DIR/adapter-password"
 stage_secret() {
@@ -476,6 +481,7 @@ stage_secret() {
 }
 stage_secret "$COOKIE_FILE" "$STAGED_COOKIE"
 stage_secret "$CSRF_FILE" "$STAGED_CSRF"
+stage_secret "$WORKSPACE_FILE" "$STAGED_WORKSPACE"
 if [[ -s "$USER_FILE" ]]; then
     stage_secret "$USER_FILE" "$STAGED_USER"
 else
@@ -501,6 +507,7 @@ fi
 
 if [[ -e "$COOKIE_FILE" ]]; then COOKIE_WAS_PRESENT=1; cp -p "$COOKIE_FILE" "$COOKIE_BACKUP"; fi
 if [[ -e "$CSRF_FILE" ]]; then CSRF_WAS_PRESENT=1; cp -p "$CSRF_FILE" "$CSRF_BACKUP"; fi
+if [[ -e "$WORKSPACE_FILE" ]]; then WORKSPACE_WAS_PRESENT=1; cp -p "$WORKSPACE_FILE" "$WORKSPACE_BACKUP"; fi
 if [[ -e "$USER_FILE" ]]; then USER_WAS_PRESENT=1; cp -p "$USER_FILE" "$USER_BACKUP"; fi
 if [[ -e "$PASSWORD_FILE" ]]; then PASSWORD_WAS_PRESENT=1; cp -p "$PASSWORD_FILE" "$PASSWORD_BACKUP"; fi
 
@@ -535,6 +542,7 @@ SECRET_MUTATION_STARTED=1
 install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$ETC_DIR" "$SECRET_DIR"
 install -d -m 755 "$(dirname "$APP_DIR")"
 for pair in \
+    "$STAGED_WORKSPACE:$WORKSPACE_FILE" \
     "$STAGED_COOKIE:$COOKIE_FILE" "$STAGED_CSRF:$CSRF_FILE" \
     "$STAGED_USER:$USER_FILE" "$STAGED_PASSWORD:$PASSWORD_FILE"; do
     staged="${pair%%:*}"

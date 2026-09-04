@@ -54,9 +54,10 @@ python3 wps_login.py \
 
 1. 只在官方 WPS 页面登录自己的账号。
 2. 正常完成学校 SSO、扫码、验证码或二次验证。
-3. 登录完成并出现有效会话后，脚本自动检测，不需要回终端按回车。
-4. 脚本只保留匹配 WPS 云盘域名的 Cookie，并通过 HTTP 或 HTTPS 发送到适配器。
-5. 适配器原子更新 `wps-cookie` 和 `wps-csrf`，服务无需重启。
+3. 登录完成后，在同一个窗口进入想要挂载的企业云盘文件夹。脚本只接受类似 `/space/<企业ID>/<群组ID>/<文件夹ID>` 的官方 WPS 地址；停留在登录页或空间首页时会继续等待。
+4. 脚本自动读取当前页面地址和有效会话，不需要回终端按回车，并从地址中取得群组 ID 和根目录 ID。
+5. 脚本只保留匹配 WPS 云盘域名的 Cookie，并通过 HTTP 或 HTTPS 发送到适配器；SSH 方式也会同步工作区文件。
+6. 适配器原子更新 `wps-cookie`、`wps-csrf` 和 `wps-workspace.json`，服务无需重启。
 
 脚本不会显示 Cookie 值，也不会把 Cookie 放入命令参数、URL、日志或仓库。临时浏览器配置在流程结束后删除。
 
@@ -83,6 +84,7 @@ python3 wps_login.py --output-dir /absolute/path/to/secrets
 ```
 
 目录会设置为 `0700`，凭据文件会设置为 `0600`。
+成功后目录中还会有 `wps-workspace.json`，其中只保存群组 ID 和根目录 ID，不保存 Cookie。
 
 ## Why a helper is needed
 
@@ -101,7 +103,7 @@ curl 会提示输入适配器 Basic Auth 密码。不要把密码写在命令中
 
 ## Persistent refresh
 
-首次同步得到的 `rtk` 会保存在 VPS secret 文件中。适配器遇到 WPS `401` 时，会按已经观察到的 `grant_token` 刷新流程更新轮换 Cookie，并重试原请求。只有 WPS 撤销刷新票据、要求重新登录或登录策略改变时，才需要再次运行助手。
+首次同步得到的 `rtk` 会保存在 VPS secret 文件中，当前选中的群组和目录保存在 `wps-workspace.json`。适配器遇到 WPS `401` 时，会按已经观察到的 `grant_token` 刷新流程更新轮换 Cookie，并重试原请求。只有 WPS 撤销刷新票据、要求重新登录或登录策略改变时，才需要再次运行助手。
 
 ## Troubleshooting
 

@@ -68,6 +68,10 @@ class InstallerTemplateTests(unittest.TestCase):
             self.assertIn('--source-manifest-sha256', script)
             self.assertIn('sha256sum --strict --check release-manifest.txt', script)
             self.assertIn('--max-filesize 52428800', script)
+            self.assertIn('GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-auto}}"', script)
+            self.assertIn('ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"', script)
+            self.assertIn('WPS_WORKSPACE_FILE', script)
+            self.assertNotIn('ask_value "WPS 企业群组 ID"', script)
 
         self.assertIn('awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP"', native)
         self.assertIn('--user "$RUN_UID:$RUN_GID"', docker)

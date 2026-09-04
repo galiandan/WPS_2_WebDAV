@@ -181,8 +181,17 @@ class WpsStorage:
         self._download_slots = threading.BoundedSemaphore(max_downloads)
         self._transfer_wait_timeout = transfer_wait_timeout
 
+    def _sync_workspace_root(self) -> None:
+        workspace = getattr(self.client.config, "workspace", None)
+        if workspace is None or getattr(workspace, "configured_root_id", "") != "auto":
+            return
+        selected_root = workspace.root_id
+        if selected_root != self.root_id:
+            self.set_root_id(selected_root)
+
     @property
     def root(self) -> RemoteEntry:
+        self._sync_workspace_root()
         return RemoteEntry(
             id=self.root_id,
             name=self.root_name,
@@ -195,7 +204,17 @@ class WpsStorage:
         with self._lock:
             self._cache.clear()
 
+    def set_root_id(self, root_id: str) -> None:
+        """Switch the mapped WPS root after a login-selected workspace update."""
+
+        if not root_id:
+            raise ValueError("root_id is required")
+        with self._lock:
+            self.root_id = str(root_id)
+            self._cache.clear()
+
     def _children(self, parent_id: str) -> tuple[RemoteEntry, ...]:
+        self._sync_workspace_root()
         now = time.monotonic()
         with self._lock:
             cached = self._cache.get(parent_id)
@@ -248,6 +267,7 @@ class WpsStorage:
         return self._children(entry.id)
 
     def list(self, parent_id: str | None = None) -> Iterable[RemoteEntry]:
+        self._sync_workspace_root()
         return self._children(str(parent_id) if parent_id is not None else self.root_id)
 
     def _parent_and_name(self, path: str) -> tuple[RemoteEntry, str, tuple[str, ...]]:
@@ -356,6 +376,7 @@ class WpsStorage:
         return self.resolve(path)
 
     def create_folder(self, parent_id: str | None, name: str) -> RemoteEntry:
+        self._sync_workspace_root()
         parent = self.root_id if parent_id is None else str(parent_id)
         if not name or "/" in name or "\\" in name:
             raise InvalidPathError("folder name must be one remote path component")

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import unittest
 from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from wps_adapter.client import DownloadStream
 from wps_adapter.provider import AlreadyExistsError, InvalidPathError, RemoteEntry
 from wps_adapter.storage import WpsStorage
+from wps_adapter.workspace import WorkspaceState
 
 
 class FakeClient:
@@ -95,6 +98,21 @@ class FailingFolderCopyClient(FakeClient):
 
 
 class StorageTests(unittest.TestCase):
+    def test_auto_workspace_root_is_reloaded_after_login_selection(self) -> None:
+        client = FakeClient()
+        with TemporaryDirectory() as directory:
+            workspace = WorkspaceState.from_file(
+                str(Path(directory) / "workspace.json"),
+                configured_group_id="auto",
+                configured_root_id="auto",
+            )
+            client.config.workspace = workspace
+            storage = WpsStorage(client, root_id="0")
+
+            workspace.update("group", "selected-root")
+
+            self.assertEqual(storage.root.id, "selected-root")
+
     def test_resolves_nested_paths_using_parent_ids(self) -> None:
         storage = WpsStorage(FakeClient(), root_id="root", cache_ttl=60)
         entry = storage.metadata("/docs/readme.txt")

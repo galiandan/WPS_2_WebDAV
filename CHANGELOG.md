@@ -2,6 +2,15 @@
 
 本项目遵循 Keep a Changelog 风格。版本号用于记录适配器行为变化，不代表 WPS 官方兼容性承诺。
 
+## [0.9.0] - 2026-09-04
+
+### Added
+
+- 登录助手从当前官方 WPS 企业云盘页面自动识别群组 ID 和映射根目录。
+- Cookie、CSRF 和工作区状态通过 HTTP/HTTPS、SSH 或本地输出一起同步。
+- 工作区状态以权限受限的 JSON 文件持久化，服务运行中可自动切换根目录。
+- Native 和 Docker 安装器默认使用 `WPS_GROUP_ID=auto`、`WPS_ROOT_ID=auto`，不再询问群组 ID。
+
 ## [0.8.1] - 2026-09-03
 
 ### Security

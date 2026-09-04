@@ -14,6 +14,7 @@ from .login import (
     DEFAULT_LOGIN_URL,
     DEFAULT_REMOTE_COOKIE_PATH,
     DEFAULT_REMOTE_CSRF_PATH,
+    DEFAULT_REMOTE_WORKSPACE_PATH,
     LoginError,
     is_remote_http_url,
     login_and_sync,
@@ -68,11 +69,12 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--ssh-cookie-path", default=DEFAULT_REMOTE_COOKIE_PATH)
     parser.add_argument("--ssh-csrf-path", default=DEFAULT_REMOTE_CSRF_PATH)
+    parser.add_argument("--ssh-workspace-path", default=DEFAULT_REMOTE_WORKSPACE_PATH)
     parser.add_argument("--ssh-timeout", type=float, default=30.0)
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="write wps-cookie and wps-csrf to this local absolute directory",
+        help="write credentials and wps-workspace.json to this local absolute directory",
     )
 
 
@@ -224,6 +226,7 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         ssh_target=interactive_target.ssh_target,
         ssh_cookie_path=args.ssh_cookie_path,
         ssh_csrf_path=args.ssh_csrf_path,
+        ssh_workspace_path=args.ssh_workspace_path,
         ssh_identity=interactive_target.ssh_identity,
         ssh_port=interactive_target.ssh_port,
         ssh_password_auth=interactive_target.ssh_password_auth,

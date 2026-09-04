@@ -14,15 +14,20 @@ from unittest.mock import patch
 from wps_adapter.client import WpsCredentials
 from wps_adapter.__main__ import _apply_adapter_port, _prompt_login_target
 from wps_adapter.login import (
+    ChromeLoginSession,
     LoginError,
     _REMOTE_WRITE_SCRIPT,
     _WebSocket,
+    WpsWorkspaceSelection,
     credentials_from_cookies,
     login_and_sync,
     push_credentials_over_ssh,
     push_credentials_over_https,
     wait_for_login_credentials,
+    wait_for_login_snapshot,
     write_local_credentials,
+    write_local_workspace,
+    workspace_from_page_url,
 )
 
 
@@ -89,6 +94,34 @@ class LoginHelperTests(unittest.TestCase):
             self.assertEqual(os.stat(csrf_path).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(cookie_path.parent).st_mode & 0o777, 0o700)
 
+    def test_workspace_page_url_is_parsed_without_network_calls(self) -> None:
+        selection = workspace_from_page_url(
+            "https://365.kdocs.cn/space/tenant-1/group-2/root-3/?view=list"
+        )
+
+        self.assertEqual(
+            selection,
+            WpsWorkspaceSelection(
+                tenant_id="tenant-1",
+                group_id="group-2",
+                root_id="root-3",
+            ),
+        )
+        self.assertIsNone(workspace_from_page_url("https://365.kdocs.cn/space/"))
+        with self.assertRaisesRegex(LoginError, "WPS"):
+            workspace_from_page_url("https://example.com/space/a/b/c")
+
+    def test_local_workspace_is_written_with_restricted_mode(self) -> None:
+        workspace = WpsWorkspaceSelection("tenant", "group", "root")
+        with TemporaryDirectory() as directory:
+            path = write_local_workspace(workspace, output_dir=Path(directory) / "secrets")
+
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")),
+                {"group_id": "group", "root_id": "root"},
+            )
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
     def test_ssh_payload_keeps_secret_values_out_of_command_arguments(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh-secret; csrf=csrf-secret", csrf_token="csrf-secret")
         with patch("wps_adapter.login.subprocess.run") as run:
@@ -107,6 +140,22 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(payload["cookie"], credentials.cookie)
         self.assertEqual(payload["csrf"], credentials.csrf_token)
         self.assertEqual(command[:4], ["ssh", "-F", "/dev/null", "-i"])
+
+    def test_ssh_payload_includes_selected_workspace_without_exposing_secrets(self) -> None:
+        credentials = WpsCredentials(cookie="rtk=refresh-secret", csrf_token="csrf-secret")
+        workspace = WpsWorkspaceSelection("tenant", "group", "root")
+        with patch("wps_adapter.login.subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0)
+            push_credentials_over_ssh(
+                credentials,
+                ssh_target="root@vps-host",
+                workspace=workspace,
+            )
+
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(payload["workspace_path"], "/etc/wps-adapter/secrets/wps-workspace.json")
+        self.assertEqual(payload["workspace"], {"group_id": "group", "root_id": "root"})
+        self.assertNotIn("refresh-secret", " ".join(run.call_args.args[0]))
 
     def test_ssh_rejects_paths_outside_the_adapter_secret_directory(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh", csrf_token="csrf")
@@ -139,6 +188,7 @@ class LoginHelperTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             cookie_path = Path(directory) / "wps-cookie"
             csrf_path = Path(directory) / "wps-csrf"
+            workspace_path = Path(directory) / "wps-workspace.json"
             cookie_path.write_text("old-cookie\n", encoding="utf-8")
             csrf_path.write_text("old-csrf\n", encoding="utf-8")
             before = os.stat(cookie_path)
@@ -148,6 +198,8 @@ class LoginHelperTests(unittest.TestCase):
                     "csrf_path": str(csrf_path),
                     "cookie": "new-cookie",
                     "csrf": "new-csrf",
+                    "workspace_path": str(workspace_path),
+                    "workspace": {"group_id": "new-group", "root_id": "new-root"},
                 }
             ).encode("utf-8")
             script = _REMOTE_WRITE_SCRIPT.replace(
@@ -170,9 +222,14 @@ class LoginHelperTests(unittest.TestCase):
             self.assertEqual(after.st_gid, before.st_gid)
             self.assertEqual(cookie_path.read_text(encoding="utf-8").strip(), "new-cookie")
             self.assertEqual(csrf_path.read_text(encoding="utf-8").strip(), "new-csrf")
+            self.assertEqual(
+                json.loads(workspace_path.read_text(encoding="utf-8")),
+                {"group_id": "new-group", "root_id": "new-root"},
+            )
 
     def test_https_push_uses_basic_auth_and_fixed_path(self) -> None:
         credentials = WpsCredentials(cookie="rtk=refresh; csrf=csrf", csrf_token="csrf")
+        workspace = WpsWorkspaceSelection("tenant", "group", "root")
         captured: dict[str, object] = {}
 
         class Response:
@@ -201,6 +258,7 @@ class LoginHelperTests(unittest.TestCase):
                 {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/passport/secure"},
                 {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
             ],
+            workspace=workspace,
             adapter_url="https://adapter.example:18080",
             username="adapter",
             password="secret",
@@ -217,6 +275,7 @@ class LoginHelperTests(unittest.TestCase):
         )
         body = json.loads(captured["body"].decode("utf-8"))  # type: ignore[union-attr]
         self.assertEqual(body["cookies"][0]["value"], "refresh")
+        self.assertEqual(body["workspace"], {"group_id": "group", "root_id": "root"})
         self.assertTrue(captured["closed"])
 
     def test_adapter_port_is_added_when_url_omits_one(self) -> None:
@@ -327,6 +386,42 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(names, ("csrf", "rtk"))
         self.assertEqual(credentials.csrf_token, "csrf")
         self.assertEqual(len(selected), 2)
+
+    def test_login_snapshot_requires_a_concrete_wps_space_page(self) -> None:
+        class Session:
+            def current_url(self):
+                return "https://365.kdocs.cn/space/tenant/group/root"
+
+            def cookies(self):
+                return [
+                    {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/"},
+                    {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
+                ]
+
+        credentials, names, selected, workspace = wait_for_login_snapshot(
+            Session(),
+            login_url="https://365.kdocs.cn/space/",
+            domain_suffix="kdocs.cn",
+            timeout=1,
+        )
+        self.assertEqual(credentials.csrf_token, "csrf")
+        self.assertEqual(names, ("csrf", "rtk"))
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(workspace.group_id, "group")
+
+    def test_chrome_session_reads_current_url_via_runtime_evaluate(self) -> None:
+        calls = []
+
+        class Connection:
+            def call(self, method, params):
+                calls.append((method, params))
+                return {"result": {"type": "string", "value": "https://365.kdocs.cn/space/t/g/r"}}
+
+        session = ChromeLoginSession()
+        session._connection = Connection()  # type: ignore[assignment]
+        self.assertEqual(session.current_url(), "https://365.kdocs.cn/space/t/g/r")
+        self.assertEqual(calls[0][0], "Runtime.evaluate")
+        self.assertEqual(calls[0][1]["expression"], "location.href")
 
     def test_login_target_is_validated_before_browser_starts(self) -> None:
         with patch("wps_adapter.login.ChromeLoginSession") as session:

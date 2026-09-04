@@ -29,7 +29,7 @@ WebDAV clients / REST clients / browser UI
 5. 文件上传和下载尽量通过流式中继完成；签名对象存储请求不会收到 WPS Cookie。
 6. 上游 `401` 时，文件凭据源优先检测管理员替换，然后按已观察的 SDK `grant_token` 流程尝试续期并重试一次。
 
-登录助手在本机临时 Chrome 中完成官方登录后，调用受 Basic Auth 保护的 `POST /api/v1/session/import`。该接口只更新服务端的两个凭据文件，不参与普通 WebDAV/REST 文件请求；后续请求和轮换 Cookie 仍由服务进程直接处理。
+登录助手在本机临时 Chrome 中完成官方登录后，读取当前官方 WPS `/space/<tenant>/<group>/<folder>` 页面地址，调用受 Basic Auth 保护的 `POST /api/v1/session/import`。该接口更新 Cookie、CSRF 和工作区状态文件，不参与普通 WebDAV/REST 文件请求；后续请求和轮换 Cookie 仍由服务进程直接处理。工作区状态会在运行中重新加载，服务无需重启。
 
 ## Authentication boundaries
 

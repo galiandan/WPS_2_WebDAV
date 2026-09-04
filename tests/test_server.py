@@ -7,6 +7,8 @@ import threading
 import unittest
 from http.client import HTTPConnection
 from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from wps_adapter.client import WpsCredentials
@@ -19,6 +21,7 @@ from wps_adapter.provider import (
 )
 from wps_adapter.server import AdapterApplication, AdapterHTTPServer, BasicAuth, DavLockStore
 from wps_adapter.storage import split_remote_path
+from wps_adapter.workspace import WorkspaceState
 
 
 class FakeStream:
@@ -55,6 +58,7 @@ class FakeStorage:
         self.renamed_paths: list[tuple[str, str]] = []
         self.moved_paths: list[tuple[str, str]] = []
         self.copied_paths: list[tuple[str, str, str, bool]] = []
+        self.root_updates: list[str] = []
 
     def metadata(self, path: str) -> RemoteEntry:
         if path == "/":
@@ -109,6 +113,9 @@ class FakeStorage:
         self.copied_paths.append((source, destination, depth, overwrite))
         name = destination.rstrip("/").rsplit("/", 1)[-1]
         return RemoteEntry(id="copy-1", name=name, kind="file", parent_id="root", size=11)
+
+    def set_root_id(self, root_id: str) -> None:
+        self.root_updates.append(root_id)
 
 
 class ImportCredentialSource:
@@ -486,6 +493,51 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["cookie_count"], 2)
         self.assertIn("rtk=refresh", source.credentials.cookie)
         self.assertEqual(source.credentials.csrf_token, "csrf")
+
+    def test_session_import_persists_workspace_and_switches_root(self) -> None:
+        source = ImportCredentialSource()
+        self.storage.client.config.credential_source = source
+        self.storage.client.config.base_url = "https://365.kdocs.cn"
+        self.server.application.auth = BasicAuth(username="adapter", password="secret")
+        with TemporaryDirectory() as directory:
+            workspace_path = Path(directory) / "wps-workspace.json"
+            workspace = WorkspaceState.from_file(
+                str(workspace_path),
+                configured_group_id="auto",
+                configured_root_id="auto",
+            )
+            self.storage.client.config.workspace = workspace
+            payload = json.dumps(
+                {
+                    "cookies": [
+                        {"name": "rtk", "value": "refresh", "domain": ".kdocs.cn", "path": "/"},
+                        {"name": "csrf", "value": "csrf", "domain": "365.kdocs.cn", "path": "/"},
+                    ],
+                    "workspace": {"group_id": "group-2", "root_id": "root-3"},
+                }
+            ).encode("utf-8")
+            authorization = "Basic " + base64.b64encode(b"adapter:secret").decode("ascii")
+
+            status, _headers, body = self.request(
+                "POST",
+                "/api/v1/session/import",
+                body=payload,
+                headers={
+                    "Authorization": authorization,
+                    "Content-Length": str(len(payload)),
+                    "Content-Type": "application/json",
+                },
+            )
+
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["workspace"], "updated")
+            self.assertEqual(workspace.group_id, "group-2")
+            self.assertEqual(workspace.root_id, "root-3")
+            self.assertEqual(self.storage.root_updates, ["root-3"])
+            self.assertEqual(
+                json.loads(workspace_path.read_text(encoding="utf-8")),
+                {"group_id": "group-2", "root_id": "root-3"},
+            )
 
     def test_rest_list_and_basic_auth(self) -> None:
         status, _headers, body = self.request("GET", "/api/v1/entries?path=%2F")

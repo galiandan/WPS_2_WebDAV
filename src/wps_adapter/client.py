@@ -36,6 +36,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
 from .provider import InsufficientStorageError, RemoteEntry, UnsupportedOperationError
+from .workspace import DEFAULT_WORKSPACE_FILE, WorkspaceState
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
@@ -512,15 +513,28 @@ class WpsClientConfig:
     credential_refresh_timeout: float = 30.0
     object_storage_host_suffix: str = DEFAULT_OBJECT_STORAGE_HOST_SUFFIX
     max_json_response_bytes: int = MAX_JSON_RESPONSE_BYTES
+    workspace: WorkspaceState | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_env(cls) -> "WpsClientConfig":
         refresh_command_text = os.environ.get("WPS_CREDENTIAL_REFRESH_COMMAND", "").strip()
         refresh_command = tuple(shlex.split(refresh_command_text)) if refresh_command_text else ()
+        group_id = os.environ.get("WPS_GROUP_ID", "")
+        root_id = os.environ.get("WPS_ROOT_ID", "0")
+        workspace_path = os.environ.get("WPS_WORKSPACE_FILE") or DEFAULT_WORKSPACE_FILE
+        workspace = (
+            WorkspaceState.from_file(
+                workspace_path,
+                configured_group_id=group_id,
+                configured_root_id=root_id,
+            )
+            if workspace_path and (group_id in {"", "auto"} or root_id == "auto" or os.path.exists(workspace_path))
+            else None
+        )
         cookie_file = os.environ.get("WPS_COOKIE_FILE") or None
         csrf_token_file = os.environ.get("WPS_CSRF_TOKEN_FILE") or None
         return cls(
-            group_id=os.environ.get("WPS_GROUP_ID", ""),
+            group_id=group_id,
             cookie=os.environ.get("WPS_COOKIE", ""),
             csrf_token=os.environ.get("WPS_CSRF_TOKEN", ""),
             cookie_file=cookie_file,
@@ -567,6 +581,7 @@ class WpsClientConfig:
             max_json_response_bytes=int(
                 os.environ.get("WPS_MAX_JSON_RESPONSE_BYTES", str(MAX_JSON_RESPONSE_BYTES))
             ),
+            workspace=workspace,
         )
 
 
@@ -657,8 +672,8 @@ class WpsDriveClient:
         opener: _Opener | None = None,
         https_connection_factory: Callable[[str, int | None, float], _HttpsConnection] | None = None,
     ) -> None:
-        if not config.group_id:
-            raise ValueError("group_id is required")
+        if not config.group_id and config.workspace is None:
+            raise ValueError("group_id or workspace state is required")
         if config.max_json_response_bytes <= 0:
             raise ValueError("max_json_response_bytes must be positive")
         base_parts = urlsplit(config.base_url)
@@ -687,6 +702,17 @@ class WpsDriveClient:
         self._https_connection_factory = https_connection_factory or (
             lambda host, port, timeout: HTTPSConnection(host, port=port, timeout=timeout)
         )
+
+    @property
+    def group_id(self) -> str:
+        configured = self.config.group_id
+        if configured in {"", "auto"}:
+            value = self.config.workspace.group_id if self.config.workspace is not None else ""
+        else:
+            value = configured
+        if not value:
+            raise WpsApiError("WPS workspace is not configured", status=503)
+        return value
 
     def _credentials(self) -> WpsCredentials:
         if self.config.credential_source is not None:
@@ -976,7 +1002,7 @@ class WpsDriveClient:
             query.append((name, self._bool(value) if isinstance(value, bool) else str(value)))
 
         payload = self._request_json(
-            f"/3rd/drive/api/v5/groups/{quote(self.config.group_id, safe='')}/files",
+            f"/3rd/drive/api/v5/groups/{quote(self.group_id, safe='')}/files",
             query=query,
         )
         raw_entries = payload.get("files", [])
@@ -1295,7 +1321,7 @@ class WpsDriveClient:
             raise ValueError("name must be one remote folder name")
         csrf = self._csrf(csrf_token)
         body = {
-            "groupid": self._json_id(self.config.group_id),
+            "groupid": self._json_id(self.group_id),
             "parentid": self._json_id(parent_id),
             "name": name,
             "owner": True,
@@ -1330,7 +1356,7 @@ class WpsDriveClient:
             "csrfmiddlewaretoken": csrf,
         }
         payload = self._request_json(
-            f"/3rd/drive/api/v3/groups/{quote(self.config.group_id, safe='')}/files/"
+            f"/3rd/drive/api/v3/groups/{quote(self.group_id, safe='')}/files/"
             f"{quote(str(file_id), safe='')}",
             method="PUT",
             body=json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
@@ -1392,9 +1418,9 @@ class WpsDriveClient:
             raise ValueError("poll_timeout must be positive")
         csrf = self._csrf(csrf_token)
         body = {
-            "groupid": self._json_id(self.config.group_id),
+            "groupid": self._json_id(self.group_id),
             "parentid": self._json_id(source_parent_id),
-            "dst_groupid": self._json_id(destination_group_id or self.config.group_id),
+            "dst_groupid": self._json_id(destination_group_id or self.group_id),
             "dst_parentid": self._json_id(destination_parent_id),
             "fileids": [self._json_id(file_id)],
             "option": dict(option or {}),
@@ -1436,7 +1462,7 @@ class WpsDriveClient:
         csrf = self._csrf(csrf_token)
         body = {
             "fileids": [self._json_id(file_id)],
-            "groupid": self._json_id(self.config.group_id),
+            "groupid": self._json_id(self.group_id),
             "csrfmiddlewaretoken": csrf,
         }
         task = self._request_json(
@@ -1489,7 +1515,7 @@ class WpsDriveClient:
     ) -> RemoteEntry:
         """Upload a large file through the captured block/multipart flow."""
 
-        group_text = str(self.config.group_id)
+        group_text = str(self.group_id)
         parent_text = str(parent_id)
         init_body = {
             "with_rapid": options.with_rapid,
@@ -1736,7 +1762,7 @@ class WpsDriveClient:
             md5_hex = hasher_md5.hexdigest()
             sha1_hex = hasher_sha1.hexdigest()
             sha256_hex = hasher_sha256.hexdigest()
-            group_value = self._json_id(self.config.group_id)
+            group_value = self._json_id(self.group_id)
             parent_value = self._json_id(parent_id)
 
             try:

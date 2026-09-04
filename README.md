@@ -17,7 +17,7 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 - 并发大文件上传会预留各自的临时盘空间，空间不足时会拒绝新传输。
 - 公网部署建议使用 HTTPS 反向代理。没有域名或证书时也可以直接使用 HTTP，但 Cookie、Basic Auth 和文件内容都会明文传输，只适合可信网络。
 
-当前版本：`0.8.1`（原型阶段）
+当前版本：`0.9.0`（原型阶段）
 
 ## 能做什么
 
@@ -72,12 +72,7 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 
 下面两种方式选一种即可，不要同时让 Native 和 Docker 占用同一个端口。
 
-安装脚本会询问：
-
-1. WPS 企业群组 ID
-2. 适配器 Basic Auth 用户名
-3. 适配器 Basic Auth 密码
-4. 监听端口
+安装脚本会询问适配器 Basic Auth 用户名、密码和监听端口。WPS 企业群组 ID 和映射目录默认是 `auto`，第一次运行登录助手时会从你当前打开的官方 WPS 企业云盘地址自动识别，不需要手工查 ID。
 
 `[]` 中的内容是默认值，直接按回车即可使用。默认服务运行用户是执行 `sudo` 的当前用户；如果直接以 root 执行，运行用户就是 root。
 
@@ -157,9 +152,10 @@ python3 wps_login.py
 
 1. 只在官方 WPS 页面登录自己的账号。
 2. 正常完成学校 SSO、扫码、验证码或二次验证。
-3. 登录完成后脚本自动检测，不需要回终端按回车。
-4. 脚本只保留匹配 WPS 云盘域名的 Cookie，并要求存在 `rtk` 和 `csrf`。
-5. 凭据写入 VPS 后，适配器无需重启。
+3. 登录完成后，在同一个窗口进入你想挂载的企业云盘文件夹。页面地址应类似 `/space/<企业ID>/<群组ID>/<文件夹ID>`。
+4. 脚本自动读取当前页面地址和登录 Cookie，不需要回终端按回车；群组 ID、根目录 ID 会随 Cookie 一起同步。
+5. 脚本只保留匹配 WPS 云盘域名的 Cookie，并要求存在 `rtk` 和 `csrf`。
+6. 凭据写入 VPS 后，适配器无需重启。
 
 脚本不会显示 Cookie 值，也不会把 Cookie 放入命令参数、URL 或日志。临时浏览器配置会在流程结束后删除。
 
@@ -323,6 +319,7 @@ curl -u <适配器用户名> \
 ```text
 /etc/wps-adapter/secrets/wps-cookie
 /etc/wps-adapter/secrets/wps-csrf
+/etc/wps-adapter/secrets/wps-workspace.json
 /etc/wps-adapter/secrets/adapter-username
 /etc/wps-adapter/secrets/adapter-password
 ```
@@ -331,8 +328,9 @@ curl -u <适配器用户名> \
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
-| `WPS_GROUP_ID` | WPS 企业群组 ID | 无，必须填写 |
-| `WPS_ROOT_ID` | 映射到适配器的根文件夹 ID | `0` |
+| `WPS_GROUP_ID` | WPS 企业群组 ID；`auto` 由登录助手识别 | `auto` |
+| `WPS_ROOT_ID` | 映射到适配器的根文件夹 ID；`auto` 使用登录时所在文件夹 | `auto` |
+| `WPS_WORKSPACE_FILE` | 自动保存群组和根目录选择的文件 | `/etc/wps-adapter/secrets/wps-workspace.json` |
 | `WPS_COOKIE_FILE` | WPS Cookie 文件 | `/etc/wps-adapter/secrets/wps-cookie` |
 | `WPS_CSRF_TOKEN_FILE` | CSRF 文件 | `/etc/wps-adapter/secrets/wps-csrf` |
 | `WPS_AUTO_REFRESH` | 是否在 `401` 后尝试续期 | `true` |
@@ -359,7 +357,7 @@ curl -u <适配器用户名> \
 - 公网优先使用 HTTPS 反向代理，把适配器绑定到 `127.0.0.1`。
 - 如果必须直接使用 HTTP，至少使用强 Basic Auth，并限制云平台安全组和防火墙来源 IP。
 - 不要把 `/healthz` 当作 WPS 登录成功证明；它只检查适配器进程是否运行。
-- 保持四个 secret 文件为 `0600`，secret 目录为 `0700`。
+- 保持五个 secret 文件为 `0600`，secret 目录为 `0700`。
 - 网页写操作会拒绝带有异站 `Origin`/`Referer` 的请求；WebDAV 和脚本客户端不发送这两个头时不受影响。
 - 不要在 Nginx、Caddy、systemd 或应用日志中记录 `Authorization`、Cookie、签名 URL 或请求体。
 - 升级前先在自己的测试目录验证列表、上传、下载和删除。

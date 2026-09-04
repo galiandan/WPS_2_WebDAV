@@ -4,7 +4,7 @@
 
 ## One-command install
 
-下面两个脚本都可以直接从 GitHub Raw 执行。首次运行会通过当前终端询问 WPS 群组 ID、适配器 Basic Auth 用户名/密码和监听端口；`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
+下面两个脚本都可以直接从 GitHub Raw 执行。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
 
 原生 systemd：
 
@@ -82,11 +82,12 @@ SERVICE_GROUP="$(id -gn)"
 sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 700 /etc/wps-adapter/secrets
 sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-cookie
 sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-csrf
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-workspace.json
 sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/adapter-username
 sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/adapter-password
 ```
 
-优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。配置 HTTPS 反向代理后，助手可以通过受 Basic Auth 保护的接口直接写入 `wps-cookie` 和 `wps-csrf`；没有 HTTPS 时可以确认风险后使用 HTTP，或使用 SSH 备用方式。不需要把 Cookie 粘贴进命令行。
+优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。配置 HTTPS 反向代理后，助手可以通过受 Basic Auth 保护的接口直接写入 `wps-cookie`、`wps-csrf` 和 `wps-workspace.json`；没有 HTTPS 时可以确认风险后使用 HTTP，或使用 SSH 备用方式。不需要把 Cookie 粘贴进命令行。
 
 适配器 Basic Auth 的用户名和密码分别写入 `adapter-username`、`adapter-password`。这些文件只允许服务用户读取。不要把 WPS 密码、Cookie 或 Basic Auth 密码放入 `.env`、Git、Issue 或聊天。
 
@@ -101,8 +102,9 @@ sudoedit /etc/wps-adapter/wps-adapter.env
 至少设置：
 
 ```dotenv
-WPS_GROUP_ID=your-enterprise-group-id
-WPS_ROOT_ID=0
+WPS_GROUP_ID=auto
+WPS_ROOT_ID=auto
+WPS_WORKSPACE_FILE=/etc/wps-adapter/secrets/wps-workspace.json
 WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
 WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
 ADAPTER_USERNAME_FILE=/etc/wps-adapter/secrets/adapter-username
@@ -111,7 +113,7 @@ ADAPTER_BIND=127.0.0.1
 ADAPTER_PORT=18080
 ```
 
-`ADAPTER_PORT` 可以改成任意未被占用的端口；`WPS_ROOT_ID=0` 表示尝试企业空间根目录，也可以填自己测试目录的文件夹 ID。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
+`ADAPTER_PORT` 可以改成任意未被占用的端口。`auto` 表示登录助手从当前官方 WPS 企业云盘地址自动选择群组和文件夹；也可以把两个变量改成固定 ID 做手工部署。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
 
 检查配置不会访问 WPS：
 

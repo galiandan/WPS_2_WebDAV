@@ -31,8 +31,8 @@ usage() {
 选项：
   --port PORT          适配器监听端口，默认 54321
   --bind ADDRESS      监听地址，默认 0.0.0.0
-  --group-id ID       WPS 企业群组 ID
-  --root-id ID        WPS 根目录 ID，默认 0
+  --group-id ID       WPS 企业群组 ID（可选，默认自动识别）
+  --root-id ID        WPS 根目录 ID（可选，默认自动识别）
   --adapter-user USER 适配器 Basic Auth 用户名
   --run-user USER      服务运行用户，默认执行 sudo 的当前用户
   --source-ref SHA     要安装的 40 位 Git 提交号（默认使用脚本内固定版本）
@@ -206,6 +206,7 @@ OLD_PORT="$(read_env_value ADAPTER_PORT || true)"
 OLD_BIND="$(read_env_value ADAPTER_BIND || true)"
 OLD_GROUP_ID="$(read_env_value WPS_GROUP_ID || true)"
 OLD_ROOT_ID="$(read_env_value WPS_ROOT_ID || true)"
+OLD_WORKSPACE_FILE="$(read_env_value WPS_WORKSPACE_FILE || true)"
 OLD_COOKIE_FILE="$(read_env_value WPS_COOKIE_FILE || true)"
 OLD_CSRF_FILE="$(read_env_value WPS_CSRF_TOKEN_FILE || true)"
 OLD_USER_FILE="$(read_env_value ADAPTER_USERNAME_FILE || true)"
@@ -221,21 +222,18 @@ validate_port "$PORT"
 BIND="${BIND_ARG:-${OLD_BIND:-0.0.0.0}}"
 [[ "$BIND" =~ ^\[?[A-Za-z0-9.:-]+\]?$ ]] || die "监听地址格式不正确"
 
-GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-}}"
-if [[ -z "$GROUP_ID" ]]; then
-    ask_value "WPS 企业群组 ID"
-    GROUP_ID="$REPLY"
-fi
+GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-auto}}"
 validate_safe_value "WPS 企业群组 ID" "$GROUP_ID"
 
-ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-0}}"
+ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"
 validate_safe_value "WPS 根目录 ID" "$ROOT_ID"
 
+WORKSPACE_FILE="${OLD_WORKSPACE_FILE:-$SECRET_DIR/wps-workspace.json}"
 COOKIE_FILE="${OLD_COOKIE_FILE:-$SECRET_DIR/wps-cookie}"
 CSRF_FILE="${OLD_CSRF_FILE:-$SECRET_DIR/wps-csrf}"
 USER_FILE="${OLD_USER_FILE:-$SECRET_DIR/adapter-username}"
 PASSWORD_FILE="${OLD_PASSWORD_FILE:-$SECRET_DIR/adapter-password}"
-for secret_path in "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
+for secret_path in "$WORKSPACE_FILE" "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
     [[ "$secret_path" == /* ]] || die "secret 文件路径必须是绝对路径"
     [[ "$secret_path" == "$SECRET_DIR"/* ]] || die "secret 文件必须位于 $SECRET_DIR 目录内"
     relative_path="${secret_path#"$SECRET_DIR"/}"
@@ -247,7 +245,9 @@ for secret_path in "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
     fi
 done
 
-[[ "$COOKIE_FILE" != "$CSRF_FILE" && "$COOKIE_FILE" != "$USER_FILE" \
+[[ "$WORKSPACE_FILE" != "$COOKIE_FILE" && "$WORKSPACE_FILE" != "$CSRF_FILE" \
+    && "$WORKSPACE_FILE" != "$USER_FILE" && "$WORKSPACE_FILE" != "$PASSWORD_FILE" \
+    && "$COOKIE_FILE" != "$CSRF_FILE" && "$COOKIE_FILE" != "$USER_FILE" \
     && "$COOKIE_FILE" != "$PASSWORD_FILE" && "$CSRF_FILE" != "$USER_FILE" \
     && "$CSRF_FILE" != "$PASSWORD_FILE" && "$USER_FILE" != "$PASSWORD_FILE" ]] \
     || die "secret 文件路径不能重复"
@@ -314,6 +314,7 @@ else
 fi
 set_env_value WPS_GROUP_ID "$GROUP_ID"
 set_env_value WPS_ROOT_ID "$ROOT_ID"
+set_env_value WPS_WORKSPACE_FILE "$WORKSPACE_FILE"
 set_env_value WPS_COOKIE_FILE "$COOKIE_FILE"
 set_env_value WPS_CSRF_TOKEN_FILE "$CSRF_FILE"
 set_env_value ADAPTER_USERNAME_FILE "$USER_FILE"
@@ -337,6 +338,7 @@ awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" '
 
 STAGED_COOKIE="$TMP_DIR/wps-cookie"
 STAGED_CSRF="$TMP_DIR/wps-csrf"
+STAGED_WORKSPACE="$TMP_DIR/wps-workspace.json"
 STAGED_USER="$TMP_DIR/adapter-username"
 STAGED_PASSWORD="$TMP_DIR/adapter-password"
 stage_secret() {
@@ -350,6 +352,7 @@ stage_secret() {
 }
 stage_secret "$COOKIE_FILE" "$STAGED_COOKIE"
 stage_secret "$CSRF_FILE" "$STAGED_CSRF"
+stage_secret "$WORKSPACE_FILE" "$STAGED_WORKSPACE"
 
 if [[ -s "$USER_FILE" ]]; then
     stage_secret "$USER_FILE" "$STAGED_USER"
@@ -430,6 +433,7 @@ COOKIE_BACKUP="$TMP_DIR/cookie.before"
 CSRF_BACKUP="$TMP_DIR/csrf.before"
 USER_BACKUP="$TMP_DIR/user.before"
 PASSWORD_BACKUP="$TMP_DIR/password.before"
+WORKSPACE_BACKUP="$TMP_DIR/workspace.before"
 [[ "$ENV_WAS_PRESENT" == 0 ]] || cp -p "$ENV_FILE" "$ENV_BACKUP"
 [[ "$UNIT_WAS_PRESENT" == 0 ]] || cp -p "$SERVICE_FILE" "$UNIT_BACKUP"
 [[ "$OVERRIDE_WAS_PRESENT" == 0 ]] || cp -p "$OVERRIDE_FILE" "$OVERRIDE_BACKUP"
@@ -438,6 +442,7 @@ PASSWORD_BACKUP="$TMP_DIR/password.before"
 [[ -e "$CSRF_FILE" ]] && cp -p "$CSRF_FILE" "$CSRF_BACKUP"
 [[ -e "$USER_FILE" ]] && cp -p "$USER_FILE" "$USER_BACKUP"
 [[ -e "$PASSWORD_FILE" ]] && cp -p "$PASSWORD_FILE" "$PASSWORD_BACKUP"
+[[ -e "$WORKSPACE_FILE" ]] && cp -p "$WORKSPACE_FILE" "$WORKSPACE_BACKUP"
 
 COMMIT_STARTED=0
 APP_OLD_MOVED=0
@@ -461,6 +466,7 @@ rollback() {
         if (( OVERRIDE_WAS_PRESENT )); then mv -f "$OVERRIDE_BACKUP" "$OVERRIDE_FILE" >/dev/null 2>&1 || true; else rm -f -- "$OVERRIDE_FILE" >/dev/null 2>&1 || true; fi
         if (( HARDENING_ENV_WAS_PRESENT )); then mv -f "$HARDENING_ENV_BACKUP" "$HARDENING_ENV_FILE" >/dev/null 2>&1 || true; else rm -f -- "$HARDENING_ENV_FILE" >/dev/null 2>&1 || true; fi
         for pair in \
+            "$WORKSPACE_FILE:$WORKSPACE_BACKUP" \
             "$COOKIE_FILE:$COOKIE_BACKUP" "$CSRF_FILE:$CSRF_BACKUP" \
             "$USER_FILE:$USER_BACKUP" "$PASSWORD_FILE:$PASSWORD_BACKUP"; do
             target="${pair%%:*}"
@@ -488,6 +494,7 @@ if (( APP_WAS_PRESENT )); then mv "$APP_DIR" "$APP_BACKUP"; APP_OLD_MOVED=1; fi
 mv "$APP_STAGE_DIR" "$APP_DIR"
 APP_NEW_MOVED=1
 for pair in \
+    "$STAGED_WORKSPACE:$WORKSPACE_FILE" \
     "$STAGED_COOKIE:$COOKIE_FILE" "$STAGED_CSRF:$CSRF_FILE" \
     "$STAGED_USER:$USER_FILE" "$STAGED_PASSWORD:$PASSWORD_FILE"; do
     staged="${pair%%:*}"

@@ -37,6 +37,7 @@ from .provider import (
 )
 from .storage import WpsStorage, join_remote_path, split_remote_path
 from .web import WEB_APP_HTML
+from .workspace import WorkspaceConfigError, validate_workspace_identifier
 
 
 LOG = logging.getLogger("wps_adapter.http")
@@ -1205,6 +1206,29 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("JSON field 'cookies' must be a non-empty array")
         if len(raw_cookies) > 256:
             raise ValueError("too many cookies")
+        raw_workspace = payload.get("workspace")
+        workspace_state = getattr(self.application.storage.client.config, "workspace", None)
+        workspace_data: dict[str, str] | None = None
+        if raw_workspace is not None:
+            if not isinstance(raw_workspace, dict):
+                raise ValueError("JSON field 'workspace' must be an object")
+            if workspace_state is None:
+                raise ValueError(
+                    "workspace import requires WPS_GROUP_ID=auto or WPS_ROOT_ID=auto"
+                )
+            try:
+                workspace_data = {
+                    "group_id": validate_workspace_identifier(
+                        raw_workspace.get("group_id"),
+                        field_name="workspace.group_id",
+                    ),
+                    "root_id": validate_workspace_identifier(
+                        raw_workspace.get("root_id"),
+                        field_name="workspace.root_id",
+                    ),
+                }
+            except WorkspaceConfigError as exc:
+                raise ValueError(str(exc)) from exc
         credentials, names = credentials_from_cookies(
             raw_cookies,
             base_url=getattr(
@@ -1217,9 +1241,19 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         replace_credentials = getattr(source, "replace_credentials", None)
         if not callable(replace_credentials) or not replace_credentials(credentials):
             raise WpsApiError("store imported credentials")
+        if workspace_data is not None:
+            try:
+                workspace_state.update(**workspace_data)
+            except WorkspaceConfigError as exc:
+                raise WpsApiError("store imported workspace") from exc
+            self.application.storage.set_root_id(workspace_state.root_id)
         self._send_json(
             HTTPStatus.OK,
-            {"status": "ok", "cookie_count": len(names)},
+            {
+                "status": "ok",
+                "cookie_count": len(names),
+                **({"workspace": "updated"} if workspace_data is not None else {}),
+            },
         )
 
     def _do_rest_put(self, route: str, query: dict[str, list[str]]) -> None:

@@ -28,12 +28,16 @@ def _env_float(name: str, default: float) -> float:
 
 def _application() -> AdapterApplication:
     client_config = WpsClientConfig.from_env()
-    if not client_config.group_id:
-        raise ValueError("WPS_GROUP_ID is required")
+    workspace = client_config.workspace
+    root_id = (
+        workspace.root_id
+        if workspace is not None
+        else os.environ.get("WPS_ROOT_ID", "0")
+    )
 
     storage = WpsStorage(
         WpsDriveClient(client_config),
-        root_id=os.environ.get("WPS_ROOT_ID", "0"),
+        root_id=root_id,
         root_name=os.environ.get("WPS_ROOT_NAME", "WPS Enterprise Drive"),
         list_count=_env_int("WPS_LIST_COUNT", 20),
         max_list_entries=_env_int("WPS_MAX_LIST_ENTRIES", 10000),
@@ -96,9 +100,24 @@ def main(argv: list[str] | None = None) -> int:
         application = _application()
         if args.command == "check-config":
             auth_state = "enabled" if application.auth.enabled else "disabled"
+            workspace = application.storage.client.config.workspace
+            group_id = (
+                workspace.group_id
+                if workspace is not None
+                else (
+                    ""
+                    if application.storage.client.config.group_id in {"", "auto"}
+                    else application.storage.client.config.group_id
+                )
+            )
+            group_state = (
+                "ready"
+                if group_id
+                else "pending-login"
+            )
             print(
                 "config=ok "
-                f"group_id_configured=yes auth={auth_state} "
+                f"group_id={group_state} auth={auth_state} "
                 f"dav={application.dav_prefix} rest={application.rest_prefix}"
             )
             return 0
