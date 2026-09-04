@@ -168,7 +168,9 @@ download_archive() {
         printf '尝试下载源代码（地址 %d/%d）\n' "$index" "$total"
         rm -f -- "$ARCHIVE"
         if download_file "$candidate" "$ARCHIVE" \
-            && tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
+            && tar -tzf "$ARCHIVE" >/dev/null 2>&1 \
+            && tar -xOf "$ARCHIVE" "WPS_2_WebDAV-$SOURCE_REF/release-manifest.txt" \
+                | sha256sum -c <(printf '%s  -\n' "$SOURCE_MANIFEST_SHA256") >/dev/null 2>&1; then
             return 0
         fi
         printf '该下载地址不可用，准备尝试下一个地址。\n' >&2
