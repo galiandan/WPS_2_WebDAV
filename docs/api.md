@@ -20,7 +20,7 @@
 | `MKCOL` | `/dav/<new-folder>/` | 创建文件夹 |
 | `DELETE` | `/dav/<file-or-folder>/` | 删除文件或文件夹，等待 WPS 异步任务完成 |
 | `MOVE` | `/dav/<old-path>` | 同目录内重命名，或跨目录移动并保留原名 |
-| `COPY` | `/dav/<source-path>` | 文件/文件夹流式复制，支持 `Depth: 0/1/infinity`；为保证失败时不丢目标数据，暂不支持覆盖已有目标 |
+| `COPY` | `/dav/<source-path>` | 单文件同空间复制优先使用 WPS 服务端能力；文件夹使用受限流式中继，支持 `Depth: 0/1/infinity`；暂不支持覆盖已有目标 |
 | `LOCK` | `/dav/<path>` | 适配器进程内的短期独占写锁，返回 `Lock-Token` |
 | `UNLOCK` | `/dav/<path>` | 释放适配器进程内的锁 |
 

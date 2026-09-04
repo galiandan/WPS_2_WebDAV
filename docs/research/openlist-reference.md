@@ -6,19 +6,18 @@
 
 ## 1. 当前状态
 
-登录状态预检、企业空间发现、登录前工作区验证和基础 WebDAV 能力已经实现，相关旧规划文档已移除。当前文档只保留尚未完成的五项优化，按优先级拆分到独立文件中。
+登录状态预检、企业空间发现、登录前工作区验证和基础 WebDAV 能力已经实现，相关旧规划文档已移除。分片上传检查点续传也已完成并删除对应任务文档；当前只保留四项未完成优化。
 
 ## 2. 优先级
 
 | 优先级 | 功能 | 原因 | 文档 |
 | --- | --- | --- | --- |
-| P0 | 原生 COPY | 减少 VPS 中继，降低复制延迟、流量和临时存储 | [`01-native-copy.md`](01-native-copy.md) |
-| P0 | 大目录分页与 `Depth: infinity` | 影响 NAS、Nextcloud 和同步软件的目录浏览稳定性 | [`02-large-directory-depth.md`](02-large-directory-depth.md) |
-| P1 | 分片失败续传 | 提高大文件上传在断网、超时和 VPS 重启后的成功率 | [`03-resumable-multipart.md`](03-resumable-multipart.md) |
+| P0 | 原生 COPY 剩余范围 | 文件夹复制和覆盖语义仍未完成 | [`01-native-copy.md`](01-native-copy.md) |
+| P0 | 大目录分页与 `Depth: infinity` 剩余优化 | 影响 NAS、Nextcloud 和同步软件的目录浏览稳定性 | [`02-large-directory-depth.md`](02-large-directory-depth.md) |
 | P1 | 上传并发、缓存和资源保护 | 保护 1.6 GiB 内存 VPS，避免大文件并发导致 OOM 或磁盘耗尽 | [`04-upload-resource-protection.md`](04-upload-resource-protection.md) |
 | P1 | 重复文件策略 | 统一 WebDAV、REST、网页上传面对同名文件时的行为 | [`05-duplicate-file-policy.md`](05-duplicate-file-policy.md) |
 
-执行顺序固定为：先补实验记录和设计文档，再做本人账号的最小抓包验证，之后才改代码、补测试、更新发布清单并推送。当前阶段到此为止，不实现上述功能。
+执行顺序固定为：先补实验记录和设计文档，再做本人账号的最小抓包验证，之后才改代码、补测试、更新发布清单并推送。
 
 ## 3. OpenList 借鉴边界
 

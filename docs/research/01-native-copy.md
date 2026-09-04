@@ -8,7 +8,7 @@
 
 ## 1. 目标
 
-研究 WPS 是否提供服务端复制能力，并在本人账号、本人企业空间和隔离测试目录中确认后，决定是否把 WebDAV `COPY` 从当前的“下载后重新上传”中继方式切换为 WPS 原生复制。
+记录已确认的 WPS 服务端复制能力，并继续验证文件夹复制和覆盖语义。
 
 目标是让同一 WPS 空间内的文件复制尽量不经过 VPS 文件内容中继，从而降低 VPS 带宽、临时磁盘和内存压力。本功能只研究复制，不改变移动、删除、上传和下载的既有流程。
 
@@ -59,7 +59,7 @@ OpenList 资料目前只能标记为 `external-reference` / `candidate`。它没
 | 当前适配器支持 COPY 中继 | `reproduced` | 仓库已有实现和 WebDAV 测试 |
 | WPS v5 文件列表、上传、下载和任务移动/删除 | `observed` + `reproduced` | 本人账号抓包并已用于当前实现 |
 | `/3rd/drive/api/v3/groups/<id>/files/batch/copy` 存在 | `candidate` | 来自 OpenList，当前账号尚未确认 |
-| 原生 COPY 的请求字段和响应结构 | `unsupported` | 没有本人账号的直接抓包证据 |
+| 同空间单文件原生 COPY 的请求字段和响应结构 | `observed` + `reproduced` | 本人账号抓包并已加入客户端实现和测试 |
 | 原生 COPY 的文件夹递归、覆盖和任务语义 | `unsupported` | 尚未通过实验确认 |
 
 在没有新的本人账号 HAR 之前，不能把候选接口接入默认路径，也不能称其为 WPS 官方稳定 API。
@@ -125,7 +125,7 @@ OpenList 资料目前只能标记为 `external-reference` / `candidate`。它没
 - 不凭 OpenList 代码扩展未经验证的原生 COPY 语义；
 - 不扫描其他用户、租户或未授权 group；
 - 不实现跨租户复制；
-- 不实现未经抓包确认的覆盖、重命名或冲突策略；
+- 不实现未经抓包确认的文件夹、覆盖、重命名或冲突策略；
 - 不删除当前中继 COPY；
 - 不承诺 WPS 服务端原子事务语义；
 - 不把对象存储临时 URL 暴露给 WebDAV 客户端；

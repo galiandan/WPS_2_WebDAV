@@ -97,4 +97,4 @@ OpenList 的具体缓存和并发参数属于 `external-reference`。本项目�
 - 不默认开启无限并发或无限缓存；
 - 不把整个文件长期保存到 VPS；
 - 不根据未经验证的 WPS 限流猜测重试次数；
-- 不在本阶段实现跨重启的分片续传，相关内容见 [`03-resumable-multipart.md`](03-resumable-multipart.md)。
+- 分片上传检查点续传已完成；本文件只处理并发、缓存和资源保护。

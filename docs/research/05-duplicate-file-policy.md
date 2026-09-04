@@ -153,7 +153,7 @@ WebDAV `PUT` 需要遵循客户端发送的 `Overwrite` 或项目定义的默认
 
 ### 6.4 WebDAV `COPY`
 
-`COPY` 的默认建议是 `Overwrite: F`，除非客户端明确发送 `Overwrite: T`。在 WPS 原生 COPY 尚未验证前，适配器必须对中继复制施加：
+`COPY` 的默认建议是 `Overwrite: F`，除非客户端明确发送 `Overwrite: T`。对于尚未验证覆盖语义的 WPS 原生 COPY，适配器必须对中继复制施加：
 
 - 源和目标解析后再次检查目标；
 - 不覆盖时发现目标立即返回冲突；
