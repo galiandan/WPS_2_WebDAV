@@ -183,3 +183,19 @@ sudo cp /etc/wps-adapter/wps-adapter.env \
 ## 8. Session expiry
 
 服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手，通过 HTTPS、确认过风险的 HTTP 或 SSH 方式更新凭据。服务无需因凭据同步而重启。
+
+## 9. Uninstall
+
+Native 和 Docker 共用一个卸载脚本。默认会停止并删除适配器服务、应用代码和本项目管理的 Docker 容器，但会保留 `/etc/wps-adapter/wps-adapter.env` 以及 `/etc/wps-adapter/secrets/`，便于以后重新安装：
+
+```bash
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+```
+
+如果确定不再保留本机配置和凭据，添加 `--purge`。如果还要删除本项目 Docker 镜像，添加 `--remove-image`：
+
+```bash
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
+```
+
+脚本会要求输入 `YES` 确认；自动化执行时可以添加 `--yes`。卸载脚本不会删除 Docker 软件，也不会删除 WPS 云盘上的远端文件。如果 Docker daemon 当前不可用，脚本会拒绝执行，启动 Docker 后重新运行即可。

@@ -15,6 +15,8 @@ Docker 部署文件：
 
 推荐直接使用仓库中的 `scripts/install-native.sh` 或 `scripts/install-docker.sh`；两者都支持 `--port PORT`、`--run-user USER`，默认使用执行 `sudo` 的当前用户，并且不会覆盖 `/etc/wps-adapter/secrets/`。安装器默认将群组和根目录设为 `auto`，登录助手默认写入企业云盘根目录 `root_id=0`；只有显式提供 `--workspace-url` 才会写入具体文件夹。安装器会优先从国内加速节点下载固定提交归档，失败后回退到 GitHub 直连，并校验归档内置的文件清单；使用自定义 `--source-ref` 时还要提供对应的 `--source-manifest-sha256`。
 
+卸载时使用仓库中的 `scripts/uninstall.sh`。默认保留 `/etc/wps-adapter/secrets/`，`--purge` 才会删除本机配置和凭据，`--remove-image` 才会删除项目 Docker 镜像。卸载不会删除 WPS 云盘上的文件或 Docker 软件本身。
+
 手动使用 Compose 时，宿主机端口映射由 Compose 的环境变量决定，`env_file` 只负责容器内部变量。先导出同一个端口，再启动：
 
 ```bash

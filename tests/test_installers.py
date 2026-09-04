@@ -51,6 +51,23 @@ class InstallerTemplateTests(unittest.TestCase):
         self.assertIn("com.galiandan.wps-adapter.managed", script)
         self.assertIn("发现同名但不属于本项目的 Docker 容器", script)
 
+    def test_uninstaller_preserves_credentials_by_default_and_checks_ownership(self) -> None:
+        script = (PROJECT_ROOT / "scripts/uninstall.sh").read_text(encoding="utf-8")
+        self.assertIn("--purge", script)
+        self.assertIn("--remove-image", script)
+        self.assertIn("--yes", script)
+        self.assertIn("/etc/wps-adapter/secrets/", script)
+        self.assertIn("com.galiandan.wps-adapter.managed", script)
+        self.assertIn("Description=WPS enterprise cloud drive WebDAV adapter", script)
+        self.assertIn("ExecStart=/usr/bin/python3 -m wps_adapter serve", script)
+        self.assertIn("不会删除 WPS 云盘上的远端文件", script)
+        self.assertNotIn("rm -rf / ", script)
+
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("scripts/uninstall.sh", readme)
+        self.assertIn("--purge", readme)
+        self.assertIn("--remove-image", readme)
+
     def test_installers_select_the_invoking_user_and_protect_secrets(self) -> None:
         native = (PROJECT_ROOT / "scripts/install-native.sh").read_text(encoding="utf-8")
         docker = (PROJECT_ROOT / "scripts/install-docker.sh").read_text(encoding="utf-8")
