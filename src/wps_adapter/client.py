@@ -1505,6 +1505,7 @@ class WpsDriveClient:
         if max_entries is not None and max_entries <= 0:
             raise ValueError("max_entries must be positive")
         entries: list[RemoteEntry] = []
+        seen_entry_ids: set[str] = set()
         offset = 0
         seen_offsets: set[int] = set()
         page_count = 0
@@ -1527,6 +1528,9 @@ class WpsDriveClient:
             )
             if max_entries is not None and len(entries) + len(page.entries) > max_entries:
                 raise InsufficientStorageError("remote folder exceeds the configured entry limit")
+            if any(entry.id in seen_entry_ids for entry in page.entries):
+                raise WpsApiError("remote folder pagination returned a duplicate entry")
+            seen_entry_ids.update(entry.id for entry in page.entries)
             entries.extend(page.entries)
             next_offset = page.next_offset
             if next_offset is None or next_offset < 0 or next_offset in seen_offsets:

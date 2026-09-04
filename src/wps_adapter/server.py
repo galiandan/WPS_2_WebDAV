@@ -845,8 +845,12 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         parts = split_remote_path(path)
         entry = self.application.storage.metadata(path)
         result: list[tuple[str, RemoteEntry]] = []
+        visited_ids: set[str] = set()
 
         def visit(current_path: str, current_parts: tuple[str, ...], current_entry: RemoteEntry, level: int) -> None:
+            if current_entry.id in visited_ids:
+                raise WpsApiError("PROPFIND encountered a repeated entry ID")
+            visited_ids.add(current_entry.id)
             if len(result) >= self.application.max_propfind_entries:
                 raise InsufficientStorageError("PROPFIND exceeds the configured entry limit")
             result.append((self._href(current_parts, current_entry), current_entry))
