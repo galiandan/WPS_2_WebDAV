@@ -19,6 +19,7 @@ from wps_adapter.client import (
     WpsClientConfig,
     WpsCredentials,
     WpsDriveClient,
+    WpsWorkspaceCandidate,
 )
 from wps_adapter.har import REDACTED, redact_har, redact_url, safe_entry_details, safe_url_shape, summarize_har
 from wps_adapter.provider import InsufficientStorageError, RemoteEntry
@@ -370,6 +371,81 @@ class ClientTests(unittest.TestCase):
         self.assertIn("parentid", query_names)
         self.assertIn("include", query_names)
         self.assertEqual(request.get_header("Cookie"), "Cookie-secret")
+
+    def test_workspace_discovery_is_opt_in_and_returns_candidates(self) -> None:
+        opener = FakeOpener([])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        with self.assertRaises(WpsApiError) as error:
+            client.discover_spaces_candidate(company_id="691045587")
+
+        self.assertEqual(error.exception.category, "disabled")
+        self.assertEqual(opener.requests, [])
+
+    def test_workspace_discovery_strictly_parses_openlist_candidate_shape(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(
+                b'{"result":"ok","groups":['
+                b'{"id":2579904987,"name":"School drive"},'
+                b'{"group_id":"team-2","name":"Personal team"}]}'
+            )
+        ])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        candidates = client.discover_spaces_candidate(
+            company_id="691045587",
+            enabled=True,
+        )
+
+        self.assertEqual([candidate.group_id for candidate in candidates], ["2579904987", "team-2"])
+        self.assertEqual([candidate.status for candidate in candidates], ["candidate", "candidate"])
+        self.assertTrue(all(not candidate.verified for candidate in candidates))
+        request = opener.requests[0][0]
+        self.assertEqual(
+            urlsplit(request.full_url).path,
+            "/3rd/plus/groups/v1/companies/691045587/users/self/groups/private",
+        )
+        self.assertEqual(request.get_header("Cookie"), "Cookie-secret")
+
+    def test_workspace_discovery_rejects_malformed_groups_without_partial_results(self) -> None:
+        for body in (
+            b'{"groups":[{"id":"group-1","name":""}]}',
+            b'{"groups":[{"id":"group/1","name":"Drive"}]}',
+            b'{"groups":[{"id":"group-1","name":"Drive"},{"id":"group-1","name":"Duplicate"}]}',
+            b'{"data":[]}',
+        ):
+            client = WpsDriveClient(
+                WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+                opener=FakeOpener([FakeResponse(body)]),
+            )
+            with self.assertRaises(WpsApiError) as error:
+                client.discover_spaces_candidate(company_id="company", enabled=True)
+            self.assertEqual(error.exception.category, "invalid_response")
+
+    def test_workspace_candidate_verification_is_read_only_and_marks_verified(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(b'{"files":[],"next_offset":-1,"result":"ok"}')
+        ])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="active-group", cookie="Cookie-secret"),
+            opener=opener,
+        )
+        candidate = WpsWorkspaceCandidate("candidate-group", "School drive", "company")
+
+        verified = client.verify_workspace_candidate(candidate)
+
+        self.assertTrue(verified.verified)
+        self.assertEqual(verified.status, "verified")
+        self.assertEqual(client.group_id, "active-group")
+        request = opener.requests[0][0]
+        self.assertIn("/groups/candidate-group/files", request.full_url)
+        self.assertEqual(parse_qsl(urlsplit(request.full_url).query)[0], ("parentid", "0"))
 
     def test_json_response_size_is_bounded(self) -> None:
         opener = FakeOpener([

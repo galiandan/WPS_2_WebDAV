@@ -614,6 +614,25 @@ class ListPage:
 
 
 @dataclass(frozen=True, slots=True)
+class WpsWorkspaceCandidate:
+    """A workspace returned by the OpenList-compatible discovery candidate.
+
+    Discovery only proves that WPS listed the group for the current account.
+    ``verified`` becomes true only after a read of the selected group's root.
+    """
+
+    group_id: str
+    name: str
+    company_id: str
+    source: str = "openlist-candidate"
+    verified: bool = False
+
+    @property
+    def status(self) -> str:
+        return "verified" if self.verified else "candidate"
+
+
+@dataclass(frozen=True, slots=True)
 class WpsStatus:
     """A deliberately redacted result of the WPS session preflight."""
 
@@ -891,6 +910,108 @@ class WpsDriveClient:
         """
 
         return self._login_preflight()
+
+    @staticmethod
+    def _discovery_id(value: object, *, operation: str) -> str:
+        """Accept only bounded, path-safe identifiers from discovery JSON."""
+
+        if not isinstance(value, bool) and isinstance(value, (int, str)):
+            text = str(value).strip()
+        else:
+            raise WpsApiError(operation, category="invalid_response")
+        if (
+            not text
+            or len(text) > 256
+            or "/" in text
+            or "\\" in text
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in text)
+        ):
+            raise WpsApiError(operation, category="invalid_response")
+        return text
+
+    @staticmethod
+    def _discovery_name(value: object, *, operation: str) -> str:
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value.encode("utf-8")) > MAX_REMOTE_NAME_BYTES
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+        ):
+            raise WpsApiError(operation, category="invalid_response")
+        return value.strip()
+
+    def discover_spaces_candidate(
+        self,
+        *,
+        company_id: str,
+        enabled: bool = False,
+    ) -> tuple[WpsWorkspaceCandidate, ...]:
+        """List account-visible enterprise groups using an opt-in candidate API.
+
+        This endpoint is borrowed from OpenList and is not treated as a
+        verified WPS contract.  It is therefore disabled unless the caller
+        explicitly opts in.  Results are never persisted or used as the
+        active workspace by this method.
+        """
+
+        operation = "discover WPS workspaces"
+        if not enabled:
+            raise WpsApiError(operation, category="disabled")
+        company_text = self._discovery_id(company_id, operation=operation)
+        payload = self._request_json(
+            "/3rd/plus/groups/v1/companies/"
+            f"{quote(company_text, safe='')}/users/self/groups/private",
+            retry_on_401=False,
+        )
+        result = payload.get("result")
+        if result is not None and result != "ok":
+            raise WpsApiError(operation, category="invalid_response")
+        raw_groups = payload.get("groups")
+        if not isinstance(raw_groups, list):
+            raise WpsApiError(operation, category="invalid_response")
+
+        candidates: list[WpsWorkspaceCandidate] = []
+        seen: set[str] = set()
+        for item in raw_groups:
+            if not isinstance(item, Mapping):
+                raise WpsApiError(operation, category="invalid_response")
+            group_value = item.get("id", item.get("group_id"))
+            group_text = self._discovery_id(group_value, operation=operation)
+            if group_text in seen:
+                raise WpsApiError(operation, category="invalid_response")
+            seen.add(group_text)
+            name = self._discovery_name(item.get("name"), operation=operation)
+            candidates.append(
+                WpsWorkspaceCandidate(
+                    group_id=group_text,
+                    name=name,
+                    company_id=company_text,
+                )
+            )
+        return tuple(candidates)
+
+    def verify_workspace_candidate(
+        self,
+        candidate: WpsWorkspaceCandidate,
+        *,
+        root_id: str = "0",
+    ) -> WpsWorkspaceCandidate:
+        """Verify a discovered group without changing the active workspace."""
+
+        if not isinstance(candidate, WpsWorkspaceCandidate):
+            raise TypeError("candidate must be a WpsWorkspaceCandidate")
+        operation = "verify WPS workspace candidate"
+        group_id = self._discovery_id(candidate.group_id, operation=operation)
+        company_id = self._discovery_id(candidate.company_id, operation=operation)
+        name = self._discovery_name(candidate.name, operation=operation)
+        self.list_entries(root_id, count=1, group_id=group_id)
+        return WpsWorkspaceCandidate(
+            group_id=group_id,
+            name=name,
+            company_id=company_id,
+            source=candidate.source,
+            verified=True,
+        )
 
     @staticmethod
     def _status_from_error(
@@ -1301,6 +1422,7 @@ class WpsDriveClient:
         self,
         parent_id: str,
         *,
+        group_id: str | None = None,
         offset: int = 0,
         count: int = 20,
         orderby: str = "mtime",
@@ -1332,8 +1454,9 @@ class WpsDriveClient:
                 continue
             query.append((name, self._bool(value) if isinstance(value, bool) else str(value)))
 
+        selected_group_id = self.group_id if group_id is None else group_id
         payload = self._request_json(
-            f"/3rd/drive/api/v5/groups/{quote(self.group_id, safe='')}/files",
+            f"/3rd/drive/api/v5/groups/{quote(selected_group_id, safe='')}/files",
             query=query,
         )
         raw_entries = payload.get("files", [])
