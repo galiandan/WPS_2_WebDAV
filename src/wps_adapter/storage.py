@@ -180,6 +180,7 @@ class WpsStorage:
         self.max_copy_entries = max_copy_entries
         self.max_copy_depth = max_copy_depth
         self._cache: dict[str, tuple[float, tuple[RemoteEntry, ...]]] = {}
+        self._cache_group_id = ""
         self._lock = threading.RLock()
         self._upload_slots = threading.BoundedSemaphore(max_uploads)
         self._download_slots = threading.BoundedSemaphore(max_downloads)
@@ -190,8 +191,14 @@ class WpsStorage:
         if workspace is None or getattr(workspace, "configured_root_id", "") != "auto":
             return
         selected_root = workspace.root_id
-        if selected_root != self.root_id:
-            self.set_root_id(selected_root)
+        selected_group = workspace.group_id
+        with self._lock:
+            if selected_group != self._cache_group_id:
+                self._cache.clear()
+                self._cache_group_id = selected_group
+            if selected_root != self.root_id:
+                self.root_id = str(selected_root)
+                self._cache.clear()
 
     @property
     def root(self) -> RemoteEntry:
@@ -216,6 +223,7 @@ class WpsStorage:
         with self._lock:
             self.root_id = str(root_id)
             self._cache.clear()
+            self._cache_group_id = ""
 
     def set_root_name(self, root_name: str) -> None:
         """Update the adapter-side display name for the virtual root."""

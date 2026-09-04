@@ -124,6 +124,25 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual(storage.root.id, "selected-root")
 
+    def test_workspace_group_change_invalidates_metadata_cache(self) -> None:
+        client = FakeClient()
+        with TemporaryDirectory() as directory:
+            workspace = WorkspaceState.from_file(
+                str(Path(directory) / "workspace.json"),
+                configured_group_id="auto",
+                configured_root_id="auto",
+            )
+            client.config.workspace = workspace
+            storage = WpsStorage(client, root_id="root", cache_ttl=60)
+            workspace.update("group-1", "root-1")
+            storage.list_path("/")
+            self.assertTrue(storage._cache)
+
+            workspace.update("group-2", "root-1")
+            storage.root
+
+            self.assertFalse(storage._cache)
+
     def test_resolves_nested_paths_using_parent_ids(self) -> None:
         storage = WpsStorage(FakeClient(), root_id="root", cache_ttl=60)
         entry = storage.metadata("/docs/readme.txt")
