@@ -262,7 +262,8 @@ service_is_active() {
 }
 
 service_is_enabled() {
-    [[ "$SERVICE_MODE" == "systemd" ]] && systemctl is-enabled --quiet wps-adapter.service
+    # A missing unit is expected during a first install; do not show it as an error.
+    [[ "$SERVICE_MODE" == "systemd" ]] && systemctl is-enabled --quiet wps-adapter.service 2>/dev/null
 }
 
 service_stop() {
