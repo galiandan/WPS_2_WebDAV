@@ -9,14 +9,14 @@
 原生 systemd：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
+curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
   | sudo bash -s -- --port 18080
 ```
 
 Docker：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
+curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
   | sudo bash -s -- --port 18080
 ```
 
@@ -25,11 +25,13 @@ curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
+curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
   | sudo bash -s -- --port 18080 --replace-native
 ```
 
 建议先下载脚本检查内容，再在生产 VPS 执行 `curl | bash`；脚本只从 HTTPS GitHub 地址下载项目归档。
+
+安装器会按 `[当前阶段/总阶段]` 输出进度。下载源码归档时会显示 curl 进度条；Docker 安装在构建镜像时会持续显示 Docker 的逐层构建输出。若某一步暂时没有新文字，通常是在等待网络、校验归档或启动服务。
 
 手动使用 Docker Compose 时，`/etc/wps-adapter/wps-adapter.env` 只会注入容器，不能替代 Compose 的宿主端口变量。自定义端口时先执行：
 

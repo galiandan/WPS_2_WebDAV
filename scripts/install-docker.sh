@@ -22,9 +22,17 @@ ADAPTER_USER_ARG=""
 RUN_USER_ARG=""
 REPLACE_NATIVE=0
 
+TOTAL_STEPS=7
+CURRENT_STEP=0
+
 die() {
     printf '安装失败：%s\n' "$*" >&2
     exit 1
+}
+
+progress_step() {
+    ((CURRENT_STEP += 1))
+    printf '\n[%d/%d] %s\n' "$CURRENT_STEP" "$TOTAL_STEPS" "$1"
 }
 
 usage() {
@@ -105,6 +113,8 @@ while (($# > 0)); do
 done
 
 [[ "${EUID:-$(id -u)}" == "0" ]] || die "请使用 root 运行，或在命令前加 sudo"
+
+progress_step "检查运行环境和安装参数"
 
 if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1 \
     || ! command -v sha256sum >/dev/null 2>&1; then
@@ -399,9 +409,11 @@ trap rollback EXIT
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
 mkdir -p "$SOURCE_DIR"
-curl --fail --silent --show-error --location --max-filesize 52428800 \
+progress_step "下载并显示项目归档进度"
+curl --fail --show-error --progress-bar --location --max-filesize 52428800 \
     --proto-redir '=https' --retry 3 --proto '=https' --tlsv1.2 \
     "$REPOSITORY/archive/$SOURCE_REF.tar.gz" -o "$ARCHIVE"
+progress_step "校验归档清单和文件完整性"
 tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1 --no-same-owner --no-same-permissions
 [[ -z "$(find "$SOURCE_DIR" -mindepth 1 ! \( -type f -o -type d \) -print -quit)" ]] \
     || die "下载的项目包含不允许的特殊文件或符号链接"
@@ -431,6 +443,7 @@ if systemctl is-active --quiet wps-adapter.service; then
     fi
 fi
 
+progress_step "准备配置和保留现有凭据"
 if [[ -f "$ENV_FILE" ]]; then
     ENV_WAS_PRESENT=1
     ENV_BACKUP="$TMP_DIR/wps-adapter.env.before"
@@ -458,6 +471,7 @@ cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
 chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
 
 # Build from the verified temporary checkout before stopping an active native service.
+progress_step "构建 Docker 镜像（构建输出会持续显示）"
 docker build \
     --file "$SOURCE_DIR/deploy/Dockerfile" \
     --build-arg "APP_UID=$RUN_UID" \
@@ -539,6 +553,7 @@ if [[ -n "$OLD_CONTAINER_NAME" ]]; then
 fi
 
 SECRET_MUTATION_STARTED=1
+progress_step "切换凭据、配置和容器"
 install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$ETC_DIR" "$SECRET_DIR"
 install -d -m 755 "$(dirname "$APP_DIR")"
 for pair in \
@@ -575,6 +590,7 @@ docker run --detach \
     --volume "$PASSWORD_FILE:/etc/wps-adapter/secrets/$PASSWORD_BASENAME:ro" \
     --publish "$BIND:$PORT:$PORT" \
     "$IMAGE_NAME" >/dev/null
+progress_step "执行容器健康检查"
 sleep 1
 docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" | grep -qx true \
     || die "Docker 容器没有正常运行"

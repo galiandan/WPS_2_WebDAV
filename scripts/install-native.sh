@@ -19,9 +19,17 @@ ROOT_ID_ARG=""
 ADAPTER_USER_ARG=""
 RUN_USER_ARG=""
 
+TOTAL_STEPS=7
+CURRENT_STEP=0
+
 die() {
     printf '安装失败：%s\n' "$*" >&2
     exit 1
+}
+
+progress_step() {
+    ((CURRENT_STEP += 1))
+    printf '\n[%d/%d] %s\n' "$CURRENT_STEP" "$TOTAL_STEPS" "$1"
 }
 
 usage() {
@@ -100,6 +108,8 @@ while (($# > 0)); do
 done
 
 [[ "${EUID:-$(id -u)}" == "0" ]] || die "请使用 root 运行，或在命令前加 sudo"
+
+progress_step "检查运行环境和安装参数"
 
 if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1 \
     || ! command -v sha256sum >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
@@ -279,9 +289,11 @@ trap 'rm -rf -- "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
 mkdir -p "$SOURCE_DIR"
-curl --fail --silent --show-error --location --max-filesize 52428800 \
+progress_step "下载并显示项目归档进度"
+curl --fail --show-error --progress-bar --location --max-filesize 52428800 \
     --proto-redir '=https' --retry 3 --proto '=https' --tlsv1.2 \
     "$REPOSITORY/archive/$SOURCE_REF.tar.gz" -o "$ARCHIVE"
+progress_step "校验归档清单和文件完整性"
 tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1 --no-same-owner --no-same-permissions
 [[ -z "$(find "$SOURCE_DIR" -mindepth 1 ! \( -type f -o -type d \) -print -quit)" ]] \
     || die "下载的项目包含不允许的特殊文件或符号链接"
@@ -307,6 +319,7 @@ cmp -s "$MANIFEST_FILES" "$ACTUAL_FILES" || die "下载归档的文件清单与�
 [[ -f "$SOURCE_DIR/deploy/wps-adapter-hardening.env" ]] || die "下载的项目缺少安全环境变量配置"
 
 ENV_TARGET_FILE="$TMP_DIR/wps-adapter.env"
+progress_step "准备配置和保留现有凭据"
 if [[ -f "$ENV_FILE" ]]; then
     cp -p "$ENV_FILE" "$ENV_TARGET_FILE"
 else
@@ -487,6 +500,7 @@ rollback() {
 trap rollback EXIT
 
 COMMIT_STARTED=1
+progress_step "切换应用文件和 systemd 配置"
 if (( SERVICE_WAS_ACTIVE )); then systemctl stop wps-adapter.service; fi
 install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$ETC_DIR" "$SECRET_DIR"
 install -d -m 755 "$(dirname "$APP_DIR")" "/etc/systemd/system/wps-adapter.service.d"
@@ -509,12 +523,14 @@ install -o root -g root -m 600 "$SOURCE_DIR/deploy/wps-adapter-hardening.env" "$
 
 systemctl daemon-reload
 if (( UNIT_WAS_PRESENT == 0 )); then systemctl enable wps-adapter.service; fi
+progress_step "启动适配器服务"
 systemctl start wps-adapter.service
 sleep 1
 systemctl is-active --quiet wps-adapter.service || {
     systemctl status wps-adapter.service --no-pager >&2 || true
     die "wps-adapter 服务没有正常启动"
 }
+progress_step "执行本地健康检查"
 curl --fail --silent --show-error --max-time 8 "http://127.0.0.1:$PORT/healthz" >/dev/null \
     || die "服务已启动但健康检查失败，请查看 journalctl -u wps-adapter"
 

@@ -72,6 +72,13 @@ class InstallerTemplateTests(unittest.TestCase):
             self.assertIn('ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"', script)
             self.assertIn('WPS_WORKSPACE_FILE', script)
             self.assertNotIn('ask_value "WPS 企业群组 ID"', script)
+            self.assertIn('--progress-bar --location --max-filesize 52428800', script)
+            self.assertIn('progress_step', script)
+
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        deployment = (PROJECT_ROOT / "docs/deployment.md").read_text(encoding="utf-8")
+        self.assertIn("curl -fL --progress-bar", readme)
+        self.assertIn("curl -fL --progress-bar", deployment)
 
         self.assertIn('awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP"', native)
         self.assertIn('--user "$RUN_UID:$RUN_GID"', docker)

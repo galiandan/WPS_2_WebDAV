@@ -17,7 +17,7 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 - 并发大文件上传会预留各自的临时盘空间，空间不足时会拒绝新传输。
 - 公网部署建议使用 HTTPS 反向代理。没有域名或证书时也可以直接使用 HTTP，但 Cookie、Basic Auth 和文件内容都会明文传输，只适合可信网络。
 
-当前版本：`0.9.0`（原型阶段）
+当前版本：`0.9.1`（原型阶段）
 
 ## 能做什么
 
@@ -81,14 +81,14 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 适合不想使用 Docker 的 VPS：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
+curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
   | sudo bash -s -- --port 54321
 ```
 
 自定义端口，例如 `18080`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
+curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
   | sudo bash -s -- --port 18080
 ```
 
@@ -97,20 +97,22 @@ curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts
 适合已经使用 Docker 的 VPS。Debian/Ubuntu 上如果没有 Docker，脚本会尝试安装 `docker.io`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
+curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
   | sudo bash -s -- --port 54321
 ```
 
 如果当前正在运行 Native 服务，切换到 Docker 时明确加上：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
+curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
   | sudo bash -s -- --port 54321 --replace-native
 ```
 
 两种安装器都会保留 `/etc/wps-adapter/secrets/` 中的凭据。Docker 安装器在构建或健康检查失败时，会尝试恢复原来的服务或容器。
 
 > 一键脚本会从 GitHub 下载脚本内固定的 40 位 Git 提交归档，不直接信任可变的 `main` 分支，并在 root 文件操作前校验归档内容清单。升级时先检查脚本内容；维护者发布新版本时会更新固定提交号和清单摘要。也可以用 `--source-ref <40位提交号> --source-manifest-sha256 <64位摘要>` 指定另一个不可变版本。若仓库是 Private，执行机器必须能访问 GitHub Raw 和归档地址。
+
+安装过程中会显示 `[当前阶段/总阶段]`；下载项目归档时会显示 curl 的进度条。Docker 方式在构建镜像时还会显示逐层构建输出，长时间没有新行通常表示正在下载或构建，不是安装器无响应。
 
 安装完成后，记下安装器显示的地址。以端口 `54321` 为例：
 
