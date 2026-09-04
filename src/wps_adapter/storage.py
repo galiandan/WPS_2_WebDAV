@@ -539,6 +539,21 @@ class WpsStorage:
                 "COPY overwrite is disabled because the relay is not atomic"
             )
 
+        native_copy = getattr(self.client, "copy", None)
+        if source.kind == "file" and callable(native_copy):
+            copied_id = native_copy(source.id, destination_parent.id)
+            self.invalidate()
+            return RemoteEntry(
+                id=copied_id,
+                name=destination_name,
+                kind="file",
+                parent_id=destination_parent.id,
+                size=source.size,
+                modified_at=source.modified_at,
+                etag=source.etag,
+                link_id=source.link_id,
+            )
+
         copied = 0
 
         def copy_entry(

@@ -2,7 +2,7 @@
 
 > 功能编号：01
 >
-> 状态：仅文档，暂不实现
+> 状态：已实现同空间单文件原生 COPY；文件夹、覆盖和跨空间语义仍未确认
 >
 > 更新时间：2026-09-04
 
@@ -14,10 +14,11 @@
 
 ## 2. 当前实现基线
 
-当前 `WpsStorage.copy_path()` 已提供受限的中继复制：
+当前 `WpsStorage.copy_path()` 对已确认的单文件场景使用 WPS 原生复制，其他场景仍使用受限的中继复制：
 
 ```text
-解析源路径 -> WPS 流式下载 -> WPS 上传到目标目录
+单文件：WPS 控制面复制 -> 返回新文件 ID
+文件夹或未确认场景：解析源路径 -> WPS 流式下载 -> WPS 上传到目标目录
 ```
 
 当前行为包括：
@@ -28,6 +29,8 @@
 - 不把整个文件读入单个 Python `bytes` 对象；
 - 目标存在时不宣称原子覆盖，当前会拒绝有风险的 COPY 覆盖场景；
 - 递归复制中途失败时，会尝试删除新建的目标根目录。
+
+已确认的单文件请求为 `POST /3rd/drive/api/v3/groups/<groupid>/files/batch/copy`，请求使用 `fileids`、`groupid`、`target_groupid`、`target_parentid` 和 `duplicated_name_model=1`；WPS 返回新文件 ID 后才向 WebDAV 返回成功。
 
 因此，“WebDAV COPY 能工作”和“WPS 原生 COPY 已确认”是两件不同的事。本阶段研究完成前，不删除中继实现。
 
@@ -119,11 +122,11 @@ OpenList 资料目前只能标记为 `external-reference` / `candidate`。它没
 
 ## 9. 本阶段明确不实现
 
-- 不凭 OpenList 代码直接接入原生 COPY；
+- 不凭 OpenList 代码扩展未经验证的原生 COPY 语义；
 - 不扫描其他用户、租户或未授权 group；
 - 不实现跨租户复制；
 - 不实现未经抓包确认的覆盖、重命名或冲突策略；
 - 不删除当前中继 COPY；
 - 不承诺 WPS 服务端原子事务语义；
 - 不把对象存储临时 URL 暴露给 WebDAV 客户端；
-- 不修改代码、测试、安装器或其他文档。
+- 不实现文件夹原生复制、覆盖复制或跨空间复制，直到获得对应真实抓包证据。

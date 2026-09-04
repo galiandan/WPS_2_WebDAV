@@ -1002,6 +1002,31 @@ class ClientTests(unittest.TestCase):
             },
         )
 
+    def test_copy_uses_confirmed_same_group_endpoint(self) -> None:
+        opener = FakeOpener([FakeResponse(b'{"result":"ok","fileids":[99]}')])
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="2579904987", cookie="Cookie-secret", csrf_token="csrf-secret"),
+            opener=opener,
+        )
+
+        self.assertEqual(client.copy("7", "8"), "99")
+        request = opener.requests[0][0]
+        self.assertEqual(
+            urlsplit(request.full_url).path,
+            "/3rd/drive/api/v3/groups/2579904987/files/batch/copy",
+        )
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")),
+            {
+                "fileids": [7],
+                "groupid": 2579904987,
+                "target_groupid": 2579904987,
+                "target_parentid": 8,
+                "duplicated_name_model": 1,
+                "csrfmiddlewaretoken": "csrf-secret",
+            },
+        )
+
     def test_delete_posts_task_and_waits_for_success(self) -> None:
         opener = FakeOpener([
             FakeResponse(

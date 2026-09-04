@@ -1899,6 +1899,37 @@ class WpsDriveClient:
             poll_timeout=poll_timeout,
         )
 
+    def copy(self, file_id: str, target_parent_id: str, *, csrf_token: str | None = None) -> str:
+        """Copy one file using the confirmed same-group WPS endpoint."""
+
+        if not file_id or not target_parent_id:
+            raise ValueError("file and target parent IDs are required")
+        payload = self._request_json(
+            f"/3rd/drive/api/v3/groups/{quote(str(self.group_id), safe='')}/files/batch/copy",
+            method="POST",
+            body=json.dumps(
+                {
+                    "fileids": [self._json_id(file_id)],
+                    "groupid": self._json_id(self.group_id),
+                    "target_groupid": self._json_id(self.group_id),
+                    "target_parentid": self._json_id(target_parent_id),
+                    "duplicated_name_model": 1,
+                    "csrfmiddlewaretoken": self._csrf(csrf_token),
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+        if payload.get("result") not in {None, "ok"}:
+            raise WpsApiError("copy file")
+        fileids = payload.get("fileids")
+        if not isinstance(fileids, list) or len(fileids) != 1:
+            raise WpsApiError("copy response missing file ID")
+        copied_id = fileids[0]
+        if isinstance(copied_id, bool) or not isinstance(copied_id, (str, int)):
+            raise WpsApiError("copy response contains invalid file ID")
+        return str(copied_id)
+
     def delete(
         self,
         file_id: str,
