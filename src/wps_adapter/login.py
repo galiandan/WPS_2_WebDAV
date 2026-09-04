@@ -1421,11 +1421,12 @@ def login_and_sync(
         _validate_adapter_auth(adapter_user, adapter_password or "")
         if adapter_timeout <= 0:
             raise LoginError("适配器同步超时时间必须为正数")
+    discovered_workspaces: tuple[WpsWorkspaceCandidate, ...] = ()
     with ChromeLoginSession(login_url=browser_url, browser=browser) as session:
         print("WPS 登录窗口已打开。请只在这个官方 WPS 窗口中完成登录。", flush=True)
         if workspace_url is None:
             print(
-                "登录后脚本会使用企业云盘根目录；WPS 自动跳转到的旧文件夹不会被当作目标。",
+                "登录后脚本会自动获取可用 WPS 空间；WPS 自动跳转到的旧文件夹不会被当作目标。",
                 flush=True,
             )
         else:
@@ -1462,7 +1463,7 @@ def login_and_sync(
         )
         if workspace_url is None:
             try:
-                candidates = discover_workspaces(
+                discovered_workspaces = discover_workspaces(
                     credentials,
                     tenant_id=workspace.tenant_id,
                     base_url=browser_url,
@@ -1470,27 +1471,21 @@ def login_and_sync(
                 )
             except LoginError as exc:
                 print(f"自动发现企业空间失败：{exc}；将使用当前页面中的空间。", flush=True)
-            else:
-                if candidates:
-                    if workspace_selector is None:
-                        selected_candidate = candidates[0]
-                    else:
-                        selected_candidate = workspace_selector(candidates)
-                    if not isinstance(selected_candidate, WpsWorkspaceCandidate):
-                        raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
-                    workspace = WpsWorkspaceSelection(
-                        tenant_id=selected_candidate.tenant_id,
-                        group_id=selected_candidate.group_id,
-                        root_id="0",
-                    )
-                else:
+            if not discovered_workspaces:
+                if not workspace.group_id:
                     print("没有发现可选企业空间；将使用当前页面中的空间。", flush=True)
-            if workspace.group_id:
-                browser_parts = urlsplit(browser_url)
-                wps_origin = urlunsplit((browser_parts.scheme, browser_parts.netloc, "", "", ""))
-                session.navigate(
-                    f"{wps_origin}/space/{quote(workspace.tenant_id, safe='')}/{quote(workspace.group_id, safe='')}/"
-                )
+    if workspace_url is None and discovered_workspaces:
+        if workspace_selector is None:
+            selected_candidate = discovered_workspaces[0]
+        else:
+            selected_candidate = workspace_selector(discovered_workspaces)
+        if not isinstance(selected_candidate, WpsWorkspaceCandidate):
+            raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+        workspace = WpsWorkspaceSelection(
+            tenant_id=selected_candidate.tenant_id,
+            group_id=selected_candidate.group_id,
+            root_id="0",
+        )
     print("正在验证 WPS 工作区访问权限...", flush=True)
     verify_workspace_access(
         credentials,

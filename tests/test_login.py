@@ -149,6 +149,46 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(selected, candidate)
         prompt.assert_not_called()
 
+    def test_workspace_selection_happens_after_browser_closes(self) -> None:
+        class Session:
+            closed = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _type, _value, _traceback):
+                self.closed = True
+
+            def current_url(self):
+                return "https://365.kdocs.cn/space/tenant/group/"
+
+        session = Session()
+        candidates = (
+            WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
+            WpsWorkspaceCandidate("tenant", "456", "自动备份"),
+        )
+
+        def choose(items):
+            self.assertTrue(session.closed)
+            return items[1]
+
+        with TemporaryDirectory() as directory, patch(
+            "wps_adapter.login.ChromeLoginSession", return_value=session
+        ), patch(
+            "wps_adapter.login.wait_for_login_credentials",
+            return_value=(
+                WpsCredentials(cookie="sid=secret", csrf_token="csrf"),
+                ("csrf", "rtk"),
+                [{"name": "cid", "value": "tenant"}],
+            ),
+        ), patch("wps_adapter.login.discover_workspaces", return_value=candidates), patch(
+            "wps_adapter.login.verify_workspace_access"
+        ):
+            login_and_sync(
+                output_dir=directory,
+                workspace_selector=choose,
+            )
+
     def test_workspace_discovery_rejects_invalid_items_without_exposing_secrets(self) -> None:
         class Response:
             def read(self, _size: int = -1) -> bytes:
