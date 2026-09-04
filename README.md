@@ -17,7 +17,7 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 - 并发大文件上传会预留各自的临时盘空间，空间不足时会拒绝新传输。
 - 公网部署建议使用 HTTPS 反向代理。没有域名或证书时也可以直接使用 HTTP，但 Cookie、Basic Auth 和文件内容都会明文传输，只适合可信网络。
 
-当前版本：`0.9.1`（原型阶段）
+当前版本：`0.9.2`（原型阶段）
 
 ## 能做什么
 
@@ -53,7 +53,8 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 
 ### VPS
 
-- Debian 或 Ubuntu 系统更容易使用一键安装脚本
+- 常见 Linux 发行版：Debian/Ubuntu、RHEL/Rocky/Alma/Fedora、Alpine、Arch、openSUSE、Void 等
+- Native 安装器会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`
 - root 或可以执行 `sudo` 的账号
 - 一个已经能正常访问 WPS 企业云盘的账号
 - 一个未被占用的对外端口
@@ -76,43 +77,79 @@ WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
 
 `[]` 中的内容是默认值，直接按回车即可使用。默认服务运行用户是执行 `sudo` 的当前用户；如果直接以 root 执行，运行用户就是 root。
 
-### 方式一：Native systemd
+### 方式一：Native
 
-适合不想使用 Docker 的 VPS：
+适合不想使用 Docker 的 VPS。主机有 systemd 时会注册开机启动；没有 systemd 时会使用便携后台模式，并提示你手动处理开机启动。
 
-```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
-  | sudo bash -s -- --port 54321
-```
-
-自定义端口，例如 `18080`：
+先定义一个下载并执行函数。它会优先使用国内加速节点，失败后自动切换到另一个节点，最后才尝试 GitHub 直连：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
-  | sudo bash -s -- --port 18080
+download_and_run() {
+  SCRIPT_PATH="$1"
+  shift
+  RAW_URL="https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/$SCRIPT_PATH"
+  INSTALLER="$(mktemp -t wps-adapter-installer.XXXXXX)" || return 1
+  DOWNLOADED=0
+  for URL in "https://gh-proxy.com/$RAW_URL" "https://ghfast.top/$RAW_URL" "$RAW_URL"; do
+    : > "$INSTALLER"
+    printf '下载安装器：%s\n' "$URL"
+    if curl --fail --show-error --location --progress-bar \
+        --connect-timeout 10 --max-time 60 --retry 1 --max-filesize 1048576 \
+        --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        "$URL" -o "$INSTALLER" && bash -n "$INSTALLER"; then
+      DOWNLOADED=1
+      if sudo bash "$INSTALLER" "$@"; then
+        STATUS=0
+      else
+        STATUS="$?"
+      fi
+      rm -f "$INSTALLER"
+      return "$STATUS"
+    fi
+  done
+  if (( ! DOWNLOADED )); then
+    rm -f "$INSTALLER"
+    echo '安装器下载失败' >&2
+    return 1
+  fi
+}
 ```
+
+安装 Native，默认端口 `54321`：
+
+```bash
+download_and_run scripts/install-native.sh --port 54321
+```
+
+自定义端口时，把最后的端口参数改成目标端口，例如 `--port 18080`。
 
 ### 方式二：Docker
 
-适合已经使用 Docker 的 VPS。Debian/Ubuntu 上如果没有 Docker，脚本会尝试安装 `docker.io`：
+适合已经使用 Docker 的 VPS。若没有 Docker，脚本会根据检测到的包管理器安装对应软件包，并支持 systemd、OpenRC 和 SysV service 启动 Docker daemon：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
-  | sudo bash -s -- --port 54321
+download_and_run scripts/install-docker.sh --port 54321
 ```
 
 如果当前正在运行 Native 服务，切换到 Docker 时明确加上：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
-  | sudo bash -s -- --port 54321 --replace-native
+download_and_run scripts/install-docker.sh --port 54321 --replace-native
 ```
 
 两种安装器都会保留 `/etc/wps-adapter/secrets/` 中的凭据。Docker 安装器在构建或健康检查失败时，会尝试恢复原来的服务或容器。
 
-> 一键脚本会从 GitHub 下载脚本内固定的 40 位 Git 提交归档，不直接信任可变的 `main` 分支，并在 root 文件操作前校验归档内容清单。升级时先检查脚本内容；维护者发布新版本时会更新固定提交号和清单摘要。也可以用 `--source-ref <40位提交号> --source-manifest-sha256 <64位摘要>` 指定另一个不可变版本。若仓库是 Private，执行机器必须能访问 GitHub Raw 和归档地址。
+> 一键脚本会从国内加速节点开始尝试下载脚本内固定的 40 位 Git 提交归档，失败后回退到 GitHub 直连；不会直接信任可变的 `main` 分支，并在 root 文件操作前校验归档内容清单。第三方加速节点只用于传输，归档内容仍会通过固定清单校验。升级时先检查脚本内容；也可以用 `--source-ref <40位提交号> --source-manifest-sha256 <64位摘要>` 指定另一个不可变版本。
 
-安装过程中会显示 `[当前阶段/总阶段]`；下载项目归档时会显示 curl 的进度条。Docker 方式在构建镜像时还会显示逐层构建输出，长时间没有新行通常表示正在下载或构建，不是安装器无响应。
+安装过程中会显示 `[当前阶段/总阶段]`；下载安装器和项目归档时会显示 curl/wget 进度。Docker 方式会优先尝试国内 Python 基础镜像，再回退到 Docker Hub，并在构建镜像时显示逐层构建输出。长时间没有新行时，命令会在连接/总超时后切换地址，不会无限等待。
+
+如果手动使用 Compose 且 Docker Hub 访问不稳定，可以在构建前指定一个能访问的 Python 基础镜像：
+
+```bash
+export WPS_ADAPTER_DOCKER_BASE_IMAGE=docker.m.daocloud.io/library/python:3.12-slim
+```
+
+安装器会自动尝试这个镜像；Compose 会直接使用你指定的值。
 
 安装完成后，记下安装器显示的地址。以端口 `54321` 为例：
 
@@ -129,11 +166,29 @@ REST：   http://<VPS-IP>:54321/api/v1/
 
 安装器只负责部署服务，不会替你登录 WPS。登录助手必须在你自己的电脑上运行，因为 WPS 登录 Cookie 不能由适配器网页跨域读取。
 
-登录助手是一个独立的单文件脚本，不需要 clone 整个项目。直接下载这一个文件：
+登录助手是一个独立的单文件脚本，不需要 clone 整个项目。网络受限时也按同样顺序尝试国内节点：
 
 ```bash
-curl -fsSLo wps_login.py \
-  https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py
+LOGIN_RAW_URL="https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py"
+LOGIN_FILE="$(mktemp -t wps-login.XXXXXX)"
+LOGIN_DOWNLOADED=0
+for URL in "https://gh-proxy.com/$LOGIN_RAW_URL" "https://ghfast.top/$LOGIN_RAW_URL" "$LOGIN_RAW_URL"; do
+  : > "$LOGIN_FILE"
+  if curl --fail --show-error --location --progress-bar \
+      --connect-timeout 10 --max-time 60 --retry 1 --max-filesize 5242880 \
+      --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      "$URL" -o "$LOGIN_FILE"; then
+    LOGIN_DOWNLOADED=1
+    break
+  fi
+done
+if (( LOGIN_DOWNLOADED )); then
+  mv "$LOGIN_FILE" wps_login.py
+else
+  rm -f "$LOGIN_FILE"
+  echo '登录助手下载失败' >&2
+  exit 1
+fi
 ```
 
 然后运行向导：

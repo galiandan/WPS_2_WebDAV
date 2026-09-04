@@ -1,37 +1,71 @@
 # Deployment
 
-本文说明如何在 Debian/Ubuntu 风格的 Linux VPS 上部署适配器。项目不需要第三方 Python 包；可以选择原生 systemd 或 Docker。示例中的 `<vps-host>`、`<vps-user>` 和路径都要替换为自己的值。
+本文说明如何在常见 Linux VPS 上部署适配器。项目不需要第三方 Python 包；可以选择 Native 或 Docker。示例中的 `<vps-host>`、`<vps-user>` 和路径都要替换为自己的值。
 
 ## One-command install
 
-下面两个脚本都可以直接从 GitHub Raw 执行。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
+下面两个脚本都可以通过国内加速节点下载，失败后自动回退到 GitHub 直连。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。
 
-原生 systemd：
+先在当前终端定义下载函数：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh \
-  | sudo bash -s -- --port 18080
+download_and_run() {
+  SCRIPT_PATH="$1"
+  shift
+  RAW_URL="https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/$SCRIPT_PATH"
+  INSTALLER="$(mktemp -t wps-adapter-installer.XXXXXX)" || return 1
+  DOWNLOADED=0
+  for URL in "https://gh-proxy.com/$RAW_URL" "https://ghfast.top/$RAW_URL" "$RAW_URL"; do
+    : > "$INSTALLER"
+    printf '下载安装器：%s\n' "$URL"
+    if curl --fail --show-error --location --progress-bar --connect-timeout 10 --max-time 60 --retry 1 --max-filesize 1048576 --proto '=https' --proto-redir '=https' --tlsv1.2 "$URL" -o "$INSTALLER" && bash -n "$INSTALLER"; then
+      DOWNLOADED=1
+      if sudo bash "$INSTALLER" "$@"; then
+        STATUS=0
+      else
+        STATUS="$?"
+      fi
+      rm -f "$INSTALLER"
+      return "$STATUS"
+    fi
+  done
+  if (( ! DOWNLOADED )); then
+    rm -f "$INSTALLER"
+    echo '安装器下载失败' >&2
+    return 1
+  fi
+}
+```
+
+Native：
+
+```bash
+download_and_run scripts/install-native.sh --port 18080
 ```
 
 Docker：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
-  | sudo bash -s -- --port 18080
+download_and_run scripts/install-docker.sh --port 18080
 ```
 
-安装脚本会从脚本内固定的 40 位 Git 提交归档下载代码，并校验归档内置的 SHA-256 文件清单，不要求 VPS 已安装 `git`；可用 `--source-ref` 和对应的 `--source-manifest-sha256` 指定另一个完整提交号。原生脚本需要 Python `3.11+` 和 systemd；Docker 脚本会在 Debian/Ubuntu 上安装 `docker.io`（如果尚未安装）。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
+安装脚本会从脚本内固定的 40 位 Git 提交归档下载代码，并校验归档内置的 SHA-256 文件清单，不要求 VPS 已安装 `git`；可用 `--source-ref` 和对应的 `--source-manifest-sha256` 指定另一个完整提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
 
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh \
-  | sudo bash -s -- --port 18080 --replace-native
+download_and_run scripts/install-docker.sh --port 18080 --replace-native
 ```
 
-建议先下载脚本检查内容，再在生产 VPS 执行 `curl | bash`；脚本只从 HTTPS GitHub 地址下载项目归档。
+建议先下载脚本检查内容，再执行；不要把未知来源的内容直接通过管道交给 root。国内加速节点只用于传输，项目归档会按固定清单校验。安装器内部的所有下载都有连接超时和总超时，并会在候选地址之间自动回退。
 
-安装器会按 `[当前阶段/总阶段]` 输出进度。下载源码归档时会显示 curl 进度条；Docker 安装在构建镜像时会持续显示 Docker 的逐层构建输出。若某一步暂时没有新文字，通常是在等待网络、校验归档或启动服务。
+安装器会按 `[当前阶段/总阶段]` 输出进度。下载安装器和源码归档时会显示进度；Docker 会优先从国内镜像获取 Python 基础镜像，并在构建镜像时持续显示逐层构建输出。若某个地址无响应，会在超时后自动切换，不会无限卡住。
+
+手动使用 Compose 且 Docker Hub 访问不稳定时，可在构建前指定镜像：
+
+```bash
+export WPS_ADAPTER_DOCKER_BASE_IMAGE=docker.m.daocloud.io/library/python:3.12-slim
+```
 
 手动使用 Docker Compose 时，`/etc/wps-adapter/wps-adapter.env` 只会注入容器，不能替代 Compose 的宿主端口变量。自定义端口时先执行：
 
@@ -49,8 +83,9 @@ docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 
 确认主机满足：
 
-- Python `3.11+`。
-- systemd。
+- Native 模式需要 Python `3.11+`；安装器会尝试通过系统包管理器安装。Docker 模式不要求宿主机安装 Python。
+- Bash、`tar`、`find`、`sha256sum`，以及 `curl` 或 `wget`。安装命令使用 `sudo bash`，极简系统如果没有 Bash，需要先按该系统方式安装 Bash。
+- 安装器覆盖常见发行版的包管理器；未列出的定制发行版仍可能需要手工提供 Python/Docker 和服务管理方式。
 - 能访问 WPS 和对象存储域名。
 - 临时上传文件所在磁盘有足够空间。
 - 默认只接受 WPS 返回的 `*.ag.kdocs.cn` 签名对象存储地址；如果你的企业区域返回了不同但可信的 WPS 对象存储后缀，再显式设置 `WPS_OBJECT_STORAGE_HOST_SUFFIX`。
@@ -127,7 +162,9 @@ set +a
 PYTHONPATH=src python3 -m wps_adapter check-config
 ```
 
-## 5. Install systemd
+## 5. Install service (Native manual deployment)
+
+Native 一键安装器已经自动处理本节。只有手工部署或没有使用一键安装器时，才需要按下面的 systemd 步骤执行；没有 systemd 的系统应使用一键安装器的便携后台模式，并将日志写在 `/etc/wps-adapter/wps-adapter.log`。
 
 ```bash
 sudo install -m 644 /opt/wps-adapter/deploy/wps-adapter.service \

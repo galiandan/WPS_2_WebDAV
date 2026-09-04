@@ -15,11 +15,26 @@ HTTP/HTTPS 直接同步不需要 SSH。远程 HTTPS 是推荐方式；没有域�
 
 ## Interactive flow
 
-直接下载并运行单文件助手：
+直接下载并运行单文件助手。下载失败时会依次尝试国内加速节点和 GitHub 直连：
 
 ```bash
-curl -fsSLo wps_login.py \
-  https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py
+LOGIN_RAW_URL="https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py"
+LOGIN_FILE="$(mktemp -t wps-login.XXXXXX)"
+LOGIN_DOWNLOADED=0
+for URL in "https://gh-proxy.com/$LOGIN_RAW_URL" "https://ghfast.top/$LOGIN_RAW_URL" "$LOGIN_RAW_URL"; do
+  : > "$LOGIN_FILE"
+  if curl --fail --show-error --location --progress-bar --connect-timeout 10 --max-time 60 --retry 1 --max-filesize 5242880 --proto '=https' --proto-redir '=https' --tlsv1.2 "$URL" -o "$LOGIN_FILE"; then
+    LOGIN_DOWNLOADED=1
+    break
+  fi
+done
+if (( LOGIN_DOWNLOADED )); then
+  mv "$LOGIN_FILE" wps_login.py
+else
+  rm -f "$LOGIN_FILE"
+  echo '登录助手下载失败' >&2
+  exit 1
+fi
 
 python3 wps_login.py
 ```

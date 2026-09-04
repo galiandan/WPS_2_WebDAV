@@ -24,6 +24,12 @@ REPLACE_NATIVE=0
 
 TOTAL_STEPS=7
 CURRENT_STEP=0
+PACKAGE_MANAGER=""
+DOWNLOAD_CONNECT_TIMEOUT="${WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT:-10}"
+DOWNLOAD_MAX_TIME="${WPS_ADAPTER_DOWNLOAD_MAX_TIME:-300}"
+DOCKER_SERVICE_MODE=""
+DOCKER_BASE_IMAGE=""
+LOCAL_BASE_IMAGE="wps-adapter-python-base:3.12-slim"
 
 die() {
     printf '安装失败：%s\n' "$*" >&2
@@ -33,6 +39,258 @@ die() {
 progress_step() {
     ((CURRENT_STEP += 1))
     printf '\n[%d/%d] %s\n' "$CURRENT_STEP" "$TOTAL_STEPS" "$1"
+}
+
+has_command() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+package_manager_busy() {
+    local comm_path process_name
+    for comm_path in /proc/[0-9]*/comm; do
+        [[ -r "$comm_path" ]] || continue
+        IFS= read -r process_name <"$comm_path" || continue
+        case "$process_name" in
+            apt|apt-get|dpkg|dpkg-deb|unattended-upgrade|packagekitd|dnf|microdnf|tdnf|yum|apk|pacman|zypper|xbps-install)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+detect_package_manager() {
+    if has_command apt-get; then PACKAGE_MANAGER="apt"; return 0; fi
+    if has_command dnf; then PACKAGE_MANAGER="dnf"; return 0; fi
+    if has_command microdnf; then PACKAGE_MANAGER="microdnf"; return 0; fi
+    if has_command tdnf; then PACKAGE_MANAGER="tdnf"; return 0; fi
+    if has_command yum; then PACKAGE_MANAGER="yum"; return 0; fi
+    if has_command apk; then PACKAGE_MANAGER="apk"; return 0; fi
+    if has_command pacman; then PACKAGE_MANAGER="pacman"; return 0; fi
+    if has_command zypper; then PACKAGE_MANAGER="zypper"; return 0; fi
+    if has_command xbps-install; then PACKAGE_MANAGER="xbps"; return 0; fi
+    return 1
+}
+
+package_install() {
+    (($# > 0)) || return 0
+    [[ -n "$PACKAGE_MANAGER" ]] || detect_package_manager \
+        || die "缺少安装依赖，且未识别 apt、dnf、yum、apk、pacman、zypper 或 xbps-install"
+    package_manager_busy && die "检测到其他软件包管理进程正在运行，请先让它完成后再安装"
+    case "$PACKAGE_MANAGER" in
+        apt)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
+            apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 "$@"
+            ;;
+        dnf) dnf -y --setopt=retries=2 --setopt=timeout=15 install "$@" ;;
+        microdnf) microdnf install -y "$@" ;;
+        tdnf) tdnf install -y "$@" ;;
+        yum) yum -y --setopt=retries=2 --setopt=timeout=15 install "$@" ;;
+        apk) apk add --no-cache "$@" ;;
+        pacman) pacman --noconfirm -Sy --needed "$@" ;;
+        zypper)
+            zypper --non-interactive --gpg-auto-import-keys refresh
+            zypper --non-interactive install --no-recommends "$@"
+            ;;
+        xbps) xbps-install -Sy "$@" ;;
+    esac
+}
+
+install_docker_package() {
+    case "$PACKAGE_MANAGER" in
+        apt) package_install docker.io ;;
+        *)
+            if package_install docker; then
+                return 0
+            fi
+            if package_install moby-engine; then
+                return 0
+            fi
+            die "无法通过 $PACKAGE_MANAGER 安装 Docker；请检查发行版软件源"
+            ;;
+    esac
+}
+
+install_docker_dependencies() {
+    local transport=""
+    local find_package=""
+    if ! has_command curl && ! has_command wget; then
+        transport="curl"
+    fi
+    if ! has_command find; then
+        find_package="findutils"
+    fi
+    package_install ca-certificates tar coreutils $find_package $transport
+}
+
+download_file() {
+    local url="$1"
+    local target="$2"
+    case "$url" in
+        https://*) ;;
+        *)
+            printf '拒绝非 HTTPS 下载地址。\n' >&2
+            return 1
+            ;;
+    esac
+    if has_command curl; then
+        curl --fail --show-error --progress-bar --location --max-filesize 52428800 \
+            --connect-timeout "$DOWNLOAD_CONNECT_TIMEOUT" --max-time "$DOWNLOAD_MAX_TIME" \
+            --retry 2 --retry-delay 1 --proto-redir '=https' --proto '=https' --tlsv1.2 \
+            "$url" -o "$target"
+    elif has_command wget; then
+        if has_command timeout; then
+            timeout "$DOWNLOAD_MAX_TIME" \
+                wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 3 -O "$target" "$url"
+        else
+            wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 3 -O "$target" "$url"
+        fi
+    else
+        die "缺少 curl 或 wget，无法下载项目归档"
+    fi
+}
+
+download_archive() {
+    local direct_url="$REPOSITORY/archive/$SOURCE_REF.tar.gz"
+    local candidate index=0 total
+    local candidates=()
+    [[ -n "${WPS_ADAPTER_ARCHIVE_URL:-}" ]] && candidates+=("$WPS_ADAPTER_ARCHIVE_URL")
+    candidates+=(
+        "https://gh-proxy.com/$direct_url"
+        "https://ghfast.top/$direct_url"
+        "$direct_url"
+    )
+    total="${#candidates[@]}"
+    for candidate in "${candidates[@]}"; do
+        ((index += 1))
+        printf '尝试下载源代码（地址 %d/%d）\n' "$index" "$total"
+        rm -f -- "$ARCHIVE"
+        if download_file "$candidate" "$ARCHIVE" \
+            && tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
+            return 0
+        fi
+        printf '该下载地址不可用，准备尝试下一个地址。\n' >&2
+    done
+    die "项目归档下载失败；可设置 WPS_ADAPTER_ARCHIVE_URL 指定可访问的归档地址"
+}
+
+health_check() {
+    local url="$1"
+    if has_command curl; then
+        curl --fail --silent --show-error --max-time 8 "$url" >/dev/null
+    elif has_command wget; then
+        wget -q -T 8 -O - "$url" >/dev/null
+    else
+        return 1
+    fi
+}
+
+archive_members_are_safe() {
+    local archive="$1"
+    local member
+    while IFS= read -r member; do
+        member="${member%/}"
+        [[ -z "$member" ]] && continue
+        [[ "$member" != /* ]] || return 1
+        [[ "$member" != ".." && "$member" != ../* && "$member" != */../* && "$member" != */.. ]] \
+            || return 1
+        [[ "$member" != *//* ]] || return 1
+    done < <(tar -tzf "$archive")
+}
+
+host_uses_systemd() {
+    local init_name=""
+    has_command systemctl || return 1
+    [[ -r /proc/1/comm ]] || return 1
+    IFS= read -r init_name </proc/1/comm || return 1
+    [[ "$init_name" == "systemd" ]]
+}
+
+docker_daemon_ready() {
+    docker info >/dev/null 2>&1
+}
+
+select_docker_service_mode() {
+    if host_uses_systemd; then
+        DOCKER_SERVICE_MODE="systemd"
+    elif has_command rc-service; then
+        DOCKER_SERVICE_MODE="openrc"
+    elif has_command service; then
+        DOCKER_SERVICE_MODE="sysv"
+    else
+        DOCKER_SERVICE_MODE=""
+    fi
+}
+
+start_docker_daemon() {
+    docker_daemon_ready && return 0
+    select_docker_service_mode
+    case "$DOCKER_SERVICE_MODE" in
+        systemd)
+            systemctl enable --now docker.service \
+                || systemctl enable --now docker \
+                || die "systemd 无法启动 Docker 服务"
+            ;;
+        openrc)
+            rc-update add docker default >/dev/null 2>&1 || true
+            rc-service docker start || die "OpenRC 无法启动 Docker 服务"
+            ;;
+        sysv)
+            service docker start || die "SysV service 无法启动 Docker 服务"
+            ;;
+        *)
+            die "Docker 命令存在，但 Docker daemon 未运行；当前系统没有 systemd、OpenRC 或 SysV service，请先手动启动 dockerd 后重试"
+            ;;
+    esac
+
+    local attempt
+    for ((attempt = 1; attempt <= 30; attempt += 1)); do
+        if docker_daemon_ready; then
+            printf 'Docker daemon 已就绪。\n'
+            return 0
+        fi
+        printf '等待 Docker daemon（%d/30）\r' "$attempt"
+        sleep 1
+    done
+    printf '\n'
+    docker info >&2 || true
+    die "Docker daemon 启动后未在 30 秒内就绪"
+}
+
+docker_pull() {
+    local image="$1"
+    if has_command timeout; then
+        timeout 180 docker pull "$image"
+    else
+        docker pull "$image"
+    fi
+}
+
+prepare_docker_base_image() {
+    local candidate
+    local candidates=()
+    [[ -n "${WPS_ADAPTER_DOCKER_BASE_IMAGE:-}" ]] \
+        && candidates+=("$WPS_ADAPTER_DOCKER_BASE_IMAGE")
+    candidates+=(
+        "docker.m.daocloud.io/library/python:3.12-slim"
+        "dockerproxy.net/library/python:3.12-slim"
+        "mirror.ccs.tencentyun.com/library/python:3.12-slim"
+        "python:3.12-slim"
+    )
+    for candidate in "${candidates[@]}"; do
+        printf '准备 Python 基础镜像：%s\n' "$candidate"
+        if ! docker image inspect "$candidate" >/dev/null 2>&1; then
+            docker_pull "$candidate" || {
+                printf '该基础镜像地址不可用，准备尝试下一个地址。\n' >&2
+                continue
+            }
+        fi
+        docker tag "$candidate" "$LOCAL_BASE_IMAGE"
+        DOCKER_BASE_IMAGE="$LOCAL_BASE_IMAGE"
+        return 0
+    done
+    die "Python 基础镜像下载失败；可设置 WPS_ADAPTER_DOCKER_BASE_IMAGE 指定可访问的镜像"
 }
 
 usage() {
@@ -49,8 +307,14 @@ usage() {
   --source-ref SHA     要安装的 40 位 Git 提交号（默认使用脚本内固定版本）
   --source-manifest-sha256 SHA256
                        归档内容清单的 SHA-256（用于自定义 source-ref）
-  --replace-native    停用同名的原生 systemd 服务
+  --replace-native    停用同名的原生服务
   --help              显示帮助
+
+环境变量：
+  WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
+  WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
+  WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
+  WPS_ADAPTER_DOCKER_BASE_IMAGE        自定义 Python 基础镜像地址
 
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
 EOF
@@ -114,30 +378,28 @@ done
 
 [[ "${EUID:-$(id -u)}" == "0" ]] || die "请使用 root 运行，或在命令前加 sudo"
 
+[[ "$DOWNLOAD_CONNECT_TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
+    || die "WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 必须是正整数"
+[[ "$DOWNLOAD_MAX_TIME" =~ ^[1-9][0-9]*$ ]] \
+    || die "WPS_ADAPTER_DOWNLOAD_MAX_TIME 必须是正整数"
+
 progress_step "检查运行环境和安装参数"
 
-if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1 \
-    || ! command -v sha256sum >/dev/null 2>&1; then
-    if command -v apt-get >/dev/null 2>&1; then
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get install -y ca-certificates curl tar coreutils
-    else
-        die "缺少 curl、tar 或 sha256sum，且当前系统没有 apt-get"
-    fi
+if ! has_command curl || ! has_command tar || ! has_command sha256sum \
+    || ! has_command find; then
+    detect_package_manager || die "缺少安装依赖，且未识别 apt、dnf、yum、apk、pacman、zypper 或 xbps-install"
+    install_docker_dependencies
 fi
+has_command curl || has_command wget || die "缺少 curl 或 wget，无法下载项目归档"
+has_command tar || die "缺少 tar，无法解压项目归档"
+has_command sha256sum || die "缺少 sha256sum；请安装 coreutils 或提供该命令"
 
-if ! command -v docker >/dev/null 2>&1; then
-    if command -v apt-get >/dev/null 2>&1; then
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get install -y docker.io
-    else
-        die "没有 Docker，且当前系统没有 apt-get；请先安装 Docker"
-    fi
+if ! has_command docker; then
+    detect_package_manager || die "没有 Docker，且未识别可用的软件包管理器"
+    install_docker_package
 fi
-command -v systemctl >/dev/null 2>&1 || die "当前系统没有 systemctl"
-systemctl enable --now docker.service || die "Docker 服务没有正常启动"
+has_command docker || die "Docker 安装后仍不可用，请检查发行版软件源"
+start_docker_daemon
 
 if [[ -n "$RUN_USER_ARG" ]]; then
     RUN_USER="$RUN_USER_ARG"
@@ -294,6 +556,7 @@ TMP_DIR="$(mktemp -d -p "$APP_PARENT" -t wps-adapter-docker.XXXXXX)"
 NATIVE_WAS_ACTIVE=0
 NATIVE_WAS_ENABLED=0
 NATIVE_STOPPED=0
+NATIVE_SYSTEMD=0
 OLD_CONTAINER_NAME=""
 OLD_CONTAINER_WAS_RUNNING=0
 NEW_CONTAINER_STARTED=0
@@ -410,12 +673,21 @@ ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
 mkdir -p "$SOURCE_DIR"
 progress_step "下载并显示项目归档进度"
-curl --fail --show-error --progress-bar --location --max-filesize 52428800 \
-    --proto-redir '=https' --retry 3 --proto '=https' --tlsv1.2 \
-    "$REPOSITORY/archive/$SOURCE_REF.tar.gz" -o "$ARCHIVE"
+download_archive
 progress_step "校验归档清单和文件完整性"
-tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1 --no-same-owner --no-same-permissions
-[[ -z "$(find "$SOURCE_DIR" -mindepth 1 ! \( -type f -o -type d \) -print -quit)" ]] \
+archive_members_are_safe "$ARCHIVE" \
+    || die "下载的项目归档包含不安全的路径"
+tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
+archive_tree_is_safe() {
+    local root="$1"
+    local path
+    while IFS= read -r path; do
+        [[ "$path" == "$root" ]] && continue
+        [[ -L "$path" ]] && return 1
+        [[ -f "$path" || -d "$path" ]] || return 1
+    done < <(find "$root" -print)
+}
+archive_tree_is_safe "$SOURCE_DIR" \
     || die "下载的项目包含不允许的特殊文件或符号链接"
 MANIFEST_FILE="$SOURCE_DIR/release-manifest.txt"
 [[ -f "$MANIFEST_FILE" ]] || die "下载的项目缺少内容清单"
@@ -427,17 +699,18 @@ ACTUAL_FILES="$TMP_DIR/actual.files"
 awk 'length($0) >= 67 { print substr($0, 67) }' "$MANIFEST_FILE" | LC_ALL=C sort >"$MANIFEST_FILES"
 (
     cd "$SOURCE_DIR"
-    find . -mindepth 1 -type f -printf '%P\n'
-) | awk '$0 != "release-manifest.txt" && $0 != "scripts/install-native.sh" && $0 != "scripts/install-docker.sh"' \
+    find . -type f -print
+) | sed 's#^\./##' | awk '$0 != "release-manifest.txt" && $0 != "scripts/install-native.sh" && $0 != "scripts/install-docker.sh"' \
     | LC_ALL=C sort >"$ACTUAL_FILES"
 cmp -s "$MANIFEST_FILES" "$ACTUAL_FILES" || die "下载归档的文件清单与预期不一致"
-(cd "$SOURCE_DIR" && sha256sum --strict --check release-manifest.txt >/dev/null) \
+(cd "$SOURCE_DIR" && sha256sum -c release-manifest.txt >/dev/null) \
     || die "下载归档的文件校验失败"
 [[ -f "$SOURCE_DIR/deploy/Dockerfile" ]] || die "下载的项目缺少 Dockerfile"
 [[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
 
-if systemctl is-active --quiet wps-adapter.service; then
+if host_uses_systemd && systemctl is-active --quiet wps-adapter.service; then
     NATIVE_WAS_ACTIVE=1
+    NATIVE_SYSTEMD=1
     if (( REPLACE_NATIVE == 0 )); then
         die "检测到正在运行的原生服务；确认替换时请加 --replace-native"
     fi
@@ -471,9 +744,11 @@ cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
 chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
 
 # Build from the verified temporary checkout before stopping an active native service.
+prepare_docker_base_image
 progress_step "构建 Docker 镜像（构建输出会持续显示）"
 docker build \
     --file "$SOURCE_DIR/deploy/Dockerfile" \
+    --build-arg "BASE_IMAGE=$DOCKER_BASE_IMAGE" \
     --build-arg "APP_UID=$RUN_UID" \
     --build-arg "APP_GID=$RUN_GID" \
     --tag "$IMAGE_NAME" \
@@ -538,7 +813,7 @@ if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
 fi
 
 if (( NATIVE_WAS_ACTIVE )); then
-    if systemctl is-enabled --quiet wps-adapter.service; then
+    if (( NATIVE_SYSTEMD )) && systemctl is-enabled --quiet wps-adapter.service; then
         NATIVE_WAS_ENABLED=1
     fi
     NATIVE_STOPPED=1
@@ -594,7 +869,7 @@ progress_step "执行容器健康检查"
 sleep 1
 docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" | grep -qx true \
     || die "Docker 容器没有正常运行"
-curl --fail --silent --show-error --max-time 8 "http://127.0.0.1:$PORT/healthz" >/dev/null \
+health_check "http://127.0.0.1:$PORT/healthz" \
     || die "容器已启动但健康检查失败，请查看 docker logs $CONTAINER_NAME"
 
 if [[ -d "$APP_DIR" || -L "$APP_DIR" ]]; then
@@ -607,7 +882,7 @@ mv "$APP_STAGE_DIR" "$APP_DIR"
 APP_NEW_MOVED=1
 chown -R "$RUN_USER:$RUN_GROUP" "$APP_DIR"
 
-if (( NATIVE_WAS_ACTIVE )); then
+if (( NATIVE_WAS_ACTIVE && NATIVE_SYSTEMD )); then
     systemctl disable wps-adapter.service
 fi
 

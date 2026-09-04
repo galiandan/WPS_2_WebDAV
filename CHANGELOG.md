@@ -2,6 +2,15 @@
 
 本项目遵循 Keep a Changelog 风格。版本号用于记录适配器行为变化，不代表 WPS 官方兼容性承诺。
 
+## [0.9.2] - 2026-09-04
+
+### Added
+
+- 安装器下载优先使用国内 GitHub 加速节点，失败后自动回退到 GitHub 直连，并为每个地址设置连接和总超时。
+- Native 和 Docker 安装器识别常见 Linux 包管理器；Native 在无 systemd 主机上使用便携后台模式，Docker 支持 systemd、OpenRC 和 SysV service 启动 daemon。
+- Docker 安装器优先尝试国内 Python 基础镜像，并支持 `WPS_ADAPTER_DOCKER_BASE_IMAGE` 自定义镜像。
+- 安装器归档路径校验和非 GNU `find`/`sha256sum` 兼容处理，保留阶段进度和下载进度显示。
+
 ## [0.9.1] - 2026-09-04
 
 ### Added
