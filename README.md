@@ -1,69 +1,22 @@
 # WPS 2 WebDAV
 
-将你自己有权访问的 WPS 企业云盘映射为 WebDAV、REST API 和网页文件管理器。
+把你自己的 WPS 企业云盘接入 WebDAV。安装完成后，可以用浏览器、Windows、Linux、手机、NAS 或其他 WebDAV 客户端访问文件。
 
 ```text
-WPS 企业云盘 -> WPS 2 WebDAV -> WebDAV / REST / 网页
+WPS 企业云盘 -> WPS 2 WebDAV -> 网页 / WebDAV / REST
 ```
 
-当前版本：`0.9.8`，项目仍处于实验性阶段。
+当前版本：`0.9.8`。项目仍属于实验性适配器，不是 WPS 官方软件。
 
-## 项目定位
+## 最简单的使用方法
 
-WPS 相关接口不是公开稳定 API。本项目只根据本人账号的真实网页请求进行适配，不是 WPS 官方客户端，也不保证 WPS 服务变更后仍然兼容。
+整个流程只需要三步：在 VPS 安装服务，在自己的电脑运行一次登录助手，然后打开网页或连接 WebDAV。
 
-项目的设计目标是：
+### 第一步：安装到 VPS
 
-- VPS 不长期保存文件，上传和下载尽量直接流经 WPS。
-- 不要求用户安装浏览器扩展、Playwright 或项目依赖。
-- 通过独立的 `wps_login.py` 在用户自己的电脑上完成 WPS 登录。
-- 适配器保留 WPS `rtk`，在上游返回 `401` 时按已观察的流程自动续期。
-- 用 WebDAV 兼容 Windows、Linux、手机、NAS 和同步工具。
+下面两条命令选一条。端口可以改成任意未占用端口；下面以 `54321` 为例。
 
-## 已实现功能
-
-- 文件列表和文件夹浏览
-- 创建文件夹
-- 上传、覆盖上传和下载
-- 删除、重命名和移动
-- 50 MiB 以上文件自动使用分片上传
-- 大文件分片失败后保留检查点；客户端用相同路径重新上传同一文件时跳过已完成分片
-- 流式下载和单范围 `Range` 下载
-- WebDAV `PROPFIND`、`GET`、`HEAD`、`PUT`、`MKCOL`、`DELETE`、`MOVE`、`COPY`、`LOCK`、`UNLOCK`
-- `Depth: 0`、`1`、`infinity`，带条目数和深度保护
-- 网页拖动上传和上传速度显示
-- 网页内直接修改云盘显示名称，所有客户端统一生效
-- 网页和 REST 的 WPS 登录状态预检，区分未配置、登录过期、无权访问和上游故障
-- Native 和 Docker 两种部署方式
-- 自定义监听端口
-- 一个统一的 Native/Docker 卸载脚本
-
-当前 WebDAV 限制：同一企业空间的单文件、无同名目标 `COPY` 使用 WPS 服务端复制；文件夹复制仍通过受限中继下载再上传。`MOVE` 和 `COPY` 暂不覆盖已有目标；锁只在当前适配器进程内有效。
-
-大文件续传只保存受权限保护的上传元数据，不保存文件内容。进程重启后需要重新提交同一个本地文件，适配器会按大小和 SHA-1 匹配检查点；WPS `upload_id` 生命周期和远端列分片能力尚未确认，过期会话不会被盲目复用。
-
-## 安全边界
-
-只使用自己的 WPS 账号和自己有权限访问的企业空间。项目不会绕过权限、SSO、验证码、风控或租户隔离。
-
-以下内容绝不能提交到 GitHub、Issue、聊天或日志：
-
-- WPS Cookie、`rtk` 和 CSRF
-- 适配器 Basic Auth 密码
-- 签名对象存储 URL
-- 原始 HAR、PCAP 或真实文件内容
-
-公网部署优先使用 HTTPS。没有域名或证书时也支持 HTTP，但 Cookie、Basic Auth 和文件内容都会明文传输，只适合可信网络。
-
-## 快速开始
-
-### 1. 部署 VPS
-
-VPS 需要常见 Linux 发行版、root 或 `sudo` 权限、一个未被占用的端口。Native 安装器支持常见的 Debian、RHEL、Alpine、Arch、openSUSE 和 Void 系发行版；没有 systemd 时会使用便携后台模式。
-
-下面两种方式只选一种。
-
-Native：
+Native（推荐，VPS 不需要 Docker）：
 
 ```bash
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
@@ -75,254 +28,167 @@ Docker：
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ```
 
-自定义端口时，把最后的 `54321` 改成目标端口，例如 `--port 18080`。如果 VPS 无法访问 GitHub Raw，可将 URL 替换为 `https://gh-proxy.com/https://raw.githubusercontent.com/...`，或使用 `https://ghfast.top/https://raw.githubusercontent.com/...`。
+安装器会显示下载和安装进度，并在首次安装时询问 WebDAV/网页共用的 Basic Auth 用户名和密码。密码不会显示，请记住它，后面连接服务时要使用。
 
-安装器会显示阶段进度和下载进度，并校验固定版本的文件清单。首次安装会询问适配器 Basic Auth 用户名和密码；密码不会显示。安装器默认使用执行 `sudo` 的当前用户运行服务。
+安装器默认使用执行 `sudo` 的当前用户运行 Native 服务，不要求你额外创建 Linux 用户。Docker 方式要求 VPS 已能运行 Docker，但你的个人电脑不需要安装 Docker。
 
-如果出现“下载归档的内容清单校验失败”，请重新复制当前 README 中的安装命令再执行一次，不要混用旧版本安装器或旧的 `SOURCE_MANIFEST_SHA256` 参数。安装器会固定下载一个已发布提交并校验其清单，校验失败时不会替换现有服务。
+如果 VPS 无法访问 GitHub Raw，可将命令中的地址替换为以下地址之一：
 
-Docker 安装器如果检测到正在运行的 Native 服务，会拒绝覆盖。确认切换时：
-
-```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321 --replace-native
+```text
+https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
+https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
 ```
 
-### 2. 登录并同步 WPS
+安装器会校验固定版本的文件清单。看到“下载归档的内容清单校验失败”时，重新复制当前 README 的命令执行，不要混用旧命令或旧校验值。
 
-服务端不需要安装 Chrome。登录助手只需要在你自己的电脑上运行：Python `3.11+`、Chrome/Chromium，以及选择 SSH 方式时的系统 `ssh` 命令。
+### 第二步：登录 WPS
 
-下载并运行独立脚本：
+在你自己的电脑上下载并运行独立登录脚本：
 
 ```bash
 curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
 ```
 
-向导会询问 VPS 地址、SSH 或 HTTP/HTTPS 连接方式、端口和适配器账号。随后会打开一个临时隔离的 Chrome 窗口：
+电脑需要 Python `3.11+`、Chrome 或 Chromium。如果选择 SSH 同步，还需要系统自带的 `ssh` 命令。
 
-1. 只在官方 WPS 页面登录自己的账号。
-2. 完成学校 SSO、扫码、验证码或二次验证。
-3. 默认不需要手动切换文件夹。WPS 可能自动恢复上次打开的文件夹，即使该页面显示“无权访问”，脚本也会忽略这个旧文件夹。
-4. 登录完成后，脚本会先获取全部可用空间数据，然后自动关闭临时浏览器；多个空间时可输入一个序号、多个序号（如 `1,3`）或 `all`，选择的空间会在适配器根目录下显示为文件夹。只有一个空间会自动使用。发现接口不可用时会回退当前官方页面中的空间。
-5. 脚本逐个验证选定空间的根目录可读后，才会把 Cookie、CSRF 和工作区信息同步到 VPS，服务无需重启。
+脚本会询问 VPS 地址、连接方式、端口和 Basic Auth 信息，然后打开一个临时隔离的官方 WPS 登录窗口：
 
-脚本不会打印 Cookie，也不会把 Cookie 放进命令参数、URL 或日志。
+1. 只在官方 WPS 页面完成登录、学校 SSO、扫码或验证码。
+2. 登录完成后脚本自动读取当前账号可见的 WPS 空间。
+3. 浏览器自动关闭后，回到终端选择空间：输入 `1` 选择一个，输入 `1,3` 选择多个，输入 `all` 选择全部。
+4. 选择的空间会在 WebDAV 根目录下显示为文件夹，例如 `/学校云盘/`、`/自动备份/`。
+5. 脚本验证空间可访问后，自动把凭据和工作区配置同步到 VPS。
 
-如果登录后 Chrome 仍显示 `/space/`、空白页面或“暂无权限访问该文件夹”，不要手动寻找文件夹。脚本会读取当前登录会话，自动发现可用空间，并主动打开选定空间的根目录；发现接口不可用时，会退回当前页面中的空间。只有目录验证成功后才会同步凭据。
+不会需要你手动填写企业 ID、群组 ID 或文件夹 ID，也不会把 Cookie 显示出来。WPS 自动跳转到的旧文件夹不会被当作目标，默认使用空间根目录。
 
-如果发现多个空间，终端会显示空间名称并要求输入序号；如果只有一个空间，不需要输入序号，会自动使用该空间。
+### 第三步：访问
 
-没有域名或证书时可以使用 HTTP，但必须明确允许明文传输：
-
-```bash
-python3 wps_login.py \
-  --adapter-url http://<VPS-IP>:54321 \
-  --adapter-user <适配器用户名> \
-  --allow-http
-```
-
-有权限的子文件夹可以通过 `--workspace-url` 指定。地址必须是你从 WPS 页面复制的具体文件夹地址：
-
-```bash
-python3 wps_login.py \
-  --workspace-url 'https://365.kdocs.cn/space/<企业ID>/<群组ID>/<文件夹ID>' \
-  --adapter-url https://<适配器地址> \
-  --adapter-user <适配器用户名>
-```
-
-指定后，脚本会直接打开并校验这个文件夹；如果登录后跳到了其他位置，不会悄悄选择别的目录。
-
-### 3. 访问服务
-
-安装完成后，端口以安装器输出为准：
+浏览器打开：
 
 ```text
-网页：   http://<VPS-IP>:54321/
-WebDAV： http://<VPS-IP>:54321/dav/
-REST：   http://<VPS-IP>:54321/api/v1/
-健康检查：http://<VPS-IP>:54321/healthz
+http://<VPS-IP>:54321/
 ```
 
-网页、WebDAV 和 REST 共用适配器 Basic Auth。
+WebDAV 地址：
 
-先验证 WPS 连接状态：
+```text
+http://<VPS-IP>:54321/dav/
+```
+
+用户名和密码就是安装时设置的 Basic Auth 凭据。端口不是 `54321` 时，把地址中的端口替换成安装时填写的端口。
+
+网页支持浏览、上传、拖动上传、上传速度显示、下载、新建文件夹、重命名、移动和删除。点击网页右上角齿轮可以修改云盘显示名称。
+
+## HTTP 和 HTTPS
+
+没有域名和证书时可以使用 HTTP，适合个人可信网络或临时测试。但 HTTP 会明文传输 Basic Auth、WPS 会话和文件内容，不适合直接暴露在公网。
+
+有域名时，建议使用 Nginx、Caddy 或其他反向代理提供 HTTPS，再让代理转发到适配器。WebDAV 客户端应使用：
+
+```text
+https://<你的域名>/dav/
+```
+
+## 登录同步方式
+
+登录助手默认会询问三种方式：
+
+1. SSH 私钥：适合已经用 SSH 密钥管理 VPS 的用户。
+2. SSH 密码：适合没有 SSH 私钥的用户，登录完成后由 SSH 自己询问密码。
+3. HTTP/HTTPS 适配器接口：输入服务地址、Basic Auth 用户名和密码即可同步。
+
+没有 HTTPS 时，HTTP 方式必须明确确认风险：
 
 ```bash
-curl -u <适配器用户名> \
-  'http://<VPS-IP>:54321/api/v1/status'
+python3 wps_login.py --adapter-url http://<VPS-IP>:54321 --adapter-user <用户名> --allow-http
 ```
 
-正常时会返回 `status: "connected"`。首次安装、Cookie 尚未同步时返回 `not_configured`；Cookie 过期时返回 `session_expired`。接口不会返回 Cookie、CSRF、企业 ID、群组 ID 或上游响应正文。
+如果登录脚本提示 Chrome 会话未启动、Cookie 不完整或无权访问，请确认官方 WPS 窗口已经完成登录并进入企业云盘，然后重新运行脚本。服务同步新凭据后不需要重启。
 
-进程健康检查仍然是独立的：
+## WPS 空间文件夹
+
+选择多个空间或 `all` 后，根目录结构类似：
+
+```text
+/
+├── 学校云盘/
+├── 个人团队/
+└── 自动备份/
+```
+
+这些空间文件夹是适配器提供的虚拟入口，不会在 WPS 中创建同名文件夹。空间内部的文件仍直接来自对应 WPS 空间。
+
+跨空间 `MOVE` 和 `COPY` 会被拒绝，避免误操作。旧版只保存一个 `group_id/root_id` 的工作区配置仍然可以读取。
+
+## 检查服务状态
+
+健康检查只检查适配器进程是否运行，不代表 WPS 已登录：
 
 ```bash
 curl 'http://<VPS-IP>:54321/healthz'
 ```
 
-`/healthz` 只表示适配器进程能够响应，不代表 WPS 会话有效。目录接口仍可用于实际验证：若返回 `WPS 未连接` 或上游 `401`，先重新运行 `wps_login.py`；新凭据写入后不需要重启服务。
-
-## 网页文件管理器
-
-浏览器打开：
-
-```text
-http://<VPS-IP>:<端口>/
-```
-
-登录后可以浏览目录、进入文件夹、拖动上传、查看上传进度和速度、下载、创建文件夹、重命名、移动和删除。点击右上角的齿轮按钮即可修改云盘显示名称，不需要命令行；保存后会立即更新当前页面，并在服务重启后继续保留。
-
-## WebDAV
-
-WebDAV 地址：
-
-```text
-http(s)://<服务器地址>:<端口>/dav/
-```
-
-在 Windows、Linux、手机或 NAS 客户端中选择 WebDAV，填写该地址以及适配器 Basic Auth 账号密码。建议先连接测试目录，再接入正式数据。
-
-常用方法：
-
-| 方法 | 作用 |
-| --- | --- |
-| `PROPFIND` | 列目录和读取属性 |
-| `GET` / `HEAD` | 下载文件和读取元数据 |
-| `PUT` | 上传或覆盖文件 |
-| `MKCOL` | 创建文件夹 |
-| `DELETE` | 删除文件或文件夹 |
-| `MOVE` | 重命名或移动 |
-| `COPY` | 复制文件或文件夹 |
-| `LOCK` / `UNLOCK` | 进程内写锁兼容 |
-
-## REST 示例
-
-所有远端路径都以 `/` 开头：
-
-```text
-GET    /api/v1/entries?path=/
-GET    /api/v1/metadata?path=/folder/file.txt
-GET    /api/v1/download?path=/folder/file.txt
-PUT    /api/v1/upload?path=/folder/file.txt
-POST   /api/v1/folders?path=/folder
-PATCH  /api/v1/entries?path=/folder/file.txt
-DELETE /api/v1/entries?path=/folder/file.txt
-```
-
-上传：
+检查 WPS 会话：
 
 ```bash
-curl -u <适配器用户名> \
-  -H 'Content-Type: application/octet-stream' \
-  --upload-file ./local-file.bin \
-  'http://<VPS-IP>:54321/api/v1/upload?path=/remote-file.bin'
+curl -u <用户名> 'http://<VPS-IP>:54321/api/v1/status'
 ```
 
-下载：
+正常会返回 `connected`。如果返回 `not_configured`、`session_expired` 或 `permission_denied`，重新运行 `wps_login.py` 即可。
 
-```bash
-curl -u <适配器用户名> \
-  -o ./local-file.bin \
-  'http://<VPS-IP>:54321/api/v1/download?path=/remote-file.bin'
-```
-
-重命名：
-
-```bash
-curl -u <适配器用户名> \
-  -X PATCH \
-  -H 'Content-Type: application/json' \
-  --data '{"name":"new-name.txt"}' \
-  'http://<VPS-IP>:54321/api/v1/entries?path=/old-name.txt'
-```
-
-完整接口、状态码和 WebDAV 头部说明见 [`docs/api.md`](docs/api.md)。
+服务遇到 WPS `401` 时，会尝试使用保存的 `rtk` 自动续期会话。WPS 撤销刷新凭据或改变登录策略时，仍需要重新登录。
 
 ## 卸载
 
-统一卸载脚本会同时检查 Native 和 Docker 安装。默认删除服务、应用代码和本项目管理的 Docker 容器，但保留配置及凭据，方便以后重新安装：
+默认卸载服务和程序，但保留本机配置、Basic Auth、Cookie 和工作区文件：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ```
 
-删除配置、Cookie、CSRF、Basic Auth 和工作区文件时，明确添加 `--purge`：
+连同本机配置和凭据一起删除：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge
 ```
 
-卸载 Docker 镜像需要额外添加 `--remove-image`。自动化执行可以添加 `--yes`，但 `--purge --yes` 会不可恢复地删除本机凭据，请确认目标服务器后再使用。
+Docker 镜像需要额外添加 `--remove-image`。卸载不会删除 WPS 云盘中的远端文件，也不会删除 Docker 软件本身。
 
-卸载脚本不会删除 Docker 软件本身，也不会删除 WPS 云盘上的远端文件。
+## 安全说明
 
-## 配置
+本项目只适用于你自己的 WPS 账号和你有权限访问的数据，不绕过权限、SSO、验证码、风控或租户隔离。
 
-安装器会生成下面的文件；网页首次保存云盘名称后，还会生成 `web-settings.json`：
+以下内容不能提交到 GitHub、Issue、聊天或日志：
 
-```text
-/etc/wps-adapter/wps-adapter.env
-/etc/wps-adapter/secrets/wps-cookie
-/etc/wps-adapter/secrets/wps-csrf
-/etc/wps-adapter/secrets/wps-workspace.json
-/etc/wps-adapter/secrets/web-settings.json
-/etc/wps-adapter/secrets/adapter-username
-/etc/wps-adapter/secrets/adapter-password
-```
+- WPS Cookie、`rtk`、CSRF 和 refresh token；
+- WebDAV/网页 Basic Auth 密码；
+- 签名对象存储 URL；
+- 原始 HAR、PCAP 和真实文件内容。
 
-常用变量：
-
-| 变量 | 默认值 | 作用 |
-| --- | --- | --- |
-| `WPS_GROUP_ID` | `auto` | 登录助手自动识别企业群组 |
-| `WPS_ROOT_ID` | `auto` | `auto` 使用工作区文件，默认根目录为 `0` |
-| `WPS_ROOT_NAME` | `WPS Enterprise Drive` | 网页首次使用时的默认显示名称；网页修改后以页面保存值为准 |
-| `WPS_WORKSPACE_FILE` | `/etc/wps-adapter/secrets/wps-workspace.json` | 群组和根目录选择 |
-| `WPS_AUTO_REFRESH` | `true` | 上游 `401` 后自动续期 |
-| `WPS_STATUS_PROBE_TTL` | `30` | 成功的 WPS 状态预检缓存秒数 |
-| `WPS_STATUS_FAILURE_BACKOFF` | `5` | 失败预检的短暂退避秒数 |
-| `WPS_MAX_CACHED_FOLDERS` | `1024` | 内存中最多保留的目录元数据页面数 |
-| `WPS_MULTIPART_THRESHOLD` | `52428800` | 分片上传阈值，单位字节 |
-| `WPS_MAX_UPLOAD_BYTES` | `1073741824` | 单次上传上限，`0` 表示不限制 |
-| `WPS_MAX_UPLOADS` | `2` | 并发上传上限 |
-| `WPS_MAX_DOWNLOADS` | `4` | 并发下载上限 |
-| `ADAPTER_BIND` | 安装器默认 `0.0.0.0` | 监听地址 |
-| `ADAPTER_PORT` | `54321` | 监听端口 |
-| `ADAPTER_USERNAME_FILE` | `/etc/wps-adapter/secrets/adapter-username` | Basic Auth 用户名文件 |
-| `ADAPTER_PASSWORD_FILE` | `/etc/wps-adapter/secrets/adapter-password` | Basic Auth 密码文件 |
-
-完整配置模板见 [`.env.example`](.env.example)。不要把密钥直接写入公开配置或 shell 历史。
-
-最简单的修改方式是打开网页后点击右上角齿轮，输入新的云盘名称并点击“保存”。名称会写入 `/etc/wps-adapter/secrets/web-settings.json`，因此对其他浏览器、WebDAV 和 REST 根目录元数据也保持一致。这个操作不修改 WPS 远端文件夹名称。
-
-如果还没有打开网页，也可以把 `WPS_ROOT_NAME` 作为首次默认名称写入配置：
-
-```dotenv
-WPS_ROOT_NAME="我的学校云盘"
-```
-
-网页保存的名称优先于 `WPS_ROOT_NAME`；删除网页设置文件后才会回退到配置中的默认值。
+服务默认限制上传并发、下载并发、目录递归深度、目录条目数、响应大小和上传临时磁盘占用，以适配低配 VPS。上传和下载尽量流经 WPS，不长期保存文件正文。
 
 ## 当前限制
 
-- WPS 私有接口可能随时变化，项目不承诺长期兼容。
-- 上传需要 `Content-Length`，暂不接受 HTTP chunked request body。
-- 大文件失败后只在当前请求内有限重试，进程退出后的跨请求续传尚未实现。
-- 同一企业空间内、目标不存在的单文件 `COPY` 使用 WPS 服务端复制；文件夹复制和未确认的复制场景仍经过 VPS 中继，速度和临时空间取决于 VPS 与 WPS 的网络。
-- `LOCK` 是进程内兼容锁，服务重启后失效。
-- WPS 撤销 `rtk`、要求重新登录或改变登录策略时，需要重新运行登录助手。
+- WPS 私有接口可能变化，项目不承诺长期兼容。
+- 上传请求需要 `Content-Length`，暂不接受 HTTP chunked request body。
+- 大文件失败后会在当前请求内有限重试；跨进程断点恢复仍属于实验性能力。
+- 文件夹 `COPY` 使用 VPS 流式中继，目标已存在时不会覆盖；单文件同名复制可使用 WPS 原生 COPY。
+- `LOCK` 是当前进程内的兼容锁，服务重启后失效。
+- 多空间之间暂不支持移动和复制。
 
-## 文档与开发
+## 高级文档
 
-- [`docs/deployment.md`](docs/deployment.md)：部署、升级、回滚和服务管理
-- [`docs/login.md`](docs/login.md)：登录助手、HTTP/HTTPS 和 SSH 同步
+- [`docs/login.md`](docs/login.md)：登录助手和凭据同步
+- [`docs/deployment.md`](docs/deployment.md)：升级、回滚和服务管理
 - [`docs/api.md`](docs/api.md)：REST、WebDAV 和状态码
-- [`docs/integration.md`](docs/integration.md)：Windows、NAS 和验收流程
+- [`docs/integration.md`](docs/integration.md)：Windows、NAS 和验收
 - [`docs/architecture.md`](docs/architecture.md)：组件和数据流
-- [`docs/research/`](docs/research/)：抓包记录、实验结论和安全边界
-- [`docs/research/openlist-reference.md`](docs/research/openlist-reference.md)：OpenList WPS 参考和四方向演进设计
+- [`docs/research/`](docs/research/)：脱敏抓包记录和实验边界
 - [`SECURITY.md`](SECURITY.md)：安全问题报告
 
-运行测试：
+## 开发测试
+
+项目运行时不依赖第三方 Python 包。开发环境需要 Python `3.11+`：
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
@@ -332,8 +198,8 @@ python3 tools/build_release_manifest.py --check
 git diff --check
 ```
 
-项目不依赖第三方 Python 包。真实 WPS 实验必须只使用自己的测试目录；原始 HAR 不要提交到仓库。
+真实 WPS 实验必须使用专用测试目录，原始抓包和真实文件不要提交。
 
 ## License
 
-本项目采用 [GNU General Public License v3.0 or later (GPL-3.0-or-later)](LICENSE) 发布。WPS 商标、服务和接口归其各自权利人所有；本项目不代表 WPS 官方立场。
+本项目采用 [GNU General Public License v3.0 or later](LICENSE) 发布。WPS 商标、服务和接口归其各自权利人所有；本项目不代表 WPS 官方立场。
