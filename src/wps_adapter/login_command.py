@@ -16,6 +16,7 @@ from .login import (
     DEFAULT_REMOTE_CSRF_PATH,
     DEFAULT_REMOTE_WORKSPACE_PATH,
     LoginError,
+    WpsWorkspaceCandidate,
     is_remote_http_url,
     login_and_sync,
 )
@@ -182,6 +183,27 @@ def _apply_adapter_port(adapter_url: str, port: int | None) -> str:
     return urlunsplit((parts.scheme, f"{netloc}:{port}", parts.path, parts.query, parts.fragment))
 
 
+def _select_workspace(candidates: tuple[WpsWorkspaceCandidate, ...]) -> WpsWorkspaceCandidate:
+    """Let a normal user choose a space by its name, never by its ID."""
+
+    if len(candidates) == 1:
+        print(f"已找到 WPS 空间：{candidates[0].name}，将自动使用它。", flush=True)
+        return candidates[0]
+    print(f"发现 {len(candidates)} 个可用 WPS 空间：", flush=True)
+    for index, candidate in enumerate(candidates, 1):
+        print(f"  [{index}] {candidate.name}", flush=True)
+    while True:
+        answer = input("请选择空间 [1]: ").strip() or "1"
+        try:
+            index = int(answer)
+        except ValueError:
+            print("请输入列表中的序号。", flush=True)
+            continue
+        if 1 <= index <= len(candidates):
+            return candidates[index - 1]
+        print("请输入列表中的序号。", flush=True)
+
+
 def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
     """Run the login flow and return a process exit code."""
 
@@ -243,6 +265,7 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         adapter_password=adapter_password,
         adapter_timeout=args.adapter_timeout,
         allow_insecure_http=allow_insecure_http,
+        workspace_selector=_select_workspace if interactive and not args.workspace_url else None,
     )
     return 0
 

@@ -13,12 +13,14 @@ from unittest.mock import patch
 
 from wps_adapter.client import WpsCredentials
 from wps_adapter.__main__ import _apply_adapter_port, _prompt_login_target
+from wps_adapter.login_command import _select_workspace
 from wps_adapter.login import (
     ChromeLoginSession,
     LoginError,
     _REMOTE_WRITE_SCRIPT,
     _WebSocket,
     WpsWorkspaceSelection,
+    WpsWorkspaceCandidate,
     credentials_from_cookies,
     login_and_sync,
     push_credentials_over_ssh,
@@ -99,6 +101,74 @@ class LoginHelperTests(unittest.TestCase):
                 WpsWorkspaceSelection("tenant", "group-1", "0"),
                 opener=Opener(),
             )
+
+    def test_workspace_discovery_parses_names_and_uses_candidate_endpoint(self) -> None:
+        class Response:
+            def read(self, _size: int = -1) -> bytes:
+                return b'{"groups":[{"id":123,"name":"\\u5b66\\u6821\\u4e91\\u76d8"},{"group_id":"456","group_name":"\\u4e2a\\u4eba\\u56e2\\u961f"}]}'
+
+            def close(self) -> None:
+                pass
+
+        class Opener:
+            def open(self, request, timeout: float) -> Response:
+                self.request = request
+                return Response()
+
+        opener = Opener()
+        from wps_adapter.login import discover_workspaces
+
+        candidates = discover_workspaces(
+            WpsCredentials(cookie="sid=secret", csrf_token="csrf"),
+            tenant_id="tenant",
+            opener=opener,
+        )
+        self.assertEqual(
+            candidates,
+            (
+                WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
+                WpsWorkspaceCandidate("tenant", "456", "个人团队"),
+            ),
+        )
+        self.assertIn("/3rd/plus/groups/v1/companies/tenant/users/self/groups/private", opener.request.full_url)
+        self.assertEqual(opener.request.get_header("Cookie"), "sid=secret")
+
+    def test_workspace_selection_uses_human_readable_name(self) -> None:
+        candidates = (
+            WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
+            WpsWorkspaceCandidate("tenant", "456", "个人团队"),
+        )
+        with patch("builtins.input", return_value="2"):
+            selected = _select_workspace(candidates)
+        self.assertEqual(selected, candidates[1])
+
+    def test_single_workspace_is_selected_without_an_extra_prompt(self) -> None:
+        candidate = WpsWorkspaceCandidate("tenant", "123", "学校云盘")
+        with patch("builtins.input") as prompt:
+            selected = _select_workspace((candidate,))
+        self.assertEqual(selected, candidate)
+        prompt.assert_not_called()
+
+    def test_workspace_discovery_rejects_invalid_items_without_exposing_secrets(self) -> None:
+        class Response:
+            def read(self, _size: int = -1) -> bytes:
+                return b'{"groups":[{"id":"bad/id","name":"bad"},{"id":"ok","name":"good"}]}'
+
+            def close(self) -> None:
+                pass
+
+        class Opener:
+            def open(self, request, timeout: float) -> Response:
+                return Response()
+
+        from wps_adapter.login import discover_workspaces
+
+        candidates = discover_workspaces(
+            WpsCredentials(cookie="sid=secret", csrf_token="csrf"),
+            tenant_id="tenant",
+            opener=Opener(),
+        )
+        self.assertEqual(candidates, (WpsWorkspaceCandidate("tenant", "ok", "good"),))
 
     def test_standalone_helper_runs_without_the_project_checkout(self) -> None:
         environment = os.environ.copy()

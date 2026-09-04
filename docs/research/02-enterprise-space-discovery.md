@@ -20,13 +20,13 @@
 | --- | --- | --- |
 | `group_id`、`parent_id` 是当前文件列表和操作所需的上下文 | observed + reproduced | 来自本人账号网页请求、REST 回放和当前实现 |
 | `parentid=0` 可作为选定群组的根目录入口 | observed/design baseline | 当前项目默认 `root_id=0`；仍需按账号验证根目录可读性 |
-| `GET /3rd/plus/groups/v1/companies/<companyid>/users/self/groups/private` | candidate | 来自 OpenList Business 模式，当前账号未确认 |
+| `GET /3rd/plus/groups/v1/companies/<companyid>/users/self/groups/private` | candidate | 来自 OpenList Business 模式；运行时失败会安全回退页面上下文 |
 | `companyid`、`current_companyid`、`is_company_account` | external-reference | 来自 OpenList 的 `islogin` 解析，不是当前项目的实测契约 |
 | 企业接口失败后改用个人版接口且声称结果完整 | unsupported | OpenList 参考本身提示企业账号结果可能不完整 |
 
-因此，企业空间自动发现功能在正式启用前必须用当前账号的新 HAR 观察并验证。现阶段已有的群组 ID 只能作为用户明确提供或登录助手当前上下文得到的配置，不能推导其他空间。
+因此，自动发现接口仍属于候选实现，不能被当成 WPS 官方稳定契约。当前登录助手会尝试它，但失败时保留页面上下文回退；只有用户选择并通过根目录验证的空间才会被保存。
 
-当前已完成不依赖猜测接口的第一阶段：登录助手从当前官方页面取得群组/目录上下文，默认使用根目录，并在同步前验证目标目录可读。自动列出多个企业空间仍未启用。
+当前已完成第一阶段和候选接入：登录助手从当前官方页面取得群组/目录上下文，优先自动列出可见空间，按名称让用户选择，默认使用根目录，并在同步前验证目标目录可读。自动发现不要求用户手填群组 ID。
 
 ## 3. 当前项目基线
 
@@ -105,4 +105,4 @@ GET /3rd/drive/api/v5/groups/<group-id>/files
 2. 多空间账号只显示接口返回且当前账号可见的候选。
 3. 用户指定子目录时，保存并使用该目录 ID。
 4. 无权或已失效的工作区显示明确错误，不自动换空间。
-5. 企业发现候选接口未经当前账号验证时，产品文档和界面都标注其未确认状态。
+5. 企业发现接口失败时回退页面上下文；候选接口未经当前账号 HAR 确认时，产品文档和错误提示都不把它标记为官方稳定 API。

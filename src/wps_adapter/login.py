@@ -63,6 +63,15 @@ class WpsWorkspaceSelection:
     root_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class WpsWorkspaceCandidate:
+    """A workspace returned by the optional account space discovery API."""
+
+    tenant_id: str
+    group_id: str
+    name: str
+
+
 _WORKSPACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
 _SPACE_PATH_PATTERN = re.compile(
     r"^/space/([^/]+)/([^/]+)(?:/([^/]+))?/?$",
@@ -1148,6 +1157,107 @@ def wait_for_login_snapshot(
         time.sleep(min(0.5, remaining))
 
 
+def _workspace_candidate_value(item: Mapping[str, object], keys: Sequence[str]) -> object:
+    for key in keys:
+        if key in item:
+            return item[key]
+    return None
+
+
+def discover_workspaces(
+    credentials: WpsCredentials,
+    *,
+    tenant_id: str,
+    base_url: str = DEFAULT_LOGIN_URL,
+    timeout: float = 30.0,
+    opener: object | None = None,
+) -> tuple[WpsWorkspaceCandidate, ...]:
+    """Discover spaces visible to the logged-in account.
+
+    The path is the OpenList-compatible enterprise endpoint.  Its response
+    is treated as untrusted: only a group ID and a display name are retained.
+    Callers must still verify the selected group through the observed file
+    listing endpoint before persisting it.
+    """
+
+    if not isinstance(credentials, WpsCredentials) or not credentials.cookie:
+        raise LoginError("WPS 登录凭据不完整，无法发现工作区")
+    tenant_id = _workspace_id(tenant_id, field_name="企业 ID")
+    if timeout <= 0:
+        raise LoginError("工作区发现超时时间必须为正数")
+    host = _host_from_url(base_url)
+    url = urlunsplit(
+        (
+            "https",
+            host,
+            f"/3rd/plus/groups/v1/companies/{quote(tenant_id, safe='')}/users/self/groups/private",
+            "",
+            "",
+        )
+    )
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Cookie": credentials.cookie,
+            "User-Agent": "wps-adapter-login/1",
+        },
+        method="GET",
+    )
+    client = opener or build_opener(ProxyHandler({}))
+    try:
+        response = client.open(request, timeout=timeout)  # type: ignore[attr-defined]
+        try:
+            body = _read_limited_http_response(response, max_bytes=MAX_ADAPTER_RESPONSE_BYTES)
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+    except HTTPError as exc:
+        try:
+            exc.close()
+        except OSError:
+            pass
+        raise LoginError(f"WPS 企业空间发现失败（HTTP {exc.code}）") from exc
+    except (OSError, URLError, TimeoutError, ValueError) as exc:
+        raise LoginError("无法连接 WPS 企业空间发现接口") from exc
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LoginError("WPS 企业空间发现返回了无效响应") from exc
+
+    raw_items: object = payload
+    if isinstance(payload, dict):
+        for key in ("groups", "spaces", "data", "list"):
+            if isinstance(payload.get(key), list):
+                raw_items = payload[key]
+                break
+    if not isinstance(raw_items, list):
+        raise LoginError("WPS 企业空间发现返回格式异常")
+    candidates: list[WpsWorkspaceCandidate] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        if not isinstance(raw_item, Mapping):
+            continue
+        raw_group_id = _workspace_candidate_value(raw_item, ("group_id", "groupid", "id"))
+        raw_name = _workspace_candidate_value(raw_item, ("name", "group_name", "groupname", "title"))
+        if isinstance(raw_group_id, bool) or raw_group_id is None:
+            continue
+        group_id = str(raw_group_id)
+        name = str(raw_name).strip() if raw_name is not None else ""
+        try:
+            group_id = _workspace_id(group_id, field_name="群组 ID")
+        except LoginError:
+            continue
+        if not name or len(name) > 256 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in name):
+            continue
+        if group_id in seen:
+            continue
+        seen.add(group_id)
+        candidates.append(WpsWorkspaceCandidate(tenant_id, group_id, name))
+    return tuple(candidates)
+
+
 def verify_workspace_access(
     credentials: WpsCredentials,
     workspace: WpsWorkspaceSelection,
@@ -1252,6 +1362,7 @@ def login_and_sync(
     adapter_timeout: float = 30.0,
     allow_insecure_http: bool = False,
     workspace_url: str | None = None,
+    workspace_selector: Callable[[Sequence[WpsWorkspaceCandidate]], WpsWorkspaceCandidate] | None = None,
 ) -> tuple[str, ...]:
     """Open WPS, wait for a human login, then sync a safe credential snapshot."""
 
@@ -1307,6 +1418,31 @@ def login_and_sync(
         f"已获取 {len(names)} 个 WPS Cookie（包含 rtk 和 csrf）；Cookie 值不会显示。",
         flush=True,
     )
+    if workspace_url is None:
+        try:
+            candidates = discover_workspaces(
+                credentials,
+                tenant_id=workspace.tenant_id,
+                base_url=browser_url,
+                timeout=adapter_timeout,
+            )
+        except LoginError as exc:
+            print(f"自动发现企业空间失败：{exc}；将使用当前页面中的空间。", flush=True)
+        else:
+            if candidates:
+                if workspace_selector is None:
+                    selected_candidate = candidates[0]
+                else:
+                    selected_candidate = workspace_selector(candidates)
+                if not isinstance(selected_candidate, WpsWorkspaceCandidate):
+                    raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+                workspace = WpsWorkspaceSelection(
+                    tenant_id=selected_candidate.tenant_id,
+                    group_id=selected_candidate.group_id,
+                    root_id="0",
+                )
+            else:
+                print("没有发现可选企业空间；将使用当前页面中的空间。", flush=True)
     print("正在验证 WPS 工作区访问权限...", flush=True)
     verify_workspace_access(
         credentials,
