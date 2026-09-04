@@ -56,9 +56,10 @@ def build() -> str:
     command_source = _remove_command_import(command_source)
     command_source = _remove_future_import(command_source)
 
+    version_literal = repr(_version())
     standalone_main = f'''
 
-__version__ = { _version()!r }
+__version__ = {version_literal}
 
 
 def _standalone_parser() -> argparse.ArgumentParser:
