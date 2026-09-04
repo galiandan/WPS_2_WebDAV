@@ -614,6 +614,19 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "Runtime.evaluate")
         self.assertEqual(calls[0][1]["expression"], "location.href")
 
+    def test_chrome_session_can_navigate_to_selected_wps_root(self) -> None:
+        calls = []
+
+        class Connection:
+            def call(self, method, params):
+                calls.append((method, params))
+                return {}
+
+        session = ChromeLoginSession()
+        session._connection = Connection()  # type: ignore[assignment]
+        session.navigate("https://365.kdocs.cn/space/tenant/group/")
+        self.assertEqual(calls, [("Page.navigate", {"url": "https://365.kdocs.cn/space/tenant/group/"})])
+
     def test_login_target_is_validated_before_browser_starts(self) -> None:
         with patch("wps_adapter.login.ChromeLoginSession") as session:
             with self.assertRaisesRegex(LoginError, "绝对路径"):

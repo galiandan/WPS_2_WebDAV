@@ -285,6 +285,17 @@ def credentials_from_cookies(
     )
 
 
+def _cookie_value(cookies: Sequence[Mapping[str, object]], name: str) -> str:
+    """Return a small non-secret routing cookie used for account context."""
+
+    for cookie in cookies:
+        if str(cookie.get("name", "")).casefold() == name.casefold():
+            value = cookie.get("value")
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
 def _atomic_write(path: str | Path, value: str) -> None:
     target = Path(path)
     if not target.is_absolute():
@@ -1035,6 +1046,14 @@ class ChromeLoginSession:
             raise LoginError("Chrome 没有返回当前页面地址")
         return value["value"]
 
+    def navigate(self, url: str) -> None:
+        """Navigate the isolated tab to an official WPS URL."""
+
+        _host_from_url(url)
+        if self._connection is None:
+            raise LoginError("Chrome 登录会话未启动")
+        self._connection.call("Page.navigate", {"url": url})
+
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
@@ -1414,13 +1433,26 @@ def login_and_sync(
                 flush=True,
             )
         try:
-            credentials, names, selected_cookies, workspace = wait_for_login_snapshot(
-                session,
-                login_url=browser_url,
-                domain_suffix=domain_suffix,
-                timeout=wait_timeout,
-                workspace_url=workspace_url,
-            )
+            if workspace_url is None:
+                credentials, names, selected_cookies = wait_for_login_credentials(
+                    session,
+                    login_url=browser_url,
+                    domain_suffix=domain_suffix,
+                    timeout=wait_timeout,
+                )
+                page_workspace = workspace_root_from_page_url(session.current_url())
+                tenant_id = page_workspace.tenant_id if page_workspace is not None else _cookie_value(selected_cookies, "cid")
+                if not tenant_id:
+                    raise LoginError("无法识别 WPS 企业空间，请确认已登录学校云盘")
+                workspace = page_workspace or WpsWorkspaceSelection(tenant_id, "", "0")
+            else:
+                credentials, names, selected_cookies, workspace = wait_for_login_snapshot(
+                    session,
+                    login_url=browser_url,
+                    domain_suffix=domain_suffix,
+                    timeout=wait_timeout,
+                    workspace_url=workspace_url,
+                )
         except KeyboardInterrupt as exc:
             raise LoginError("已取消登录同步") from exc
 
@@ -1453,6 +1485,12 @@ def login_and_sync(
                 )
             else:
                 print("没有发现可选企业空间；将使用当前页面中的空间。", flush=True)
+        if workspace.group_id:
+            browser_parts = urlsplit(browser_url)
+            wps_origin = urlunsplit((browser_parts.scheme, browser_parts.netloc, "", "", ""))
+            session.navigate(
+                f"{wps_origin}/space/{quote(workspace.tenant_id, safe='')}/{quote(workspace.group_id, safe='')}/"
+            )
     print("正在验证 WPS 工作区访问权限...", flush=True)
     verify_workspace_access(
         credentials,
