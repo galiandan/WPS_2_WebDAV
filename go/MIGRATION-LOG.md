@@ -1484,3 +1484,78 @@ contract_tests 119 项全绿；manifest 已更新。
 budget 13 项，全部门禁绿灯。
 
 回滚：git revert 本提交。
+
+## B504 MultiSpaceStorage
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B504 执行；必读 storage.py:671-857
+与 workspace schema。storage 包新增 multispace.go；storage.go 补
+RootID()/SetRootID()/SetRootName()（镜像 Python
+set_root_id/set_root_name 与 status_root_id 对 single.root_id 字段
+的读取）。copy_path 未在 Go 侧定义（属后续 COPY 阶段），跨空间
+COPY 的 unsupported 规则随 COPY 阶段补齐；跨空间 MOVE 的规则本
+阶段已固定。
+
+- 虚拟 ID 兼容：多空间根 ID 固定 "multi-space-root"；空间虚拟条目
+  ID "space:{group_id}"、name=mount 名、kind=folder、
+  parent=multi-space-root、size=0——与 Python 逐字段一致。
+- 根列表：无路径时返回 single 列表或全部 mounts 的虚拟条目，
+  构造 spaces 不发起任何 WPS 请求（测试断言 factory 建出全部
+  space 而 lister 调用为 0）。
+- 路由：首段名称选空间，其余 JoinRemotePath 后交给该空间 storage；
+  空名/未知空间 → EntryNotFound "WPS space not found: {首段或空}"；
+  空间虚拟条目由 mount 表查得，不访问 WPS。无 mounts 时整条路径
+  原样交给 single storage（与 Python 的一致语义：全路径不解首段）。
+- 热更新原子替换：MountsSource 返回 (mounts, groupID)；mounts 与
+  当前不同、或（空 mounts 且 single 为空且 groupID 就绪）→ 重建。
+  重建在锁内先构建完整新表再原子换入（Go 地图替换），重复名
+  （"WPS space names must be unique"）或 factory 失败时保留旧路由
+  并报错、下次调用自动重试——Python 在失败时会留下
+  "mounts 已更新、spaces 已清空"的破损状态且不再重试，Go 收紧为
+  原子失败回退（记录为行为增强）。
+- 单空间回退（D-01）：无 mounts 时按 groupID 是否非空决定是否构建
+  single storage；构建时 root 取 workspace 当前 root（经
+  SingleSelection），single storage 自带热同步跟随后续 root 变化
+  （等价 Python 把带 workspace 的完整 client 交给 WpsStorage）。
+  未配置时：根列表返回空（参照行为：静默空元组），非根路径与写
+  路径报 "WPS workspace is not configured"。
+- 跨空间 MOVE 不支持：MovePath/MoveToParentPath 先对源与目标各自
+  route，再比较 *Storage 指针身份，不同 → UnsupportedOperation
+  "cross-space move is not supported"（目标路径先路由后比较，与
+  Python 相同）。
+- 根写入拒绝：根路径在多空间模式被路由拒绝（space not found），
+  单空间模式由 single 的父路径规则拒绝（root cannot be used/
+  deleted/renamed/moved）——测试覆盖两种模式的上传/建目录/删除/
+  改名/移动。
+- 共享资源：全部空间 Storage 注入同一个 *budget.Budget（测试断言
+  指针同一 + A 空间占满槽后 B 空间上传得到 busy）；凭据刷新协调
+  点为共享的 credentials.Source（热加载文件语义在 source 层），
+  factory 闭包按 Python 的 replace(config, group_id=mount.group_id,
+  workspace=None) 语义为每个 mount 构建独立 WPS 面（Go 侧由 app
+  装配层用 wps.NewClient 按 mount group 派生，本任务交付路由与
+  装配契约）。
+- SetRootID/SetRootName 委托：single 存在时转发；多空间模式
+  SetRootID 为 no-op、SetRootName 更新虚拟根显示名；空名校验与
+  Python 一致（"root_id is required"/"root_name is required"）。
+  Python set_root_id 会重置 _cache_group_id 促使下次同步再清一次
+  缓存；Go 以 generation 键控 + Invalidate 达成同一效果（旧键不可
+  达），不保留该内部簿记字段。
+- 测试 13 组：单空间回退全路径语义（含缓存命中计数）、pending 组
+  静默空根 + 未配置错误、根列表仅 mounts 不触 WPS、首段路由与
+  空间虚拟条目、未知空间、两种模式的根写入拒绝、写操作按空间
+  分账（上传/建目录/删除/下载各自落账到对应 fake）、同空间移动
+  成功与跨空间 MOVE unsupported（两种形态）、热更新换路由（增/
+  删空间、旧路由消失）、热更新 pending group 构建single、重复名
+  构造拒绝、热更新失败保留旧路由并可恢复、StatusRootID 三态、
+  1/128 空间路由与顺序、共享预算、SetRoot 委托。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；-race 全绿
+（storage/cache/budget/wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+阶段 5（B500–B504）至此全部完成：storage 包 53 项测试、cache 12 项、
+budget 13 项、wps 54 项，全部门禁绿灯。
+
+回滚：git revert 本提交。

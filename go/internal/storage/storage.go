@@ -392,6 +392,38 @@ func (s *Storage) invalidate() {
 	s.folders.Invalidate()
 }
 
+// RootID returns the current virtual root id (hot-updated for auto roots).
+func (s *Storage) RootID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rootID
+}
+
+// SetRootID mirrors set_root_id: switch the mapped WPS root after a
+// login-selected workspace update and drop every cached listing.
+func (s *Storage) SetRootID(rootID string) error {
+	if rootID == "" {
+		return errors.New("root_id is required")
+	}
+	s.mu.Lock()
+	s.rootID = rootID
+	s.mu.Unlock()
+	s.invalidate()
+	return nil
+}
+
+// SetRootName mirrors set_root_name: update the adapter-side display name
+// for the virtual root. The cache is not invalidated.
+func (s *Storage) SetRootName(rootName string) error {
+	if rootName == "" {
+		return errors.New("root_name is required")
+	}
+	s.mu.Lock()
+	s.rootName = rootName
+	s.mu.Unlock()
+	return nil
+}
+
 // UploadPath uploads a new file at path, rejecting an existing entry unless
 // overwrite targets exactly one existing file. The upload slot is held for
 // the duration of the writer call.
