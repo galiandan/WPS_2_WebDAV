@@ -947,3 +947,68 @@ manifest 已更新。
 已更新。
 
 回滚：git revert 本提交。
+
+## B400 两个严格分离的 HTTP client
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B400 执行；必读 client.py:139-169、
+738-787、1300-1374、1607-1769。新包 internal/wps（client.go/signed.go，
+对齐 03-target-architecture 的 wps/ 目录），依赖 credentials、workspace、
+model，无其他内部依赖；storage 尚未接入。
+
+- Config：镜像 WpsClientConfig 全部字段（凭据不在配置里，只在
+  CredentialSource 后面；cookie_file/csrf_token_file/refresh 命令已在
+  B305 移入 FileCredentialSource）；DefaultConfig(groupID) 提供与
+  Python dataclass 相同的默认值（布尔默认 true，逐字段测试固定）。
+  构造期校验与 WpsDriveClient.__init__ 逐条对齐、顺序一致：group/
+  workspace 必填、max_json_response_bytes 必须为正、base_url 必须是
+  无路径无凭据的 HTTPS kdocs.cn 主机（原始 EscapedPath 校验，"%2F"
+  拒绝与 Python urlsplit 原始 path 判断一致）、object 后缀归一化后
+  必须在 kdocs.cn 内、status_probe_ttl/backoff 不得为负；错误文案与
+  Python ValueError 逐字一致。
+- 空 userinfo 的 URL（"https://@host"）按 Python 的真值判断接受
+  （username/password 空串视为无凭据），测试固定该怪癖。
+- 控制面 transport：*http.Client，TLS 强制校验（MinVersion TLS1.2）、
+  CheckRedirect 返回 ErrUseLastResponse（3xx 响应原样返回给请求层，
+  由 B401 映射状态码，等价 Python 的 HTTPError 路径）、无 cookie
+  jar、超时同时限定连接各阶段与整个请求（控制响应都有界 8MiB，
+  整请求超时更严）。代理遵循环境变量（urllib 默认 opener 同样如此）。
+- signed 对象 transport：独立 *http.Transport（RoundTripper 契约天然
+  不跟随重定向，对齐 http.client 裸连接），Proxy 置空（Python 裸
+  HTTPSConnection 不走代理）、TLS 强制校验、连接/握手/响应头阶段
+  限时；不持有任何凭据字段或 jar——结构性隔离，不是约定。
+- ParseSignedTarget 镜像 _signed_target：先拒控制字符；scheme 必须
+  https、主机归一化后必须在对象后缀内、无 userinfo/fragment、端口
+  仅默认或 443（:0443 按 Python int 语义接受为 443，:0 拒绝）；
+  target 保留原始百分号编码 path+query；主机名小写化对齐
+  urlsplit().hostname。所有拒绝返回 WpsAPIError(operation, 0,
+  upstream)，错误文案永不回显签名 URL。
+- SignedObjectClient.Do：只发送调用方显式列出的头（下载 Accept/Range、
+  上传 Content-Type/Length、分片 Content-MD5 由后续任务传入）；拒绝
+  cookie/authorization/含 csrf 的头名（大小写不敏感，传输前拦截，
+  假 transport 也拦得住）；显式 :443 时 Host 头去掉端口（对齐
+  http.client 默认端口省略）；传输错误折叠为 WpsAPIError(operation,
+  0, unavailable)，net/url 的错误文本（含签名 query）不外泄（测试
+  固定）；响应体由调用方关闭（文档约定，B401+ 的请求helper落实）。
+- 完成条件 fixture：Client 持有真实凭据源（虚构值），signed 请求经
+  录制 transport 断言无 Cookie/Authorization/CSRF、仅显式头；控制面
+  与 signed transport 不同实例、控制面 jar 为 nil（结构测试固定）。
+- 响应字节上限常量（JSON 8MiB / 对象控制 1MiB / multipart XML 4MiB）
+  与 remote name/etag 上限在此定义并由测试固定；有界读取器在 B401
+  与各请求 helper 落实。
+- 测试 seam：WithOpener / WithSignedTransport 构造选项，镜像 Python
+  的 opener 与 https_connection_factory 注入点；全部测试只使用虚构
+  凭据与假 transport。
+- 偏差（待负责人追认）：控制面连接启用 keep-alive（urllib 每请求
+  短连接，属实现细节不影响协议）；控制面 User-Agent 为 Go 默认值
+  （Python 发 Python-urllib，同为非浏览器 UA，无 fixture 依赖）；
+  signed 传输错误的底层文案（如 x509 细节）不进入错误链（Python 的
+  OSError 文案同样只出现在未映射前的栈里）。
+
+检查：go fmt/go vet 无差异；wps 17 项 + 全套 go test 全绿；-race
+全绿（wps 包 -count=6）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 168 项、contract_tests 119 项
+全绿；manifest 已更新。
+
+回滚：git revert 本提交。
