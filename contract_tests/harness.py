@@ -74,10 +74,23 @@ def route(
     return entry
 
 
-def scenario(*routes: dict, listing: list[dict] | None = None, objects: dict[str, str] | None = None) -> dict:
-    payload: dict = {"routes": list(routes)}
+def scenario(
+    *routes: dict,
+    listing: list[dict] | None = None,
+    children: dict[str, list[dict]] | None = None,
+    objects: dict[str, str] | None = None,
+) -> dict:
+    flat: list[dict] = []
+    for item in routes:
+        if isinstance(item, list):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    payload: dict = {"routes": flat}
     if listing is not None:
         payload["listing"] = listing
+    if children is not None:
+        payload["children"] = children
     if objects is not None:
         payload["objects"] = objects
     return payload
@@ -150,6 +163,10 @@ class Service:
 
         self.cookie_path = self._write_secret("wps-cookie", cookie_value)
         self.csrf_path = self._write_secret("wps-csrf", csrf_value)
+        settings_dir = os.path.join(self._dir, "web-settings")
+        os.mkdir(settings_dir)
+        os.chmod(settings_dir, 0o700)
+        self.web_settings_path = os.path.join(settings_dir, "web-settings.json")
         env = {
             "WPS_GROUP_ID": group_id,
             "WPS_ROOT_ID": root_id,
@@ -160,6 +177,7 @@ class Service:
             "ADAPTER_BIND": "127.0.0.1",
             "ADAPTER_PORT": str(self.port),
             "ADAPTER_MAX_CONNECTIONS": str(max_connections),
+            "CONTRACT_WEB_SETTINGS_FILE": self.web_settings_path,
             "PYTHONPATH": os.path.join(PROJECT_ROOT, "src"),
             "PYTHONDONTWRITEBYTECODE": "1",
         }
@@ -258,9 +276,14 @@ class Service:
             except subprocess.TimeoutExpired:
                 self._process.kill()
                 self._process.wait(timeout=5)
+        self._stderr_tail = (self._process.stderr.read() or "")[-4000:]
         self._process.stdout.close()
         self._process.stderr.close()
         self._process = None
+
+    @property
+    def stderr_tail(self) -> str:
+        return getattr(self, "_stderr_tail", "")
 
     def __enter__(self) -> "Service":
         return self

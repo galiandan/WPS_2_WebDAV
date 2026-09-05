@@ -167,6 +167,7 @@ class FakeUpstream:
     def __init__(self, scenario: dict, record_path: str, stats_path: str) -> None:
         self.routes = scenario.get("routes", [])
         self.listing = scenario.get("listing") or _default_listing()
+        self.children: dict[str, list[dict]] = scenario.get("children", {})
         self.objects = {
             key: base64.b64decode(value) for key, value in scenario.get("objects", {}).items()
         }
@@ -221,6 +222,11 @@ class FakeUpstream:
                     self.stats["inflight"][key] = remaining
                 else:
                     self.stats["inflight"].pop(key, None)
+        self._write_stats()
+
+    def _served(self, key: str) -> None:
+        with self._lock:
+            self.stats["served"][key] = self.stats["served"].get(key, 0) + 1
         self._write_stats()
 
     def note_object_upload(self, size: int, sha256: str) -> None:
@@ -295,6 +301,7 @@ class FakeUpstream:
         if host == OBJECT_HOST:
             return self._open_object(path)
 
+        self._served("control:islogin")
         if path == "/api/v3/islogin":
             return _Response(json.dumps({"islogin": True, "companyid": "bench-company"}).encode())
 
@@ -310,8 +317,65 @@ class FakeUpstream:
             parent_id = query.get("parentid", "0")
             offset = int(query.get("offset", "0"))
             count = int(query.get("count", "20"))
-            payload = {"files": self.listing, "result": "ok"}
+            if parent_id in self.children:
+                items = self.children[parent_id]
+            elif parent_id == "0":
+                items = self.listing
+            else:
+                items = []
+            page = items[offset : offset + count]
+            payload: dict = {"files": page, "result": "ok"}
+            if offset + count < len(items):
+                payload["next_offset"] = offset + count
             return _Response(json.dumps(payload).encode())
+
+        self._served("control:folder")
+        if path == "/3rd/drive/api/v5/files/folder" and method == "POST":
+            body = json.loads(request.data or b"{}")
+            return _Response(
+                json.dumps(
+                    {
+                        "result": "ok",
+                        "id": "bench-folder-new",
+                        "fname": body.get("name", "bench-new-folder"),
+                        "ftype": "folder",
+                        "fsize": 0,
+                        "mtime": 1788268272,
+                        "parentid": body.get("parentid", "0"),
+                    }
+                ).encode()
+            )
+
+        rename_match = re.fullmatch(r"/3rd/drive/api/v3/groups/[^/]+/files/([^/]+)", path)
+        if rename_match and method == "PUT":
+            body = json.loads(request.data or b"{}")
+            return _Response(
+                json.dumps(
+                    {
+                        "result": "ok",
+                        "id": rename_match.group(1),
+                        "fname": body.get("fname", "bench-renamed.txt"),
+                        "ftype": "file",
+                        "fsize": 11,
+                        "mtime": 1788268272,
+                        "parentid": "0",
+                    }
+                ).encode()
+            )
+
+        self._served("control:progress")
+        if path == "/3rd/drive/api/v5/files/batch/task/progress":
+            return _Response(
+                json.dumps({"result": "ok", "finish": 1, "status": "success", "failed_list": []}).encode()
+            )
+
+        self._served("control:task_move")
+        if path == "/3rd/drive/api/v5/files/batch/task/move" and method == "POST":
+            return _Response(json.dumps({"result": "ok", "taskuuid": "bench-task-move"}).encode())
+
+        self._served("control:task_delete")
+        if path == "/3rd/drive/api/v5/files/batch/task/delete" and method == "POST":
+            return _Response(json.dumps({"result": "ok", "taskuuid": "bench-task-delete"}).encode())
 
         match = re.fullmatch(r"/api/v3/office/file/([^/]+)/download", path)
         if match:
@@ -325,9 +389,11 @@ class FakeUpstream:
                 ).encode()
             )
 
+        self._served("control:pre_check")
         if path == "/3rd/drive/api/v5/files/upload/pre_check":
             return _Response(json.dumps({"result": "ok"}).encode())
 
+        self._served("control:create_update")
         if path == "/3rd/drive/api/v5/files/upload/create_update":
             return _Response(
                 json.dumps(
@@ -367,6 +433,7 @@ class FakeUpstream:
         return response
 
     def _open_object(self, path: str) -> _ObjectStream:
+        self._served("object:GET")
         fid = path.split("/")[2]
         content = self.objects.get(fid, b"bench-bytes")
         return _ObjectStream(content)

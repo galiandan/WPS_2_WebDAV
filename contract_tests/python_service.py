@@ -41,6 +41,36 @@ def main() -> int:
     import wps_adapter.__main__ as adapter_main
     import wps_adapter.storage as storage_mod
 
+    settings_override = os.environ.get("CONTRACT_WEB_SETTINGS_FILE")
+    if settings_override:
+        # The production entrypoint hardcodes /etc/wps-adapter/secrets for
+        # web settings; tests redirect that to a private temp directory.
+        import wps_adapter.settings as settings_mod
+
+        real_settings = settings_mod.WebSettings
+
+        class PatchedWebSettings(real_settings):
+            def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+                kwargs.setdefault("file_path", settings_override)
+                super().__init__(*args, **kwargs)
+
+        settings_mod.WebSettings = PatchedWebSettings
+        adapter_main.WebSettings = PatchedWebSettings
+
+    if os.environ.get("CONTRACT_TRACEBACKS"):
+        # Debug aid: print full tracebacks for unexpected request failures.
+        import traceback as _tb
+
+        import wps_adapter.server as _server_mod
+
+        _orig_handle = _server_mod.AdapterRequestHandler._handle_exception
+
+        def _traced_handle(self, exc, *, rest=False):  # noqa: ANN001
+            _tb.print_exception(exc, file=sys.stderr)
+            return _orig_handle(self, exc, rest=rest)
+
+        _server_mod.AdapterRequestHandler._handle_exception = _traced_handle
+
     real_client = adapter_main.WpsDriveClient
 
     def patched_client(config, **_kwargs):  # noqa: ANN001
