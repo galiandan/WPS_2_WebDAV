@@ -40,6 +40,7 @@ def _application() -> AdapterApplication:
     )
 
     storage_options = {
+        "root_id": root_id,
         "list_count": _env_int("WPS_LIST_COUNT", 20),
         "max_list_entries": _env_int("WPS_MAX_LIST_ENTRIES", 10000),
         "cache_ttl": _env_float("WPS_CACHE_TTL", 2.0),

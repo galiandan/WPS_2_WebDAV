@@ -674,21 +674,43 @@ class MultiSpaceStorage:
     def __init__(self, client: WpsDriveClient, mounts: Iterable[Any], **storage_options: Any) -> None:
         self.client = client
         self.root_name = storage_options.pop("root_name", "WPS Enterprise Drive")
+        self._single_root_id = str(storage_options.pop("root_id", "0"))
         self.root_id = "multi-space-root"
         self._mounts = tuple(mounts)
         self._storage_options = dict(storage_options)
         self._spaces: dict[str, WpsStorage] = {}
+        self._single_storage: WpsStorage | None = None
         self._rebuild_spaces()
 
     @property
     def status_root_id(self) -> str:
         self._sync_mounts()
+        if self._single_storage is not None:
+            return self._single_storage.root_id
         return self._mounts[0].root_id if self._mounts else "0"
 
     def _rebuild_spaces(self) -> None:
         if len({mount.name for mount in self._mounts}) != len(self._mounts):
             raise ValueError("WPS space names must be unique")
         self._spaces = {}
+        self._single_storage = None
+        if not self._mounts:
+            workspace = getattr(self.client.config, "workspace", None)
+            configured_group = getattr(self.client.config, "group_id", "")
+            if workspace is not None:
+                has_group = bool(workspace.group_id)
+                root_id = workspace.root_id
+            else:
+                has_group = bool(configured_group and configured_group != "auto")
+                root_id = self._single_root_id
+            if has_group:
+                self._single_storage = WpsStorage(
+                    self.client,
+                    root_id=root_id,
+                    root_name=self.root_name,
+                    **self._storage_options,
+                )
+            return
         for mount in self._mounts:
             child_config = replace(self.client.config, group_id=mount.group_id, workspace=None)
             child_client = WpsDriveClient(child_config, opener=self.client._opener)
@@ -704,7 +726,7 @@ class MultiSpaceStorage:
         if workspace is None:
             return
         mounts = workspace.spaces
-        if mounts != self._mounts:
+        if mounts != self._mounts or (not mounts and self._single_storage is None and workspace.group_id):
             self._mounts = mounts
             self._rebuild_spaces()
 
@@ -714,12 +736,23 @@ class MultiSpaceStorage:
         return RemoteEntry(id=self.root_id, name=self.root_name, kind="folder", parent_id=None, size=0)
 
     def set_root_id(self, _root_id: str) -> None:
-        """Keep compatibility with session import; mounts define the roots."""
+        """Update the single-root view; named spaces keep their own roots."""
+
+        if self._single_storage is not None:
+            self._single_storage.set_root_id(_root_id)
 
     def set_root_name(self, root_name: str) -> None:
         if not isinstance(root_name, str) or not root_name:
             raise ValueError("root_name is required")
         self.root_name = root_name
+        if self._single_storage is not None:
+            self._single_storage.set_root_name(root_name)
+
+    def _single_or_error(self) -> WpsStorage:
+        self._sync_mounts()
+        if self._single_storage is None:
+            raise EntryNotFoundError("WPS workspace is not configured")
+        return self._single_storage
 
     def _route(self, path: str) -> tuple[WpsStorage, str]:
         self._sync_mounts()
@@ -733,6 +766,8 @@ class MultiSpaceStorage:
         parts = split_remote_path(path)
         if not parts:
             return self.root
+        if not self._mounts:
+            return self._single_or_error().metadata(path)
         storage, child_path = self._route(path)
         if not split_remote_path(child_path):
             mount = next(item for item in self._mounts if item.name == parts[0])
@@ -744,37 +779,54 @@ class MultiSpaceStorage:
         self._sync_mounts()
         parts = split_remote_path(path)
         if not parts:
+            if self._single_storage is not None:
+                return self._single_storage.list_path("/")
             return tuple(RemoteEntry(id=f"space:{mount.group_id}", name=mount.name, kind="folder", parent_id=self.root_id, size=0) for mount in self._mounts)
+        if not self._mounts:
+            return self._single_or_error().list_path(path)
         storage, child_path = self._route(path)
         return storage.list_path(child_path)
 
     def upload_path(self, path: str, source: BinaryIO, **kwargs: Any) -> RemoteEntry:
         self._sync_mounts()
+        if not self._mounts:
+            return self._single_or_error().upload_path(path, source, **kwargs)
         storage, child_path = self._route(path)
         return storage.upload_path(child_path, source, **kwargs)
 
     def create_folder_path(self, path: str) -> RemoteEntry:
         self._sync_mounts()
+        if not self._mounts:
+            return self._single_or_error().create_folder_path(path)
         storage, child_path = self._route(path)
         return storage.create_folder_path(child_path)
 
     def open_path(self, path: str, **kwargs: Any) -> DownloadStream:
         self._sync_mounts()
+        if not self._mounts:
+            return self._single_or_error().open_path(path, **kwargs)
         storage, child_path = self._route(path)
         return storage.open_path(child_path, **kwargs)
 
     def delete_path(self, path: str) -> None:
         self._sync_mounts()
+        if not self._mounts:
+            self._single_or_error().delete_path(path)
+            return
         storage, child_path = self._route(path)
         storage.delete_path(child_path)
 
     def rename_path(self, path: str, name: str) -> RemoteEntry:
         self._sync_mounts()
+        if not self._mounts:
+            return self._single_or_error().rename_path(path, name)
         storage, child_path = self._route(path)
         return storage.rename_path(child_path, name)
 
     def move_path(self, path: str, destination: str) -> RemoteEntry:
         self._sync_mounts()
+        if not self._mounts:
+            return self._single_or_error().move_path(path, destination)
         source_storage, source_child = self._route(path)
         destination_storage, destination_child = self._route(destination)
         if source_storage is not destination_storage:
@@ -783,6 +835,8 @@ class MultiSpaceStorage:
 
     def move_to_parent_path(self, path: str, parent_path: str) -> RemoteEntry:
         self._sync_mounts()
+        if not self._mounts:
+            return self._single_or_error().move_to_parent_path(path, parent_path)
         source_storage, source_child = self._route(path)
         destination_storage, destination_child = self._route(parent_path)
         if source_storage is not destination_storage:
@@ -791,6 +845,8 @@ class MultiSpaceStorage:
 
     def copy_path(self, source: str, destination: str, **kwargs: Any) -> RemoteEntry:
         self._sync_mounts()
+        if not self._mounts:
+            return self._single_or_error().copy_path(source, destination, **kwargs)
         source_storage, source_child = self._route(source)
         destination_storage, destination_child = self._route(destination)
         if source_storage is not destination_storage:

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from wps_adapter.client import DownloadStream
 from wps_adapter.provider import AlreadyExistsError, InvalidPathError, RemoteEntry
-from wps_adapter.storage import WpsStorage
+from wps_adapter.storage import MultiSpaceStorage, WpsStorage
 from wps_adapter.workspace import WorkspaceState
 
 
@@ -109,6 +109,24 @@ class FailingFolderCopyClient(FakeClient):
 
 
 class StorageTests(unittest.TestCase):
+    def test_workspace_without_named_spaces_does_not_create_an_id_named_folder(self) -> None:
+        client = FakeClient()
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "workspace.json"
+            path.write_text('{"group_id":"group-1","root_id":"root"}\n', encoding="utf-8")
+            path.chmod(0o600)
+            workspace = WorkspaceState.from_file(
+                str(path),
+                configured_group_id="auto",
+                configured_root_id="auto",
+            )
+            client.config.workspace = workspace
+            client.config.group_id = "auto"
+            storage = MultiSpaceStorage(client, workspace.spaces, root_name="Drive", root_id="0")
+
+            self.assertEqual(workspace.spaces, ())
+            self.assertEqual([item.name for item in storage.list_path("/")], ["docs", "top.txt"])
+
     def test_auto_workspace_root_is_reloaded_after_login_selection(self) -> None:
         client = FakeClient()
         with TemporaryDirectory() as directory:

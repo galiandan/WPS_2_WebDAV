@@ -1481,10 +1481,9 @@ def login_and_sync(
                     timeout=adapter_timeout,
                 )
             except LoginError as exc:
-                print(f"自动发现企业空间失败：{exc}；将使用当前页面中的空间。", flush=True)
+                raise LoginError(f"无法获取当前账号的 WPS 空间名称：{exc}；未同步新凭据") from exc
             if not discovered_workspaces:
-                if not workspace.group_id:
-                    print("没有发现可选企业空间；将使用当前页面中的空间。", flush=True)
+                raise LoginError("WPS 没有返回可用空间名称；未同步新凭据")
     if workspace_url is None and discovered_workspaces:
         selected = discovered_workspaces[0] if workspace_selector is None else workspace_selector(discovered_workspaces)
         if isinstance(selected, WpsWorkspaceCandidate):

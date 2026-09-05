@@ -237,13 +237,11 @@ class WorkspaceState:
 
     @property
     def spaces(self) -> tuple[WorkspaceMount, ...]:
+        """Return only named spaces written by the current login flow."""
+
         with self._lock:
             self._refresh_locked()
-            if self._spaces:
-                return self._spaces
-            if self._group_id:
-                return (WorkspaceMount(self._group_id, self._root_id, self._group_id),)
-            return ()
+            return self._spaces
 
     @property
     def configured(self) -> bool:
