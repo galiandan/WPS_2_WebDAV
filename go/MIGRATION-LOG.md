@@ -303,3 +303,46 @@ multipart merge 的 XML 命名空间由客户端按本地名匹配（fixture 用
 CompleteMultipartUploadResult 结构）；其余请求形状均为逐字段固定。
 
 回滚：`git revert` 本提交；fixture 不进入发布产物。
+
+## M2/F0 前端拆分基线冻结
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F0 与 §20 第 1 步执行：不改页面行为，
+只记录现状并补充特征测试。
+
+新增特征测试（tests/test_server.py）：
+- /、/web、/web/ 三个入口返回完全相同的字节，Content-Type
+  text/html; charset=utf-8，Cache-Control: no-store；并逐字符固定当前
+  CSP 头值（含 'unsafe-inline'，F4 收紧时更新该断言）。
+- Basic Auth 启用时三个入口未认证均 401 + Basic realm="wps-adapter" +
+  Connection: close + 空 body。
+- render_web_app 对 U+2028 行分隔符在内联脚本 JSON 位置转义为 \u2028。
+
+FE-01..FE-08 负责人决定（采纳 05-frontend-plan.md §8 推荐项，标注待追认）：
+- FE-01 改名后左上角品牌文字不更新：采纳“拆分前补测试并修正”，F3 中
+  settings 成功后同步更新品牌文字（批准变更候选）。
+- FE-02 前端写死 /api/v1/：采纳“第一版明确只保证默认前缀”，不新增
+  只读前端配置（待负责人追认）。
+- FE-03 迁移旧文档声称存在上传取消：本提交修正
+  docs/language-migration.md 措辞；等价阶段不新增取消功能。
+- FE-04 同名文件夹上传静默跳过：冻结现状，浏览器 E2E 冻结后再议。
+- FE-05 路径不进地址栏：保持，不引入前端路由。
+- FE-06 移动靠手写目标路径：保持。
+- FE-07 移动端 760px 表格横向滚动：保持。
+- FE-08 无浏览器 E2E：本环境无浏览器、Node 与 pip，无法执行 §17 E2E
+  与 §11 F0 的四张基线截图（桌面有文件/桌面空目录/移动端有文件/WPS
+  未配置）及焦点顺序记录。该项与 M203、M205 一并作为负责人侧门禁，
+  须在具备浏览器的环境补齐后才允许关闭 M2 里程碑。
+
+初始加载网络顺序（由 web.py 内联脚本静态读出，REST 契约测试互证）：
+渲染根面包屑 → GET /api/v1/status →（仅 connected 时）GET
+/api/v1/entries?path=/ → 按返回顺序后台预取直接子文件夹（≤24 个、
+并发 ≤2、TTL 30s，仅写浏览器内存缓存）。写操作请求形状已由
+contract_tests/test_rest.py 逐项固定：folders POST 空体、entries PATCH
+只含 name 或 parent_path、DELETE 204 空响应、upload PUT 原始字节、
+settings GET/PATCH。
+
+检查：python -m unittest discover -s tests 全绿；contract_tests 119 项全绿。
+
+回滚：git revert 本提交。

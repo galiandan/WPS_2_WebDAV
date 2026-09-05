@@ -143,6 +143,10 @@ class WebRenderTests(unittest.TestCase):
         rendered = render_web_app("")
         self.assertIn("WPS Enterprise Drive", rendered)
 
+    def test_render_web_app_escapes_line_separators_in_inline_script(self) -> None:
+        rendered = render_web_app("a\u2028b")
+        self.assertIn('let rootName = "a\\u2028b";', rendered)
+
 
 class ServerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -328,6 +332,49 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn(b"cross-origin", body)
         self.assertEqual(self.storage.renamed_paths, [])
+
+    def test_web_app_entries_share_one_document(self) -> None:
+        bodies = []
+        for entry in ("/", "/web", "/web/"):
+            status, headers, body = self.request("GET", entry)
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+            self.assertEqual(headers["Cache-Control"], "no-store")
+            self.assertEqual(
+                headers["Content-Security-Policy"],
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            )
+            bodies.append(body)
+        self.assertEqual(bodies[0], bodies[1])
+        self.assertEqual(bodies[1], bodies[2])
+
+    def test_web_app_requires_basic_auth_when_enabled(self) -> None:
+        auth_server = AdapterHTTPServer(
+            ("127.0.0.1", 0),
+            AdapterApplication(self.storage, auth=BasicAuth(username="u", password="p")),
+        )
+        thread = threading.Thread(target=auth_server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for entry in ("/", "/web", "/web/"):
+                connection = HTTPConnection("127.0.0.1", auth_server.server_port, timeout=3)
+                try:
+                    connection.request("GET", entry)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 401)
+                    self.assertEqual(
+                        response.getheader("WWW-Authenticate"), 'Basic realm="wps-adapter"'
+                    )
+                    self.assertEqual(response.getheader("Connection"), "close")
+                    self.assertEqual(response.read(), b"")
+                finally:
+                    connection.close()
+        finally:
+            auth_server.shutdown()
+            auth_server.server_close()
+            thread.join(timeout=3)
 
     def test_web_file_manager_is_served_without_storage_access(self) -> None:
         status, headers, body = self.request("GET", "/")
