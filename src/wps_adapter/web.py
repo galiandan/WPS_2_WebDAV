@@ -422,7 +422,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
           prefetchActive += 1;
           directoryEntries(path).catch(() => {}).finally(() => {
             prefetchActive -= 1;
-            pumpPrefetch(generation);
+            pumpPrefetch(prefetchGeneration);
           });
         }
       }
