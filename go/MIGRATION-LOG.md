@@ -1183,3 +1183,52 @@ darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
 全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B404 列表与分页
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B404 执行；必读 client.py:1423-1541、
+storage.py:237-262。扩展 wps/entries.go，新增 list_test.go；B402 的
+probeList 改为复用同一实现（count=1 + retry 关闭，与 Python
+_probe_status → list_entries 的调用关系一致）。
+
+- v5 请求形状：GET /3rd/drive/api/v5/groups/{group}/files，query 严格
+  按 Python 顺序 parentid/offset/count/orderby/order → 可选
+  linkgroup/include/with_link/review_pic_thumbnail/
+  with_sharefolder_type → next_filter（仅非 None）；布尔用 "true"/
+  "false"（_bool）；group 段 quote(safe='') 语义；group_id 参数可
+  覆盖（发现验证用）。Go ListOptions 零值回落 Python 签名默认
+  （count=20/orderby=mtime/order=desc），记录为 Go 侧约定（显式传 0
+  不可表达）。
+- 页解析：files 缺省视为空、非 list 即 "list files" 错；无 id/非
+  object 条目跳过；单个畸形 name 使整页失败（与 Python 一致）；未知
+  kind 归 unknown 不破坏整页（B403 闭环）；next_offset 仅接受整数
+  token（非整数 token → None，浮点形式与 Python 一致为 None）；
+  next_filter/result 仅接受字符串；result 字符串非 ok → "list files"
+  错。
+- IterEntries（iter_entries）：count ≤0 / max_entries ≤0 → 原文案
+  ValueError；页上限 max_entries+1（无上限时 10000 页）→ 超限映射
+  InsufficientStorageError（model.StorageError/KindInsufficientStorage，
+  文案不变）；跨页按 entry id 去重（容忍 WPS 页边界自然重叠）；重复
+  cursor（offset+filter 元组）与不前进 cursor（offset 变小或 offset 与
+  filter 均不变）都作为成功提前返回；max_entries 恰好达界不算超限。
+- probeList 收敛后状态路径行为与 B402 测试完全兼容（请求形状逐字节
+  相同；状态 fixture 的空 files 页解析通过）。
+- 已知收窄：next_offset 为 JSON 布尔时 Python 的 isinstance(bool, int)
+  怪癖（会变成 cursor "True"）未复刻，Go 归 None（现实响应不含布尔
+  cursor）；IterOptions.Count 无默认（零值按校验错误拒绝，调用方显式
+  传值，与 Python 的显式实参要求一致）。
+- 测试 13 项：默认/可选 query 逐字节、三 kind 混合页、无 id 跳过、
+  畸形 name 整页失败、files/result 8 态、多页拼接（cursor/filter 传递）、
+  空目录、边界重叠去重、重复 cursor 停止、不前进 cursor 停止、
+  entry 上限→507、页上限→507、恰达上限成功、参数校验。
+
+阶段 4（B400–B404）至此全部完成：wps 包 54 项测试，全部门禁绿灯。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；-race 全绿（wps
+-count=4）；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 169 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。

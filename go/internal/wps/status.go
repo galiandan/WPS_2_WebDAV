@@ -206,41 +206,13 @@ func quotePathSegment(value string) string {
 	return builder.String()
 }
 
-// probeList issues the count=1 root listing used by the preflight. D-02:
+// probeList issues the count=1 root listing used by the preflight, reusing
+// the exact v5 request shape and page rules of the list migration. D-02:
 // the request runs with the 401 retry disabled so the status path can never
-// trigger a refresh grant. Response validation here mirrors the parts of
-// list_entries the status path can observe; full page parsing arrives with
-// the list migration.
+// trigger a refresh grant.
 func (c *Client) probeList(rootID string) error {
-	groupID, err := c.GroupID()
-	if err != nil {
-		return err
-	}
-	payload, err := c.RequestJSON(JSONRequest{
-		Path: "/3rd/drive/api/v5/groups/" + quotePathSegment(groupID) + "/files",
-		Query: []QueryPair{
-			{Key: "parentid", Value: rootID},
-			{Key: "offset", Value: "0"},
-			{Key: "count", Value: "1"},
-			{Key: "orderby", Value: "mtime"},
-			{Key: "order", Value: "desc"},
-		},
-		RetryOn401: false,
-	})
-	if err != nil {
-		return err
-	}
-	if raw, present := payload["files"]; present {
-		if _, isList := raw.([]any); !isList {
-			return model.NewWpsAPIError("list files", 0, model.WpsCategoryUpstream)
-		}
-	}
-	if raw, present := payload["result"]; present {
-		if resultText, isString := raw.(string); isString && resultText != "ok" {
-			return model.NewWpsAPIError("list files", 0, model.WpsCategoryUpstream)
-		}
-	}
-	return nil
+	_, err := c.listEntries(rootID, ListOptions{Count: 1}, false)
+	return err
 }
 
 // statusFromError mirrors _status_from_error.
