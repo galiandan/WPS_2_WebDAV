@@ -780,7 +780,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
         range_requested = range_header is not None and length is not None
-        headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+        headers: dict[str, str] = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store, no-transform",
+            "X-Content-Type-Options": "nosniff",
+        }
         if entry.etag:
             headers["ETag"] = f'"{entry.etag.strip(chr(34))}"'
         if range_requested:
@@ -791,7 +795,10 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             headers["Content-Length"] = str(entry.size)
         if rest:
             headers["Content-Disposition"] = (
-                "attachment; filename*=UTF-8''" + quote(entry.name, safe="")
+                'attachment; filename="'
+                + self._ascii_download_name(entry.name)
+                + '"; filename*=UTF-8\'\''
+                + quote(entry.name, safe="")
             )
 
         if head:
@@ -874,10 +881,29 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                     expected_length,
                 )
             self.wfile.flush()
+            # Mark the response complete at the TCP layer as well as at the
+            # HTTP layer. This matters for browsers and proxies that keep a
+            # download pending after receiving the declared final byte.
+            try:
+                self.connection.shutdown(socket.SHUT_WR)
+            except (OSError, ValueError):
+                pass
         except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError, ValueError):
             self.close_connection = True
         finally:
             stream.close()
+
+    @staticmethod
+    def _ascii_download_name(name: str) -> str:
+        """Return a safe fallback for clients that do not support filename*."""
+
+        suffix = ""
+        if "." in name and not name.endswith("."):
+            candidate = name.rsplit(".", 1)[-1]
+            candidate = re.sub(r"[^A-Za-z0-9_-]", "", candidate)
+            if candidate:
+                suffix = "." + candidate[:32]
+        return "download" + suffix
 
     def _if_range_matches(self, entry: RemoteEntry) -> bool:
         value = self.headers.get("If-Range")

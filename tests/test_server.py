@@ -347,6 +347,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b'apiRequest("status")', body)
         self.assertIn(b'window.setInterval', body)
         self.assertIn(b'id="settings-button"', body)
+        self.assertNotIn(b"link.download", body)
 
     def test_web_file_manager_uses_configured_root_name(self) -> None:
         self.server.application.web_root_name = "示例云盘 <script>alert('x')</script> \"资料\""
@@ -470,9 +471,31 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(headers["Connection"], "close")
         self.assertEqual(
             headers["Content-Disposition"],
-            "attachment; filename*=UTF-8''hello.txt",
+            'attachment; filename="download.txt"; filename*=UTF-8\'\'hello.txt',
         )
+        self.assertEqual(headers["Cache-Control"], "no-store, no-transform")
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(body, b"hello world")
+
+    def test_download_closes_the_tcp_write_side_after_the_body(self) -> None:
+        raw = socket.create_connection(("127.0.0.1", self.server.server_port), timeout=3)
+        raw.settimeout(3)
+        try:
+            raw.sendall(
+                b"GET /dav/hello.txt HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Connection: keep-alive\r\n\r\n"
+            )
+            response = bytearray()
+            while True:
+                chunk = raw.recv(4096)
+                if not chunk:
+                    break
+                response.extend(chunk)
+            self.assertIn(b"Content-Length: 11", response)
+            self.assertTrue(response.endswith(b"hello world"))
+        finally:
+            raw.close()
 
     def test_put_is_streamed_and_mkcol_creates_folder(self) -> None:
         status, _headers, body = self.request(

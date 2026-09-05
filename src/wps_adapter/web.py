@@ -666,7 +666,9 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       function download(entry, path) {
         const link = document.createElement("a");
         link.href = pathUrl("download", path).toString();
-        link.download = entry.name;
+        // Let the server's Content-Disposition choose the filename. This
+        // keeps the browser's native download lifecycle and auth handling.
+        link.rel = "noopener";
         document.body.append(link);
         link.click();
         link.remove();
