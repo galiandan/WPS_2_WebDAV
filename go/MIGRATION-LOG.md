@@ -898,3 +898,52 @@ darwin arm64 通过；Python 参照套件 168 项、contract_tests 119 项全绿
 manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B305 credential source
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B305 执行；必读 client.py:172-444。
+新包 internal/credentials（source.go/cookies.go/refresh.go，目录对齐
+03-target-architecture），依赖 securefile 与 model，无其他内部依赖。
+
+- Credentials 快照：String/GoString 一律输出 "credentials(redacted)"，
+  格式化输出（%v/%+v/%#v/%s）不可能泄漏会话值（测试固定）。
+- Source 接口：Get/Refresh/StoreSetCookieHeaders/ReplaceCredentials，
+  对齐 Python 协议；Go 侧增加 error 返回（Python 以异常表达，Go 惯例
+  显式化），Refresh 返回 (bool, error)（refresh_timeout 非正的
+  ValueError 保留原文案）。
+- FileCredentialSource：每次 Get 都从文件重读快照（"每次 WPS 控制请求
+  前读取当前文件快照"）；读取走 securefile.ReadSecret，任何失败折叠为
+  WpsApiError("read credential file")，不携带路径或内容（测试断言错误
+  文案不含目录）。
+- Set-Cookie 合并（cookies.go）：多条头逐条解析（Go http.ParseSetCookie，
+  解析失败跳过，对齐 CookieError continue）；Max-Age ≤0（Go 解析为
+  -1）或无效回落 Expires ≤ now → 过期删除；名字大小写不敏感合并
+  （首拼写进顺序、后值覆盖；casefold ≈ ASCII ToLower，Cookie 名为
+  ASCII token）；新增名追加到顺序尾部；渲染 "; " 连接。已知收窄：
+  一条 Set-Cookie 头只解析一个 cookie（Python SimpleCookie 可解析多
+  cookie 头；真实 WPS 响应一条头一个 cookie，不影响）。
+- CSRF 同步：csrf cookie 轮换时同步写 CSRF 文件（过期写空）；另提供
+  CSRFFromCookie（client 请求路径在 CSRF 文件为空时从 cookie 提取，
+  B400 接线）。
+- ReplaceCredentials：双路径+双值非空才执行；与当前快照相同则直接
+  成功；写入走 B302 的 WriteCredentialPair（第二步失败自动回滚旧
+  pair，错误映射 "write credential file"/"protect credential
+  directory"）。快照失败（如父目录过宽）在 Python 同样是 "read
+  credential file" 先行——测试固定该顺序。
+- Refresh（refresh.go）：可选外部命令经 exec 运行，stdout/stderr 一律
+  io.Discard（子进程输出永不进入适配器日志），context 超时杀进程
+  （对齐 subprocess.run timeout），非零退出/找不到/超时都视为未刷新；
+  命令执行后重读快照，cookie 非空且快照变化才返回 true；全局
+  refreshLock 串行。偏差：Go 对 last 快照的读写统一加锁（Python get()
+  无锁），行为只更严。
+- 并发测试（8 goroutine × 20 轮 Get/Refresh/Store/Replace 交错）在
+  -race 下通过；全部凭据测试仅使用虚构值（fake-session 等）。
+
+检查：go fmt/go vet 无差异；credentials 13 项 + 全套 go test 全绿；
+-race 全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
