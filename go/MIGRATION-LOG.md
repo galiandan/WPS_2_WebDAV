@@ -1559,3 +1559,119 @@ contract_tests 119 项全绿；manifest 已更新。
 budget 13 项、wps 54 项，全部门禁绿灯。
 
 回滚：git revert 本提交。
+
+## B600 显式路由器
+
+日期：2026-09-05
+参照：`server.py`（AdapterHTTPServer/AdapterRequestHandler 全部 do_* 方法、
+_dav_path、_rest_route、_is_health、_is_web_app、_web_asset_name、
+_send_bytes/_send_error）；contract_tests/test_webdav.py DAV-OPTIONS-001/002；
+contract_tests/test_rest.py REST-LIST-010。
+
+新增 `go/internal/httpserver` 包（依赖方向：暂无内部依赖，仅标准库），
+三个文件：
+
+- `router.go`：显式路由器。方法表 + 每方法路由顺序逐条镜像 Python 的
+  do_* 分发；不使用 http.ServeMux（其自动 path 清理/重定向会改写业务
+  路径，违反 D-04），http.Server 直接挂 Router。
+- `target.go`：request-target 解析与解码原语（urlsplit 镜像、
+  parse_qs 镜像、unquote、CPython UTF-8 replace 语义）。
+- `response.go`：响应原语 `_send_bytes`/`_send_error` 的 Go 对应
+  （writeResponse/sendError/marshalPythonJSON）。完整领域错误状态表
+  留给 B602。
+
+路由语义（关键决策）：
+- Python 在原始（未解码）request-target 上做全部路由判断
+  （urlsplit(self.path).path）。Go 侧对应实现为 SplitRequestTarget
+  （r.RequestURI 镜像）：剥 scheme（"http://host/dav/x" 与协议相对
+  "//host/dav/x" 都归约为 "/dav/x"，Python netloc 语义）→ 剥 fragment →
+  剥 query；路径保持 percent-encoded。绝不用 r.URL.Path 路由——
+  Go net/url 已解码一次，"/dav%2Fx" 会在解码后错误匹配 "/dav/" 前缀，
+  Python（原始匹配）则 404；已在路由表测试中钉死该差异方向。
+- DAV 业务路径：原始路径摘出前缀余部后用 unquotePercent 解码恰好一次
+  （合法 %XX → 字节，畸形 escape 保持字面，同 urllib unquote；不校验
+  UTF-8，交给 storage 的 SplitRemotePath 以 Python 的同款报错拒绝
+  ——"/dav/%FF" → 400 "remote path is not valid UTF-8"）。整个链路
+  对 wire 字节只解码一次，符合 D-04；storage 层零改动。
+- REST：suffix 在原始路径上按 Python strip("/") 语义裁剪
+  （"/api/v1//metadata" → "metadata"、"/api/v1/metadata/" →
+  "metadata"），字面比较，编码拼法不匹配；query 用 parseQueryValues
+  一次解码，语义对齐 parse_qs(keep_blank_values=True)：按 "&" 切、
+  空对丢弃、首 "=" 切键值、缺值记空串、"+" 视作空格、畸形 escape
+  保持字面（parse_qs 从不报错，故 Go 不引入自定义 400）。
+- 静态资源："/assets/" 前缀（GET/HEAD），名称保持 percent-encoded
+  （Python load_web_asset 收原始串，编码拼法同样 miss）；"/assets"
+  （无尾斜杠）不匹配。
+- 网页入口：三个固定值 {"/", "/web", "/web/"} 原始路径精确匹配，
+  仅 GET（HEAD 不服务网页，也不服务 REST——镜像 do_HEAD）。
+- health：固定 "/healthz"（不受前缀配置影响），仅 GET 在路由表内
+  特判；query 允许、尾斜杠不允许（"/healthz/" → 404 unknown route，
+  与 Python 一致）。IsHealthPath 导出给 B601 的认证前特例复用。
+- OPTIONS：不限路径（契约 DAV-OPTIONS-002），任何目标（含 "*"）
+  固定 200 + DAV: 1,2 + Allow 全集 + 空体 + no-store。
+- 未知路由：各方法落到 Dav/REST 之外 → 404 text "unknown route\n" +
+  Connection: close（Python close_connection 语义）。REST 前缀内
+  未知名（404 JSON "unknown REST route"）属于 REST 分发器（后续
+  阶段），路由器只把 suffix+query 交给 REST handler。
+- PATCH 特例：REST 前缀外 → 501 text "WPS rename/move is not
+  available" + close（不是 404，镜像 do_PATCH）。
+- 未知方法（无 do_* 的方法）：501 + stdlib 形状 HTML 错误页 +
+  Connection: close、无 Cache-Control、HEAD 无体。状态行 reason
+  Go 恒为标准短语（Python 把 message 放进 reason phrase）——无测试
+  钉死该字节，记录为可接受偏差。
+- 前缀规范化镜像 _normalise_prefix（补 "/"、去尾 "/"、空值 → "/"）；
+  保留 "/" 退化前缀的 Python 怪癖：urlsplit 把 "//x" 当 netloc，
+  因此 "/" 前缀只能命中裸根，任何子路径都 404（测试钉死）。
+
+响应原语（B602 复用）：
+- writeResponse：Content-Type/Content-Length/Cache-Control: no-store/
+  extra 头/Connection: close（显式 Connection 头不重复，大小写
+  不敏感判定）/HEAD 无体但保留 Content-Length。
+- sendError：rest=false → text/plain "message\n"；rest=true → 紧凑
+  JSON {"error": ...}。
+- marshalPythonJSON：字节级对齐 json.dumps(ensure_ascii=True,
+  separators=(",",":"))——紧凑、不转义 <>&（Go Encoder 关闭 HTML
+  escape）、非 ASCII 全部 \uXXXX 小写四位（含代理对）、DEL(0x7F)
+  转义（Python 的 ESCAPE_ASCII 范围）。REST 错误体与 Python 逐字节
+  可比，契约证据不受影响。
+
+CPython UTF-8 replace 语义（parse_qs errors='replace' 的对齐物）：
+decodeUTF8Replace 按 maximal-subpart 规则每个失效子部分写一个
+U+FFFD（C3 28 → "\ufffd("；ED A0 80 → 3 个；F4 90 80 80 → 4 个；
+截断 F0 9F → 1 个），与 python3 逐例对照钉死。strings.ToValidUTF8
+是按 run 替换、数量不同，故直接实现子部分表。DAV 路径不走 replace
+（Python errors='strict' → 报错 → 400），只有 REST query 走。
+
+记录的传输层偏差（无法在 handler 层消除，无测试覆盖）：
+1. 畸形 percent-escape（如 "/dav/%2G"）：Go net/http 在请求行解析时
+   直接 400（text/plain "400 Bad Request"）；Python 会把字面
+   "%2G" 传入 storage 得到 404 "entry not found"。状态类不同但
+   请求本身非法，浏览器/客户端不可见差异。
+2. 未编码的原始非 ASCII 字节直接出现在 request-target：Python 以
+   latin-1 解码请求行产生 mojibake 字符，Go 保留原始字节并按
+   UTF-8 处理（正确行为）。规范客户端 percent-encode，两者对
+   编码形式完全一致。
+3. 未知方法状态行的 reason phrase（见上）。
+
+测试（router_test/target_test/response_test 共 12 组）：
+- 路由表 47 例：尾斜线（DAV 保留 "/docs/"、REST 裁剪）、encoded
+  slash（"/dav/a%2Fb" → 业务路径 "/a/b" 双组件；"/dav/a%252Fb" →
+  字面 "/a%2Fb"；"/dav%2Fx" 与 "/api%2Fv1%2Fmetadata" 原始匹配
+  失败 404）、自定义前缀（规范化 + 默认前缀不误匹配）、未知路由、
+  每方法空间（HEAD 无网页/REST、POST 仅 REST、PATCH 501）、
+  health query/尾斜线、assets 嵌套名与空名。
+- OPTIONS 任意路径（含 "*"）固定能力头；未知方法 501 HTML 三例；
+  未知路由 404 全头断言（含 Connection: close、Content-Length: 14）。
+- 经真实 net/http 传输层的端到端测试：encoded slash 存活、未知路由
+  关连接、畸形 escape 传输层 400（钉死偏差 1）、FOO 方法 501。
+- SplitRequestTarget 15 例（urlsplit 探针对照）、parseQueryValues
+  19 例（parse_qs 探针对照，含 UTF-8 replace 全部 golden）、
+  unquotePercent 9 例、marshalPythonJSON 9 例 + 往返健全性。
+- NewRouter 五个 handler 槽位缺失拒绝（构造期校验，Go 结构性约束）。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。
