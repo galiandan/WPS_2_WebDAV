@@ -789,8 +789,14 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             headers["Content-Length"] = str(length)
         elif entry.size is not None and entry.size >= 0:
             headers["Content-Length"] = str(entry.size)
+        if rest:
+            headers["Content-Disposition"] = (
+                "attachment; filename*=UTF-8''" + quote(entry.name, safe="")
+            )
 
         if head:
+            self.close_connection = True
+            headers["Connection"] = "close"
             self.send_response(
                 HTTPStatus.PARTIAL_CONTENT if range_requested else HTTPStatus.OK
             )
@@ -823,6 +829,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             else:
                 self.close_connection = True
 
+        # Explicitly close every completed download. Content-Length is enough
+        # for framing, but some clients keep a download pending until the
+        # connection itself is closed.
+        self.close_connection = True
+        headers["Connection"] = "close"
         self.send_response(HTTPStatus.PARTIAL_CONTENT if range_requested else HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         for name, value in headers.items():
@@ -862,6 +873,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
                     written,
                     expected_length,
                 )
+            self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError, ValueError):
             self.close_connection = True
         finally:

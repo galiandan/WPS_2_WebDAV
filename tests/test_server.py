@@ -462,6 +462,18 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(headers["Connection"], "close")
         self.assertEqual(body, b"hello")
 
+    def test_rest_download_is_explicitly_framed_and_closed(self) -> None:
+        status, headers, body = self.request("GET", "/api/v1/download?path=%2Fhello.txt")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Length"], "11")
+        self.assertEqual(headers["Connection"], "close")
+        self.assertEqual(
+            headers["Content-Disposition"],
+            "attachment; filename*=UTF-8''hello.txt",
+        )
+        self.assertEqual(body, b"hello world")
+
     def test_put_is_streamed_and_mkcol_creates_folder(self) -> None:
         status, _headers, body = self.request(
             "PUT",
