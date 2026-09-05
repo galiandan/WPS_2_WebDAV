@@ -48,10 +48,11 @@ func freePort(t *testing.T) int {
 }
 
 type serverProcess struct {
-	cmd    *exec.Cmd
-	stdout *bufio.Reader
-	stderr *bytes.Buffer
-	port   int
+	cmd        *exec.Cmd
+	stdout     *bufio.Reader
+	stderrBuf  *bytes.Buffer // written by the copier goroutine, read after stderrDone
+	stderrDone chan struct{}
+	port       int
 }
 
 func startServer(t *testing.T, env []string, args ...string) *serverProcess {
@@ -67,15 +68,20 @@ func startServer(t *testing.T, env []string, args ...string) *serverProcess {
 		t.Fatalf("stderr pipe: %v", err)
 	}
 	stderrBuffer := &bytes.Buffer{}
-	go func() { _, _ = io.Copy(stderrBuffer, stderrPipe) }()
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		_, _ = io.Copy(stderrBuffer, stderrPipe)
+	}()
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	process := &serverProcess{
-		cmd:    cmd,
-		stdout: bufio.NewReader(stdout),
-		stderr: stderrBuffer,
-		port:   portOf(args),
+		cmd:        cmd,
+		stdout:     bufio.NewReader(stdout),
+		stderrBuf:  stderrBuffer,
+		stderrDone: stderrDone,
+		port:       portOf(args),
 	}
 	t.Cleanup(func() {
 		if process.cmd.Process != nil {
@@ -134,12 +140,15 @@ func (p *serverProcess) waitExit(t *testing.T, wantCode int) {
 	}
 	if p.cmd.ProcessState.ExitCode() != wantCode {
 		t.Fatalf("exit code = %d, want %d; stderr: %s",
-			p.cmd.ProcessState.ExitCode(), wantCode, p.stderr.String())
+			p.cmd.ProcessState.ExitCode(), wantCode, p.stderrSoFar())
 	}
 }
 
+// stderrSoFar drains the copier goroutine before reading, so the buffer is
+// never read while the pipe copy is still writing.
 func (p *serverProcess) stderrSoFar() string {
-	return p.stderr.String()
+	<-p.stderrDone
+	return p.stderrBuf.String()
 }
 
 func (p *serverProcess) signal(t *testing.T, sig syscall.Signal) {

@@ -649,3 +649,50 @@ config 14 组、workspace 5 组、app 2 组）；Python 参照套件 168 项全�
 manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B300 领域模型与错误分类
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B300 执行；纯数据与错误类型，不依赖
+任何其他内部包（对齐 03-target-architecture.md 的 model 职责）。
+
+internal/model/entry.go：
+- EntryKind（file/folder/unknown）与 RemoteEntry：ID/Name/Kind/ParentID/
+  Size/ModifiedAt/Etag 公开字段 + LinkID/Raw 内部字段（Go 无包级私有
+  跨包可见性，隔离以序列化边界落实）。
+- 隔离保证：RemoteEntry.MarshalJSON 永远只输出 7 个公开字段（键序与
+  Python REST payload 一致：id,name,kind,parent_id,size,modified_at,
+  etag，None→null 保留）；即使误序列化也不可能泄漏 link ID/raw。
+  另有显式 PublicEntry 结构 + Public() 投影供 B500 REST 层使用。
+- ListPage/WpsStatus/UploadOptions 按 B300 必读移植：WpsStatus 的 JSON
+  键序锁定为 as_dict() 顺序，WithRetryAfter 保持 max(0, value) 语义与
+  值拷贝；UploadOptions 捕获形状经 DefaultUploadOptions() 固化
+  （successactionstatus=200、with_rapid=true，其余零值）。
+
+internal/model/errors.go：
+- ErrorKind 八类：invalid_path/not_found/not_folder/already_exists/
+  insufficient_storage/service_busy/ambiguous_path/unsupported_operation，
+  StorageError{Kind,Message} + AsStorageError；B500 的 HTTP 映射将按
+  Kind switch，不按错误文本。
+- WpsAPIError 只保存 Operation/Status/Category 三字段（Status 0=无 HTTP
+  状态；Category 含 upstream/disabled/http/invalid_response/
+  session_expired/unavailable 六类，与 client.py 用法一致）；不保存
+  body 或 URL。Error() 文案与 Python 逐字节一致
+  （"WPS operation failed: {op}" / "... (HTTP {n})"）。
+- 分类经 errors.As 在 fmt.Errorf("%w") 单层/双层/自定义 Unwrap 包装后
+  仍可达；并有反向测试：WpsAPIError 不被识别为 StorageError，反之亦然。
+- 反射测试锁定 WpsAPIError 字段集合，防止日后误加 body/URL 字段。
+
+顺带修复 B202 遗留：main_test.go 的 stderr 缓冲被 io.Copy goroutine
+写入时测试主 goroutine 直接读取，-race 下报 DATA RACE
+（TestServePortConflictExitsOne/TestServeRefusesPublicBindWithoutAuth）。
+改为 copier goroutine close(stderrDone) 后再读，读取方等 channel 建立
+happens-before；语义不变（两处读取都发生在进程退出后）。
+
+检查：go fmt/go vet 无差异；go test ./... 全绿（model 12 项新增）；
+-race 全绿并复跑 2 次稳定；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 全部通过；Python 参照套件 168 项全绿；contract_tests 119
+项全绿（证据 JSON 按惯例刷新后重建 release-manifest.txt）。
+
+回滚：git revert 本提交。
