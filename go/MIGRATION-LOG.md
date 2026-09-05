@@ -1675,3 +1675,111 @@ darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
 全绿；manifest 已按门禁顺序重建。
 
 回滚：git revert 本提交。
+
+## B601 中间件顺序
+
+日期：2026-09-05
+参照：`server.py`（BasicAuth 类、AdapterHTTPServer 连接槽位、
+parse_request framing、log_message、_authorise、
+_origin_matches_request_host/_allow_mutation_origin）；
+contract_tests/test_decisions.py TestD05BasicAuthHalfConfigured。
+
+新增 `middleware.go`（中间件链）与 `server.go`（net/http Server 参数与
+连接槽位监听器）。链路按计划的固定顺序装配（NewChain）：
+
+panic recovery → 连接/请求边界 → 请求 ID → 安全日志 → health 特例 →
+Basic Auth → mutation 同源检查 → 路由（B600 Router）。
+错误映射（B602）在路由内层按 REST/DAV 语境实施。
+
+各环节语义：
+- panic recovery：recover → 固定 500 text "internal server error\n"
+  （不回显栈；可选 PanicLog 回调在服务端记录 panic 值与 goroutine 栈，
+  不含任何请求数据）。Python 的兜底 500 依 rest 语境选格式；链路
+  最外层无该语境，统一 text（记录为偏差，B602 错误映射仍会在路由
+  内层按语境处理模型错误）。不设 close（Python 兜底同样不关）。
+- 连接/请求边界：镜像 parse_request——(1) 任何 Transfer-Encoding
+  → 400 "Transfer-Encoding is not supported" + close（Go 已在传输层
+  解码 chunked 并把它放进 r.TransferEncoding，头本身已从 Header 移除，
+  故以 r.TransferEncoding 判定，"显式拒绝 Go 已解码的 TE"）；(2)
+  多个 Content-Length → 400（Go 传输层先行 400，此检查不可达但保留
+  自洽）；(3) GET/HEAD/OPTIONS 携带非零 Content-Length → 400
+  "request body is not supported for this method"（int() 容忍空白/
+  符号，解析失败按非零处理）；(4) 未知方法（无 do_* 的方法）→
+  501 stdlib 形状 HTML + close——Python 的方法分发发生在 parse 之后的
+  handle_one_request，两步都在认证之前，故边界承担同序职责。B600
+  路由器内的方法检查保留作纵深防御（路由器单独使用时仍自洽）。
+- 请求 ID：每请求 16 字节随机 hex，注入 context（RequestIDFrom 供
+  handler/日志取用）。仅服务端可见——不添加响应头（Python 无此
+  可观测行为）。可注入生成器供测试。
+- 安全日志：镜像 log_message——method + 去 query 路径，控制字符替换
+  为 "?"，不落任何 header/query/凭据。计划把日志固定在边界之后，
+  故边界拒绝的请求不产生日志（Python 会记录，行为非契约，偏差
+  记录）。每请求恰好一行。
+- health 特例：GET 且原始路径 == /healthz → 直达注入的 health
+  handler（app 装配层提供、不触碰 storage），跳过认证与其后全部
+  中间件。其余方法对 /healthz 仅享受认证豁免（Basic Auth 中间件
+  同样以 IsHealthPath 判定），继续按普通路由走向（OPTIONS /healthz →
+  能力头、POST /healthz → 404 unknown route，与 Python 一致）。
+- Basic Auth：镜像 BasicAuth 类——enabled 为静态判定（任一字段非空
+  即启用，D-05 半配置恒 401）；values 每请求热读文件（ReadSecret
+  注入，读取失败 → 空凭据，等价 Python 捕获 WpsApiError）；accepts
+  镜像解析规则（首空格切 scheme、大小写不敏感、encoded strip、
+  b64decode(validate=True) 的字母表预检、UTF-8 校验、首 ":" 切
+  用户名密码、两个 subtle.ConstantTimeCompare 按序短路）。401 响应
+  逐头镜像：WWW-Authenticate: Basic realm="wps-adapter"、
+  Connection: close、Content-Length: 0，无 Content-Type、无
+  Cache-Control（Python 直接 send_response，不经 _send_bytes）。
+  ReadSecret 由装配层注入 securefile.ReadSecret——httpserver 依赖
+  规则不包含 securefile。
+- mutation 同源检查：仅对 PUT/POST/DELETE/PATCH/MKCOL/MOVE/COPY/
+  LOCK/UNLOCK（与 Python 各 do_* 调用点一致）。Origin 存在即只看
+  Origin；缺失才看 Referer；两者都无 → 放行。校验镜像
+  _origin_matches_request_host：控制字符拒绝、scheme 必须 http/https、
+  必须 hostname、拒绝 userinfo/query/fragment、Origin 的 path 只许
+  ""或 "/"（Referer 不限）、hostname rstrip(".") + casefold 相等、
+  端口规则（任一侧缺省即放行，反代省端口兼容）。失败 → 403 text
+  "cross-origin mutation is not allowed\n" + Connection: close + 关
+  连接（Python 的 _send_error rest=False，即便 REST 请求也是 text）。
+
+server.go（连接层边界）：
+- Listen 镜像 create_server 校验：port 1..65535（"port must be
+  between 1 and 65535"）、request_timeout > 0
+  （"request_timeout must be positive"）、budget/handler 必填；
+  只监听不 Serve。
+- 连接槽位：包一层 net.Listener，Accept 时
+  budget.TryAcquireConnection（非阻塞）；超限连接立即 close 且不占
+  槽（D-09），成功则连接关闭时一次性释放（sync.Once）。槽位上限
+  即 budget 的 MaxConnections（64，D-03 全进程共享），等价 Python
+  的 BoundedSemaphore。
+- 超时：ReadHeaderTimeout = IdleTimeout = RequestTimeout。Python 的
+  socket 逐操作超时无法在 Go 传输层等价表达——WriteTimeout 会杀死
+  长下载、ReadTimeout 会杀死长上传，故整体读写超时留给各 handler
+  （Go ResponseController 可按请求设置，后续上传/下载阶段落实）；
+  记录为偏差。
+
+测试（middleware_test 10 组 + 框架搭建）：
+- 顺序闸门（完成条件）：未认证 GET、跨源 PUT、带体 GET、未知方法
+  四类请求路由调用数为 0；优先级对——framing 胜认证（400 非 401）、
+  未知方法胜认证（501 非 401）、认证胜同源（错凭据 + 跨源 → 401
+  非 403）、health 先于认证、授权同源请求路由且安全方法不受同源
+  约束。
+- 真实传输层 framing：chunked TE → 400 + close（复刻
+  test_server.py 的 framing 测试）；GET+CL:5 → 400；GET+CL:0 带凭据
+  → 路由；重复 CL → 传输层 400（钉死偏差）。
+- Basic Auth：文件热读（改文件后旧密码立即失效）、读取失败 → 401、
+  D-05 半配置、九种畸形 Authorization 头。
+- 同源：Origin/Referer 决策表 28 例（含尾点、大小写、端口省略、
+  userinfo/query/fragment/path 拒绝、Origin 优先、全部 9 个 mutation
+  方法受控、GET/PROPFIND 不受控）。
+- panic recovery：固定 500 体、无栈回显、服务端 sink 收到值与栈。
+- 安全日志：query 剥离、控制字符替换、请求 ID 前缀、ID 对 handler
+  可见。
+- NewChain 构造校验三项；Listen 校验五项；连接槽位（2 槽占满 →
+  第三连接被立即关闭无响应 → 释放后恢复）。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver/budget
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。
