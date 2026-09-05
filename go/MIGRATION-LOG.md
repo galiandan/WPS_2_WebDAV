@@ -346,3 +346,33 @@ settings GET/PATCH。
 检查：python -m unittest discover -s tests 全绿；contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## M2/F1 提取 style.css
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F1 与 §20 第 3-5 步执行（CSS 机械提取，
+Python 参照服务白名单提供）。
+
+- 新增 go/web/style.css：从 WEB_APP_TEMPLATE 的 <style> 块逐字节复制，
+  不调整颜色、空格、选择器、断点或尺寸（197 行）。
+- web.py：模板 <style> 块替换为固定同源链接
+  <link rel="stylesheet" href="/assets/style.css">；新增白名单资源
+  装载器 load_web_asset/web_asset_content_type/web_assets_dir——
+  文件名必须先命中清单，才允许参与路径拼接；目录解析顺序为
+  WPS_ADAPTER_WEB_ASSETS_DIR 环境变量 → 仓库 go/web/。
+- server.py：GET/HEAD /assets/<清单名> 经 Basic Auth 后返回资源，
+  MIME text/css; charset=utf-8、Cache-Control: no-store；清单外名称
+  （含 ../ 穿越、百分号编码变体、子路径）一律 404 并关闭连接，与
+  未知 DAV 路由行为一致。
+- 桥接不注入任何运行时文本（FE-02 采用“只保证默认前缀”，不新增
+  前端配置）。
+
+新增/更新测试：静态资源 5 项（字节一致、MIME/no-store、页面外链、
+清单外 404、HEAD 仅元数据、未认证 401）+ 装载器 2 项（白名单拒绝、
+目录覆盖生效）。
+
+检查：tests 165 项全绿；contract_tests 119 项全绿；
+release-manifest.txt 已重新生成。
+
+回滚：git revert 本提交。

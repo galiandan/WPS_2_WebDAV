@@ -39,7 +39,7 @@ from .provider import (
 )
 from .storage import WpsStorage, join_remote_path, split_remote_path
 from .settings import WebSettings, validate_root_name
-from .web import render_web_app
+from .web import load_web_asset, render_web_app, web_asset_content_type
 from .workspace import WorkspaceConfigError, WorkspaceMount, validate_workspace_identifier
 
 
@@ -456,6 +456,26 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
 
     def _is_web_app(self) -> bool:
         return urlsplit(self.path).path in {"/", "/web", "/web/"}
+
+    def _web_asset_name(self) -> str | None:
+        path = urlsplit(self.path).path
+        if not path.startswith("/assets/"):
+            return None
+        return path[len("/assets/") :].strip("/")
+
+    def _handle_web_asset(self) -> None:
+        name = self._web_asset_name()
+        try:
+            body = load_web_asset(name or "")
+        except (KeyError, OSError):
+            self.close_connection = True
+            self._send_error(HTTPStatus.NOT_FOUND, "unknown web asset")
+            return
+        self._send_bytes(
+            HTTPStatus.OK,
+            body,
+            content_type=web_asset_content_type(name or "") or "application/octet-stream",
+        )
 
     def _authorise(self) -> bool:
         if self._is_health() or not self.application.auth.enabled:
@@ -1642,6 +1662,9 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         if self._is_web_app():
             self._handle_web_app()
             return
+        if self._web_asset_name() is not None:
+            self._handle_web_asset()
+            return
         rest = self._rest_route()
         if rest is not None:
             route, query = rest
@@ -1662,6 +1685,9 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         if not self._authorise():
+            return
+        if self._web_asset_name() is not None:
+            self._handle_web_asset()
             return
         path = self._dav_path()
         if path is None:

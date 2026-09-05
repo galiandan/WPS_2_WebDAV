@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import socket
 import threading
 import unittest
@@ -10,6 +11,7 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest import mock
 
 from wps_adapter.client import WpsApiError, WpsCredentials, WpsStatus
 from wps_adapter.provider import (
@@ -28,7 +30,7 @@ from wps_adapter.server import (
 )
 from wps_adapter.settings import WebSettings
 from wps_adapter.storage import split_remote_path
-from wps_adapter.web import render_web_app
+from wps_adapter.web import load_web_asset, render_web_app
 from wps_adapter.workspace import WorkspaceState
 
 
@@ -146,6 +148,20 @@ class WebRenderTests(unittest.TestCase):
     def test_render_web_app_escapes_line_separators_in_inline_script(self) -> None:
         rendered = render_web_app("a\u2028b")
         self.assertIn('let rootName = "a\\u2028b";', rendered)
+
+
+class WebAssetLoaderTests(unittest.TestCase):
+    def test_loader_rejects_names_outside_the_whitelist(self) -> None:
+        with self.assertRaises(KeyError):
+            load_web_asset("../server.py")
+        with self.assertRaises(KeyError):
+            load_web_asset("missing.css")
+
+    def test_loader_honours_the_directory_override(self) -> None:
+        with TemporaryDirectory() as directory:
+            Path(directory, "style.css").write_bytes(b"body { color: red; }")
+            with mock.patch.dict(os.environ, {"WPS_ADAPTER_WEB_ASSETS_DIR": directory}):
+                self.assertEqual(load_web_asset("style.css"), b"body { color: red; }")
 
 
 class ServerTests(unittest.TestCase):
@@ -371,6 +387,61 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(response.read(), b"")
                 finally:
                     connection.close()
+        finally:
+            auth_server.shutdown()
+            auth_server.server_close()
+            thread.join(timeout=3)
+
+    def test_web_style_sheet_is_served_from_the_split_file(self) -> None:
+        style_sheet = Path(__file__).resolve().parents[1] / "go" / "web" / "style.css"
+        status, headers, body = self.request("GET", "/assets/style.css")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/css; charset=utf-8")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(body, style_sheet.read_bytes())
+
+    def test_web_page_links_the_external_style_sheet(self) -> None:
+        status, _headers, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'<link rel="stylesheet" href="/assets/style.css">', body)
+        self.assertNotIn(b"<style>", body)
+
+    def test_unknown_web_assets_are_not_served(self) -> None:
+        for path in (
+            "/assets/missing.css",
+            "/assets/style.css/x",
+            "/assets/style%2Ecss",
+            "/assets/../server.py",
+            "/assets/",
+        ):
+            status, _headers, _body = self.request("GET", path)
+            self.assertEqual(status, 404, path)
+
+    def test_web_asset_head_sends_metadata_only(self) -> None:
+        status, headers, body = self.request("HEAD", "/assets/style.css")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/css; charset=utf-8")
+        self.assertEqual(body, b"")
+
+    def test_web_assets_require_basic_auth_when_enabled(self) -> None:
+        auth_server = AdapterHTTPServer(
+            ("127.0.0.1", 0),
+            AdapterApplication(self.storage, auth=BasicAuth(username="u", password="p")),
+        )
+        thread = threading.Thread(target=auth_server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = HTTPConnection("127.0.0.1", auth_server.server_port, timeout=3)
+            try:
+                connection.request("GET", "/assets/style.css")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 401)
+                self.assertEqual(
+                    response.getheader("WWW-Authenticate"), 'Basic realm="wps-adapter"'
+                )
+                self.assertEqual(response.read(), b"")
+            finally:
+                connection.close()
         finally:
             auth_server.shutdown()
             auth_server.server_close()
