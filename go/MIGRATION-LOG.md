@@ -75,3 +75,60 @@
 
 回滚：本任务仅重新生成 `release-manifest.txt` 并追加本记录；回滚即
 `git revert` 本提交。
+
+## B002 记录性能基线
+
+日期：2026-09-05
+
+工具：新增 `go/benchmarks/python_baseline.py`（迁移专用，不进发布产物）。
+方法：真实 Python 适配器跑在子进程，WPS 传输层换成进程内 fake upstream
+（使用 client 本身提供的测试注入点，未修改参照实现）；父进程经真实
+loopback HTTP 驱动并测量。完整数据在
+`go/benchmarks/results/python-baseline.json`（同仓库保存，全部为
+bench-* 占位数据，无任何真实 ID/Cookie/URL）。
+
+环境：Linux 7.2.2-zen1-1-zen x86_64，Python 3.14.7，16 CPU，15 GiB RAM。
+配置：默认参数（list_count=20、cache_ttl=2s、stream_chunk=1MiB、
+max_uploads=2、max_downloads=4），仅 WPS_UPLOAD_MIN_FREE_BYTES=0 与
+关闭 Basic Auth（loopback 基准）。
+
+主要结果（p50，另见 JSON）：
+
+| 场景 | 数值 |
+| --- | --- |
+| /healthz keep-alive | 41.0 ms |
+| /healthz 新建连接 | 0.15 ms |
+| /api/v1/status 冷 | 0.74 ms（fake upstream） |
+| /api/v1/status 缓存命中（keep-alive） | 41.0 ms |
+| REST 列表 204 条 冷（10 页上游分页） | 3.2 ms |
+| REST 列表 204 条 热缓存（keep-alive） | 41.0 ms |
+| PROPFIND Depth 1（204 条） | 6.2 ms |
+| 下载 8 MiB / 64 MiB | 79 / 98 MiB/s，SHA-256 校验一致 |
+| 上传 1 MiB / 8 MiB（spool+三摘要+signed PUT+登记） | 167 / 359 MiB/s，SHA-256 校验一致 |
+| RSS 空闲 / 峰值 | 31.4 MiB / 43.3 MiB |
+| 上游请求数（全部场景累计） | control list 89 次、islogin 1、object GET 5、PUT 2 |
+| 文件描述符（结束后） | 4（无泄漏） |
+
+发现 1（重要，影响所有 keep-alive 小响应）：Python 服务端接受的套接字
+未禁用 Nagle（`disable_nagle_algorithm=False`）且响应为多次小段写，
+keep-alive 连接上每个小响应稳定多出约 40 ms（41ms vs 新建连接 0.15ms；
+在服务端 handler 上设置 TCP_NODELAY 后同场景 0.056 ms，客户端侧设置
+无效，证明停顿在服务端）。该行为是当前 Python 可观察行为的一部分；
+Go 侧（net/http 默认 TCP_NODELAY）不会复现。**属于潜在行为差异，
+是否要求 Go 复现该停顿交由负责人决定（默认建议：不复现，记录为
+已批准变更，因为它不是协议语义而是 TCP 交互特征）。**
+
+发现 2（客户端取消释放）：断开检测只在流循环的两个 chunk 之间进行。
+- RST 断开（SO_LINGER(0)，写路径立即出错）：上游对象流 138 ms 内释放，
+  下载槽立即可复用。
+- 干净 FIN 断开（接收缓冲区空）：服务端阻塞在 `sendall`，直到
+  `ADAPTER_REQUEST_TIMEOUT`（默认 60 s）写超时才释放上游流；实测
+  60.4 s。这是当前真实行为，Go 需要决定是否复现（见 D 系列决定，
+  未决定前以保持行为为准）。
+
+未运行项：真实 WPS 专用目录的低频小文件与 100 MiB 文件测试。原因：
+执行环境无负责人凭据，且红线禁止执行模型访问真实账号；此项归入
+灰度阶段（M1002）由负责人执行。fake upstream 方法论已固定，Go 用
+同一 harness 形状对比。
+
+回滚：仅新增 `go/benchmarks/` 与本记录；`git revert` 本提交即可。
