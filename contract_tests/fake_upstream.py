@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import threading
 import time
 from http.client import HTTPMessage
@@ -105,28 +106,49 @@ class _ObjectStream(_Response):
 
 
 class _SignedConnection:
-    """Stands in for an HTTPSConnection PUTting one object."""
+    """Stands in for an HTTPSConnection PUT/POST against the object store.
+
+    Records every header it is asked to send so the fixture can prove that
+    no WPS credentials ever reach the signed host.
+    """
 
     def __init__(self, upstream: "FakeUpstream") -> None:
         self._upstream = upstream
+        self._method = "GET"
+        self._target = ""
         self._hasher = hashlib.sha256()
         self._size = 0
+        self._headers: dict[str, str] = {}
 
     def putrequest(self, method: str, target: str) -> None:
         self._method = method
+        self._target = target
+        # Part uploads are verified against the per-part MD5 the client
+        # declared in the signed instruction.
+        self._hasher = hashlib.md5() if target.startswith("/parts/") else hashlib.sha256()
 
     def putheader(self, name: str, value: str) -> None:
-        pass
+        self._headers[name.casefold()] = str(value)
 
     def endheaders(self) -> None:
-        pass
+        self._upstream.note_object_request(self._method, self._headers)
 
     def send(self, data: bytes) -> None:
         self._hasher.update(data)
         self._size += len(data)
 
     def getresponse(self) -> _Response:
+        if self._method == "POST":
+            # Multipart merge: the object store answers with XML.
+            body = (
+                b'<?xml version="1.0" encoding="UTF-8"?>'
+                b'<CompleteMultipartUploadResult><ETag>"bench-merged-etag"</ETag>'
+                b"</CompleteMultipartUploadResult>"
+            )
+            return _Response(body, status=200, content_type="application/xml")
         self._upstream.note_object_upload(self._size, self._hasher.hexdigest())
+        if self._target.startswith("/parts/"):
+            self._upstream.note_part_upload(self._target, self._hasher.hexdigest(), self._size)
         return _Response(
             b"",
             status=200,
@@ -179,7 +201,80 @@ class FakeUpstream:
         self._barrier = threading.Condition()
         self._inflight: dict[str, int] = {}
         self._released: dict[str, int] = {}
-        self.stats: dict = {"inflight": {}, "served": {}, "object_put_size": None, "object_put_sha256": None}
+        self.stats: dict = {
+            "inflight": {},
+            "served": {},
+            "object_put_size": None,
+            "object_put_sha256": None,
+            "object_put_headers": [],
+            "object_requests": [],
+            "part_md5s": [],
+            "part_sizes": [],
+            "credential_violations": [],
+            "request_contract_violations": [],
+        }
+        self._write_stats()
+
+    # -- fixture contract checks ----------------------------------------------
+
+    def _violation(self, kind: str, detail: str) -> None:
+        with self._lock:
+            bucket = "credential_violations" if kind == "credential" else "request_contract_violations"
+            self.stats[bucket].append(detail)
+        self._write_stats()
+
+    @staticmethod
+    def _expect_exact(actual: set, expected: set, where: str, what: str) -> list[str]:
+        problems = []
+        if actual != expected:
+            problems.append(f"{where}: {what} mismatch extra={sorted(actual - expected)} missing={sorted(expected - actual)}")
+        return problems
+
+    def _check_query(self, where: str, query: dict, required: dict[str, str | None]) -> None:
+        """required maps query name -> expected value (None = any non-empty)."""
+
+        problems = self._expect_exact(set(query), set(required), where, "query names")
+        for name, expected in required.items():
+            if expected is not None and query.get(name) != expected:
+                problems.append(f"{where}: query {name}={query.get(name)!r} expected {expected!r}")
+        for problem in problems:
+            self._violation("contract", problem)
+
+    def _check_json_fields(
+        self,
+        where: str,
+        body: bytes | None,
+        expected: dict[str, set[type] | tuple[type, ...]],
+    ) -> dict:
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            self._violation("contract", f"{where}: body is not valid JSON")
+            return {}
+        if not isinstance(payload, dict):
+            self._violation("contract", f"{where}: body is not a JSON object")
+            return {}
+        problems = self._expect_exact(set(payload), set(expected), where, "JSON fields")
+        for name, types in expected.items():
+            if name in payload and not isinstance(payload[name], types):
+                problems.append(f"{where}: field {name} has wrong type {type(payload[name]).__name__}")
+        for problem in problems:
+            self._violation("contract", problem)
+        return payload
+
+    def note_object_request(self, method: str, headers: dict[str, str]) -> None:
+        with self._lock:
+            self.stats["object_requests"].append({"method": method, "headers": sorted(headers)})
+        self._write_stats()
+        forbidden = {"cookie", "authorization", "csrf", "x-csrf-token", "csrfmiddlewaretoken"}
+        for name in headers:
+            if name in forbidden:
+                self._violation("credential", f"object {method} sent {name}")
+
+    def note_part_upload(self, target: str, md5_hex: str, size: int) -> None:
+        with self._lock:
+            self.stats["part_md5s"].append(md5_hex)
+            self.stats["part_sizes"].append(size)
         self._write_stats()
 
     # -- observability -------------------------------------------------------
@@ -251,6 +346,9 @@ class FakeUpstream:
         delay = route.get("delay_ms", 0)
         if delay:
             time.sleep(delay / 1000.0)
+        if route.get("short_read"):
+            route = dict(route)
+            route["headers"] = {**route.get("headers", {}), "Content-Length": "999999"}
         barrier = route.get("barrier")
         status = int(route.get("status", 200))
         if barrier:
@@ -294,26 +392,52 @@ class FakeUpstream:
             key = route.get("key") or f"{method} {path}"
             self._count(key, +1)
             try:
+                if route.get("delay_ms", 0) / 1000.0 > timeout:
+                    # The real transport would abandon the read here.
+                    raise socket.timeout("fake upstream timed out")
                 return self._as_transport_response(self._route_response(route, method, path), url)
             finally:
                 self._count(key, -1)
 
         if host == OBJECT_HOST:
-            return self._open_object(path)
+            return self._open_object(request, path)
 
-        self._served("control:islogin")
         if path == "/api/v3/islogin":
+            self._served("control:islogin")
             return _Response(json.dumps({"islogin": True, "companyid": "bench-company"}).encode())
 
         if path == "/passport/secure/api/grant_token":
             # SDK refresh grant: success means the rotated session cookie is
             # persisted by the client from the Set-Cookie header.
+            self._served("control:grant_token")
+            if not request.headers.get("Cookie"):
+                self._violation("contract", "grant_token: request sent no Cookie")
+            self._check_json_fields(
+                "grant_token", request.data, {"grant_type": str},
+            )
             return _Response(
                 json.dumps({"result": "ok"}).encode(),
                 headers={"Set-Cookie": "bench-session=rotated-bench-cookie; Domain=.kdocs.cn; Path=/"},
             )
 
         if re.fullmatch(r"/3rd/drive/api/v5/groups/[^/]+/files", path):
+            self._served("control:list")
+            self._check_query(
+                "list",
+                query,
+                {
+                    "parentid": None,
+                    "offset": None,
+                    "count": None,
+                    "orderby": "mtime",
+                    "order": "desc",
+                    "linkgroup": "true",
+                    "include": "acl,pic_thumbnail",
+                    "with_link": "true",
+                    "review_pic_thumbnail": "true",
+                    "with_sharefolder_type": "true",
+                },
+            )
             parent_id = query.get("parentid", "0")
             offset = int(query.get("offset", "0"))
             count = int(query.get("count", "20"))
@@ -329,8 +453,20 @@ class FakeUpstream:
                 payload["next_offset"] = offset + count
             return _Response(json.dumps(payload).encode())
 
-        self._served("control:folder")
         if path == "/3rd/drive/api/v5/files/folder" and method == "POST":
+            self._served("control:folder")
+            self._check_json_fields(
+                "folder",
+                request.data,
+                {
+                    "groupid": (int, str),
+                    "parentid": (int, str),
+                    "name": str,
+                    "owner": bool,
+                    "parsed": bool,
+                    "csrfmiddlewaretoken": str,
+                },
+            )
             body = json.loads(request.data or b"{}")
             return _Response(
                 json.dumps(
@@ -348,6 +484,10 @@ class FakeUpstream:
 
         rename_match = re.fullmatch(r"/3rd/drive/api/v3/groups/[^/]+/files/([^/]+)", path)
         if rename_match and method == "PUT":
+            self._served("control:rename")
+            self._check_json_fields(
+                "rename", request.data, {"fname": str, "csrfmiddlewaretoken": str},
+            )
             body = json.loads(request.data or b"{}")
             return _Response(
                 json.dumps(
@@ -363,22 +503,61 @@ class FakeUpstream:
                 ).encode()
             )
 
-        self._served("control:progress")
         if path == "/3rd/drive/api/v5/files/batch/task/progress":
+            self._served("control:progress")
+            self._check_query("progress", query, {"taskuuid": None})
             return _Response(
                 json.dumps({"result": "ok", "finish": 1, "status": "success", "failed_list": []}).encode()
             )
 
-        self._served("control:task_move")
         if path == "/3rd/drive/api/v5/files/batch/task/move" and method == "POST":
+            self._served("control:task_move")
+            self._check_json_fields(
+                "move",
+                request.data,
+                {
+                    "groupid": (int, str),
+                    "parentid": (int, str),
+                    "dst_groupid": (int, str),
+                    "dst_parentid": (int, str),
+                    "fileids": list,
+                    "option": dict,
+                    "csrfmiddlewaretoken": str,
+                },
+            )
             return _Response(json.dumps({"result": "ok", "taskuuid": "bench-task-move"}).encode())
 
-        self._served("control:task_delete")
         if path == "/3rd/drive/api/v5/files/batch/task/delete" and method == "POST":
+            self._served("control:task_delete")
+            self._check_json_fields(
+                "delete",
+                request.data,
+                {"fileids": list, "groupid": (int, str), "csrfmiddlewaretoken": str},
+            )
             return _Response(json.dumps({"result": "ok", "taskuuid": "bench-task-delete"}).encode())
+
+        if path == "/3rd/drive/api/v3/groups/[^/]*/files/batch/copy".replace("[^/]*", "[^/]+") and method == "POST":
+            self._served("control:copy")
+            self._check_json_fields(
+                "copy",
+                request.data,
+                {
+                    "fileids": list,
+                    "groupid": (int, str),
+                    "target_groupid": (int, str),
+                    "target_parentid": (int, str),
+                    "duplicated_name_model": int,
+                    "csrfmiddlewaretoken": str,
+                },
+            )
+            return _Response(
+                json.dumps({"result": "ok", "fileids": ["bench-file-copied"]}).encode()
+            )
 
         match = re.fullmatch(r"/api/v3/office/file/([^/]+)/download", path)
         if match:
+            self._served("control:download-url")
+            self._check_query("download_url", query, {"support_checksums": "md5,sha1,sha224,sha256,sha384,sha512"})
             fid = match.group(1)
             return _Response(
                 json.dumps(
@@ -389,12 +568,38 @@ class FakeUpstream:
                 ).encode()
             )
 
-        self._served("control:pre_check")
         if path == "/3rd/drive/api/v5/files/upload/pre_check":
+            self._served("control:pre_check")
+            self._check_query("pre_check", query, {"file_name": None, "group_id": None, "parent_id": None})
             return _Response(json.dumps({"result": "ok"}).encode())
 
-        self._served("control:create_update")
         if path == "/3rd/drive/api/v5/files/upload/create_update":
+            self._served("control:create_update")
+            body = self._check_json_fields(
+                "create_update",
+                request.data,
+                {
+                    "groupid": (int, str),
+                    "parentid": (int, str),
+                    "parent_path": list,
+                    "size": int,
+                    "name": str,
+                    "req_by_internal": bool,
+                    "client_stores": str,
+                    "contenttype": str,
+                    "startswithfilename": str,
+                    "successactionstatus": int,
+                    "group_id": (int, str),
+                    "parent_id": (int, str),
+                    "file_id": (int, str, type(None)),
+                    "with_rapid": (int, str, type(None)),
+                    "tried_store": (list, tuple),
+                    "sha256": str,
+                    "csrfmiddlewaretoken": str,
+                },
+            )
+            if body.get("sha256") and not re.fullmatch(r"[0-9a-f]{64}", str(body.get("sha256"))):
+                self._violation("contract", "create_update: sha256 is not a 64-char hex digest")
             return _Response(
                 json.dumps(
                     {
@@ -406,7 +611,27 @@ class FakeUpstream:
             )
 
         if path == "/3rd/drive/api/v5/files/file" and method == "POST":
-            body = json.loads(request.data or b"{}")
+            self._served("control:register")
+            body = self._check_json_fields(
+                "register",
+                request.data,
+                {
+                    "key": str,
+                    "groupid": (int, str),
+                    "parentid": (int, str),
+                    "name": str,
+                    "parent_path": list,
+                    "sha1": str,
+                    "size": int,
+                    "store": str,
+                    "etag": str,
+                    "isUpNewVer": (bool, int, type(None)),
+                    "apiErrorInfo": type(None),
+                    "csrfmiddlewaretoken": str,
+                },
+            )
+            if body.get("sha1") and not re.fullmatch(r"[0-9a-f]{40}", str(body.get("sha1"))):
+                self._violation("contract", "register: sha1 is not a 40-char hex digest")
             return _Response(
                 json.dumps(
                     {
@@ -421,19 +646,126 @@ class FakeUpstream:
                 ).encode()
             )
 
+        # Multipart: POST initializes a session, PUT signs one part.
+        if path == "/3rd/drive/api/v5/files/upload/block" and method == "POST":
+            self._served("control:multipart_init")
+            body = self._check_json_fields(
+                "multipart_init",
+                request.data,
+                {
+                    "with_rapid": (int, str, type(None)),
+                    "hash": str,
+                    "size": int,
+                    "group_id": str,
+                    "name": str,
+                    "parent_id": str,
+                    "tried_store": (list, tuple),
+                    "csrfmiddlewaretoken": str,
+                },
+            )
+            if body.get("hash") and not re.fullmatch(r"[0-9a-f]{40}", str(body.get("hash"))):
+                self._violation("contract", "multipart_init: hash is not a 40-char hex digest")
+            return _Response(
+                json.dumps(
+                    {
+                        "result": "ok",
+                        "upload_id": "bench-upload-id",
+                        "key": "bench-multipart-key",
+                        "store": "bench-store",
+                        "limit": {"min_part_size": 1, "max_part_size": 64 * 1024 * 1024, "max_parts": 10000},
+                    }
+                ).encode()
+            )
+
+        if path == "/3rd/drive/api/v5/files/upload/block" and method == "PUT":
+            self._served("control:multipart_part")
+            body = self._check_json_fields(
+                "multipart_part",
+                request.data,
+                {
+                    "key": str,
+                    "md5": str,
+                    "part_number": int,
+                    "part_size": int,
+                    "req_by_internal": bool,
+                    "store": str,
+                    "upload_id": str,
+                    "csrfmiddlewaretoken": str,
+                },
+            )
+            part_md5 = str(body.get("md5", ""))
+            if not re.fullmatch(r"[0-9a-f]{32}", part_md5):
+                self._violation("contract", "multipart_part: md5 is not a 32-char hex digest")
+            part_number = body.get("part_number", 0)
+            content_md5 = base64.b64encode(bytes.fromhex(part_md5)).decode("ascii") if re.fullmatch(
+                r"[0-9a-f]{32}", part_md5
+            ) else "invalid"
+            return _Response(
+                json.dumps(
+                    {
+                        "result": "ok",
+                        "url": f"https://{OBJECT_HOST}/parts/{part_number}",
+                        "method": "PUT",
+                        "request": {
+                            "body_type": "file",
+                            "headers": {
+                                "Content-MD5": content_md5,
+                                "Content-Type": "application/octet-stream",
+                            },
+                        },
+                        "response": {"expect_code": [200]},
+                    }
+                ).encode()
+            )
+
+        if path == "/3rd/drive/api/v5/files/upload/block/merge" and method == "POST":
+            self._served("control:multipart_merge")
+            body = self._check_json_fields(
+                "multipart_merge",
+                request.data,
+                {
+                    "key": str,
+                    "req_by_internal": bool,
+                    "store": str,
+                    "part_infos": list,
+                    "upload_id": str,
+                    "csrfmiddlewaretoken": str,
+                },
+            )
+            for info in body.get("part_infos", []):
+                if not isinstance(info, dict) or set(info) != {"etag", "part_number"}:
+                    self._violation("contract", "multipart_merge: part_infos entries are malformed")
+            return _Response(
+                json.dumps(
+                    {
+                        "result": "ok",
+                        "url": f"https://{OBJECT_HOST}/merge-bench",
+                        "method": "POST",
+                        "request": {
+                            "body_type": "data",
+                            "body_data": "<CompleteMultipartUpload/>",
+                            "headers": {"Content-Type": "application/xml"},
+                        },
+                        "response": {"expect_code": [200]},
+                    }
+                ).encode()
+            )
+
         raise AssertionError(f"fake upstream has no route for {method} {url}")
 
     def _as_transport_response(self, response: _Response, url: str) -> _Response:
         """Real urllib raises HTTPError for >=400; an injected opener must too."""
 
-        if response.status >= 400:
+        if response.status >= 400 or response.status in {301, 302, 303, 307, 308}:
             error = HTTPError(url, response.status, "error", response.headers, BytesIO(response.read()))
             error.headers = response.headers
             raise error
         return response
 
-    def _open_object(self, path: str) -> _ObjectStream:
+    def _open_object(self, request, path: str) -> _ObjectStream:
         self._served("object:GET")
+        present = {name.casefold(): value for name, value in request.header_items()}
+        self.note_object_request("GET", present)
         fid = path.split("/")[2]
         content = self.objects.get(fid, b"bench-bytes")
         return _ObjectStream(content)

@@ -1,0 +1,10 @@
+{
+  "credential_violations": [],
+  "object_put_sha256": null,
+  "part_md5s": [],
+  "request_contract_violations": [],
+  "served": {
+    "control:download-url": 1,
+    "object:GET": 1
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "malformed_json": {
+    "category": "invalid_response"
+  },
+  "oversize_response": {
+    "category": "invalid_response"
+  },
+  "timeout": {
+    "category": "unavailable"
+  }
+}

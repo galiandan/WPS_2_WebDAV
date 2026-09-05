@@ -270,3 +270,36 @@ contract_tests -v` 当前 **13 项全部通过**。每个场景的观察结果�
 参照套件 155 项全绿（release-manifest.txt 因新增文件重新生成）。
 
 回滚：`git revert` 相应提交即可；契约测试不进入发布产物。
+
+## B104 WPS fixture 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_wps_fixtures.py`（7 项，client 级 fixture，全部
+通过），证据在 `results/WPS-FIXTURE-*.json`。fake upstream 升级为严格
+fixture：对每个请求校验 method、path、query 参数名与值、JSON 字段集合
+与类型（violation 记录在 stats，测试断言为零）；对象存储侧记录全部
+请求头，出现 Cookie/Authorization/CSRF 即 violation。
+
+- WPS-FIXTURE-001 普通上传：pre_check/create_update/register 各 1 次，
+  对象 PUT 只有 Content-Type/Length（无任何凭据），对象字节 SHA-256 与
+  请求一致；register 携带 40 位 sha1、64 位 sha256。
+- WPS-FIXTURE-002 multipart（2.5×分片）：init 1、part 3、merge 1、
+  register 1；每片对象 PUT 的 MD5 与该分片内容一致；分片大小符合
+  instruction；成功后 checkpoint 文件清理。
+- WPS-FIXTURE-003 download：download_url 解析带固定 support_checksums；
+  对象 GET 不带 Cookie/Authorization。
+- WPS-FIXTURE-004/005 401 刷新：SDK grant_token（Set-Cookie 轮换落盘，
+  旧凭据重试后仍 401）与外部刷新命令（命令执行、无 grant 调用）。
+- WPS-FIXTURE-006 状态注入：301/403/404/410/500 均映射为脱敏
+  WpsApiError（保留上游状态码，不含正文）。
+- WPS-FIXTURE-007 注入：畸形 JSON → invalid_response；超大响应 →
+  上限保护；上游延迟超过超时 → unavailable。
+
+阶段 1（语言无关契约）至此完成：黑盒 harness、HTTP/auth/framing、
+REST、WebDAV、WPS fixture 五组全部就绪，`python -m unittest discover
+-s contract_tests` 共 119 项全绿；参照套件 155 项全绿。允许差异记录：
+multipart merge 的 XML 命名空间由客户端按本地名匹配（fixture 用
+CompleteMultipartUploadResult 结构）；其余请求形状均为逐字段固定。
+
+回滚：`git revert` 本提交；fixture 不进入发布产物。

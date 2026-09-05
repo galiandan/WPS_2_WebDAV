@@ -1,0 +1,17 @@
+{
+  "credential_violations": [],
+  "object_put_sha256": "929c8924f1094fb47659b51de0b1cd50",
+  "part_md5s": [
+    "c804950db44ba7d0a903b5356749ee54",
+    "f09ed32fa113d654466e68a9072abf1a",
+    "929c8924f1094fb47659b51de0b1cd50"
+  ],
+  "request_contract_violations": [],
+  "served": {
+    "control:multipart_init": 1,
+    "control:multipart_merge": 1,
+    "control:multipart_part": 3,
+    "control:pre_check": 1,
+    "control:register": 1
+  }
+}

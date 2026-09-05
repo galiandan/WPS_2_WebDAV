@@ -1,0 +1,10 @@
+{
+  "credential_violations": [],
+  "object_put_sha256": null,
+  "part_md5s": [],
+  "request_contract_violations": [],
+  "served": {
+    "GET /3rd/drive/api/v5/groups/bench-group/files": 2,
+    "control:grant_token": 1
+  }
+}
