@@ -696,3 +696,60 @@ darwin arm64 全部通过；Python 参照套件 168 项全绿；contract_tests 1
 项全绿（证据 JSON 按惯例刷新后重建 release-manifest.txt）。
 
 回滚：git revert 本提交。
+
+## B301 安全文件读取
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B301 执行；必读 client.py:63-133、
+workspace.py:44-124、settings.py:29-114。新包 internal/securefile，
+目录对齐 03-target-architecture.md（read.go + securefile_unix.go +
+securefile_windows.go），不依赖其他内部包。workspace/config 里 B201 的
+临时实现暂不动，B303/B304 接入时统一替换。
+
+read.go（平台无关逻辑）：
+- ReadSecret：凭据文件纪律。父目录必须存在且私有（workspace 类文件则
+  允许缺失以支持"未登录可启动"）；打开用 O_RDONLY|O_CLOEXEC|O_NOFOLLOW
+  （ELOOP→open_failed，等价 Python O_NOFOLLOW 拒 symlink）；打开后
+  fstat 复核 regular/mode/owner（Python 凭据路径无 fstat 大小检查，靠
+  读取上限兜底，Go 保持一致）；按 4MiB+1 有界读取，UTF-8 校验先于
+  大小判定（对齐 Python 先解码后计数的顺序），最后 strip。
+- ReadJSONState：workspace/settings 共用。lstat 预检（symlink/非常规
+  文件、mode/owner）→ O_NOFOLLOW 打开（期间被删→视为文件不存在，
+  对齐 Python os.open FileNotFoundError → (None,None)）→ fstat 复核
+  含 size>max（"is unsafe"）→ 有界读取 → 空白文件返回 (nil, mtime) →
+  JSON 必须是对象；mtime 以纳秒 *int64 返回（nil=文件缺失）。
+- CheckCredentialValues：值级检查，控制字符（<0x20 或 0x7F）与大小
+  上限，防凭据值变成出站 HTTP 头。
+- 错误只有类别码（Code），Error() 固定文案，永不携带路径或内容；
+  调用方（B303/B304/B400）负责把码翻译成各自的 Python 奇迹文案
+  （workspace 与 settings 对同一条件的文案本就不同，码一一区分：
+  预检过宽 file_unsafe vs 打开后 post_open_unsafe 等共 17 类）。
+
+securefile_unix.go：
+- ownedByService 用 syscall.Stat_t（root 或服务用户）；openSecure 用
+  O_NOFOLLOW|O_CLOEXEC。
+- 父目录 symlink 检查按 os.path.realpath != abspath 语义逐组件模拟
+  （parentHasSymlinkComponent）：目录名用字符串级 dirname（保留 ..
+  不归一化，对齐 os.path.dirname），逐组件 lstat，任何一层是 symlink
+  即拒绝；缺尾段时 EvalSymlinks 无法解析，逐组件走查仍能发现（测试
+  覆盖"symlink 祖先 + 缺失尾部"场景）；lstat 失败的组件按 realpath
+  (strict=False) 的宽松语义继续走，由后续 stat 报可用性错误。
+- 打开前后双校验收窄检查-使用竞争窗口：测试证明打开后 chmod 0o644
+  会被 fstat 复核拒绝。与 Python 相同的 TOCTOU 窗口保留（未引入
+  openat2，保持行为对齐，属已知等价窗口）。
+
+securefile_windows.go：Windows 仅为开发 fixture 构建，读取一律
+unsupported_platform 失败关闭，不伪装 POSIX mode 检查通过（交叉构建
+仍可编译）。
+
+已知偏差（待负责人裁决）：CheckCredentialValues 按字节计数，多字节
+静态凭据值比 Python 的字符计数更严（文件来源的值两侧都 ≤4MiB 字节，
+行为一致）。
+
+检查：go fmt/go vet 无差异；securefile 16 项 + 全套 go test 全绿；
+-race 全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
