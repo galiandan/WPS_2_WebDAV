@@ -1783,3 +1783,72 @@ darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
 全绿；manifest 已按门禁顺序重建。
 
 回滚：git revert 本提交。
+
+## B602 响应与错误映射
+
+日期：2026-09-05
+参照：`server.py:522-613`（_send_bytes/_send_json/_send_error/
+_handle_exception）、`server.py:725-760`（_json_body/_entry_json）、
+`server.py:792-930`（_send_download 流式路径）。
+
+响应原语（writeResponse/sendError/marshalPythonJSON）已在 B600 落地；
+本任务补齐错误映射与上限：
+
+- Handlers 签名调整：REST/DAV handler 改为返回 error，路由器在分发点
+  调 mapError 并按语境选择框架（REST → rest=True 紧凑 JSON；DAV →
+  rest=False 文本"message\n"）——精确镜像 Python 各 do_* 方法把
+  _handle_exception(exc, rest=...) 的语境决定权放在分发层。Health/
+  WebApp/WebAsset 不触碰 storage、无领域错误，保持 HandlerFunc。
+- mapError 完整状态表（镜像 _handle_exception）：
+  requestBodyTooLarge → 413 + close + 空 message（Python 的
+  _RequestBodyTooLarge 无参数，str() == ""，JSON 体为 {"error":""}、
+  文本体仅一个换行——怪癖原样保留）；controlRequestError → 400
+  （镜像 Python 在读体辅助函数里裸抛的 ValueError/TypeError，
+  "request body is shorter than Content-Length" 类会关连接、
+  "request body must be valid JSON" 类不关）；StorageError 按 Kind：
+  InvalidPath 400 / EntryNotFound 404 / NotFolder+AlreadyExists+
+  AmbiguousPath 409 / InsufficientStorage 507 / ServiceBusy 503 +
+  Retry-After: 5 / UnsupportedOperation 501；WpsAPIError 见下；
+  其余未知错误 → 500 固定 "internal server error"。
+- WPS 上游错误固定脱敏（镜像 _handle_exception 的 WpsApiError 分支）：
+  status==401 → 503 + "WPS session expired; refresh the configured
+  credentials" + code=wps_session_expired + Retry-After: 60；其余 →
+  502 + "upstream WPS request failed" + code=wps_unavailable。REST
+  语境下 payload 再带 upstream_status（Status!=0 时），key 顺序
+  error, code, upstream_status 与 Python 逐字节一致（专用结构体保序，
+  Go map 会按字母序打乱）；DAV 语境纯文本、不带 code。
+- 控制响应字节上限：sendJSON 镜像 _send_json——先紧凑序列化再检查
+  max_response_body，超限抛 KindInsufficientStorage
+  "response exceeds the configured size limit"，经 mapError → 507，
+  头部不先写出。ControlLimits{MaxControlBody:1MiB,
+  MaxResponseBody:16MiB} 为 AdapterApplication 默认值；零值回退默认。
+- 流式下载独立路径的契约已固化（实现归下载/range 阶段）：下载响应
+  不得走 writeResponse 控制面——它的头集不同（Cache-Control:
+  "no-store, no-transform"、Accept-Ranges、X-Content-Type-Options:
+  nosniff、ETag、Content-Range、REST 附 Content-Disposition、
+  Connection: close 收尾框架），错误在头写出前映射、头写出后断流
+  即止。writeResponse 注释标明仅限控制响应。
+- requestBodyTooLarge/controlRequestError 类型定义于 httpserver（协议
+  层错误），供后续阶段的读体辅助函数（_json_body 镜像）与 session
+  import（B604）使用；model 错误仍由 storage/层产生。
+
+测试（errors_test.go 4 组）：
+- REST golden 14 例：InvalidPath/NotFound/NotFolder/AlreadyExists/
+  Ambiguous/InsufficientStorage/Busy(Retry-After 5)/Unsupported/
+  413 空 message+close/control 400/WPS 401→503(code+upstream_status)/
+  WPS 502/WPS 无 status（无 upstream_status 键）/未知 500。全部断言
+  状态、体、Content-Type: application/json、no-store、Retry-After、
+  Connection、Content-Length。
+- DAV golden 11 例：每个类别至少一条文本框架（"message\n"、
+  Content-Type text/plain、no-store）——完成条件"每个错误类别至少
+  一个 REST 和一个 DAV golden"达成。
+- controlRequestError 的 close/不 close 两态；sendJSON 上限：超限
+  返回 InsufficientStorage 且头/体零写出、映射后 507、限内原样通过；
+  默认上限值与 1MiB 体在不传 limits 时通过。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。

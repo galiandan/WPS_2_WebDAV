@@ -31,11 +31,13 @@ func (h *recordingHandlers) toConfig() Handlers {
 		WebAsset: func(w http.ResponseWriter, r *http.Request, name string) {
 			h.assetNames = append(h.assetNames, name)
 		},
-		REST: func(w http.ResponseWriter, r *http.Request, route RESTRoute) {
+		REST: func(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
 			h.restRoutes = append(h.restRoutes, route)
+			return nil
 		},
-		DAV: func(w http.ResponseWriter, r *http.Request, davPath string) {
+		DAV: func(w http.ResponseWriter, r *http.Request, davPath string) error {
 			h.davPaths = append(h.davPaths, davPath)
+			return nil
 		},
 	}
 }

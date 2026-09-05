@@ -3,12 +3,15 @@ package httpserver
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
 
 const (
@@ -126,4 +129,146 @@ func writeUnicodeEscape(out *bytes.Buffer, r rune) {
 		return
 	}
 	fmt.Fprintf(out, `\u%04x`, r)
+}
+
+// ControlLimits mirrors AdapterApplication's response and body caps. The
+// app assembly wires them from configuration; zero fields fall back to the
+// Python defaults.
+type ControlLimits struct {
+	MaxControlBody  int64
+	MaxResponseBody int64
+}
+
+// DefaultControlLimits mirrors the AdapterApplication defaults: 1 MiB
+// control bodies, 16 MiB control responses.
+func DefaultControlLimits() ControlLimits {
+	return ControlLimits{
+		MaxControlBody:  1024 * 1024,
+		MaxResponseBody: 16 * 1024 * 1024,
+	}
+}
+
+// sendJSON mirrors Python's _send_json: compact ensure_ascii JSON with the
+// response size limit enforced before any header is written. An oversized
+// response becomes a KindInsufficientStorage error which mapError turns
+// into 507, exactly like the Python raise inside _send_json.
+func sendJSON(w http.ResponseWriter, r *http.Request, status int, payload any, limits ControlLimits, extra map[string]string) error {
+	if limits.MaxResponseBody <= 0 {
+		limits = DefaultControlLimits()
+	}
+	body, err := marshalPythonJSON(payload)
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) > limits.MaxResponseBody {
+		return model.NewStorageError(model.KindInsufficientStorage, "response exceeds the configured size limit")
+	}
+	writeResponse(w, r, status, body, contentTypeJSON, extra, false)
+	return nil
+}
+
+// requestBodyTooLarge mirrors Python's _RequestBodyTooLarge: an empty
+// message and a closed connection on top of the 413.
+type requestBodyTooLarge struct{}
+
+func (requestBodyTooLarge) Error() string { return "" }
+
+func errRequestBodyTooLarge() error { return requestBodyTooLarge{} }
+
+// controlRequestError carries the 400-class protocol errors Python raises
+// as bare ValueError/TypeError in its request-reading helpers (invalid
+// JSON bodies, query parameter misuse, ...). Body framing failures may
+// also close the connection like Python's close_connection assignments.
+type controlRequestError struct {
+	message   string
+	closeConn bool
+}
+
+func (e *controlRequestError) Error() string { return e.message }
+
+func errBadRequest(message string) error { return &controlRequestError{message: message} }
+func errBadRequestClose(message string) error {
+	return &controlRequestError{message: message, closeConn: true}
+}
+
+// mapError mirrors Python's _handle_exception: the complete domain error
+// status table, with the rest context choosing compact JSON or text
+// framing. Upstream WPS failures are reduced to fixed redacted codes —
+// response bodies, URLs, and signed object details never reach the client.
+func mapError(w http.ResponseWriter, r *http.Request, err error, rest bool) {
+	var tooLarge requestBodyTooLarge
+	if errors.As(err, &tooLarge) {
+		// Python raises _RequestBodyTooLarge without a message, so both
+		// framings carry an empty message over a closed connection.
+		sendError(w, r, http.StatusRequestEntityTooLarge, "", rest, nil, true)
+		return
+	}
+	var control *controlRequestError
+	if errors.As(err, &control) {
+		sendError(w, r, http.StatusBadRequest, control.message, rest, nil, control.closeConn)
+		return
+	}
+	if storageErr, ok := model.AsStorageError(err); ok {
+		switch storageErr.Kind {
+		case model.KindInvalidPath:
+			sendError(w, r, http.StatusBadRequest, storageErr.Message, rest, nil, false)
+		case model.KindEntryNotFound:
+			sendError(w, r, http.StatusNotFound, storageErr.Message, rest, nil, false)
+		case model.KindNotFolder, model.KindAlreadyExists, model.KindAmbiguousPath:
+			sendError(w, r, http.StatusConflict, storageErr.Message, rest, nil, false)
+		case model.KindInsufficientStorage:
+			sendError(w, r, http.StatusInsufficientStorage, storageErr.Message, rest, nil, false)
+		case model.KindServiceBusy:
+			sendError(w, r, http.StatusServiceUnavailable, storageErr.Message, rest,
+				map[string]string{"Retry-After": "5"}, false)
+		case model.KindUnsupportedOperation:
+			sendError(w, r, http.StatusNotImplemented, storageErr.Message, rest, nil, false)
+		default:
+			sendError(w, r, http.StatusInternalServerError, "internal server error", rest, nil, false)
+		}
+		return
+	}
+	if wpsErr, ok := model.AsWpsAPIError(err); ok {
+		mapWpsError(w, r, wpsErr, rest)
+		return
+	}
+	// Python's final fallback logs and answers a fixed 500.
+	sendError(w, r, http.StatusInternalServerError, "internal server error", rest, nil, false)
+}
+
+// wpsErrorPayload keeps the Python payload key order (error, code,
+// upstream_status) so REST error bodies stay byte-identical.
+type wpsErrorPayload struct {
+	Error          string `json:"error"`
+	Code           string `json:"code"`
+	UpstreamStatus *int   `json:"upstream_status,omitempty"`
+}
+
+func mapWpsError(w http.ResponseWriter, r *http.Request, wpsErr *model.WpsAPIError, rest bool) {
+	status := http.StatusBadGateway
+	message := "upstream WPS request failed"
+	code := "wps_unavailable"
+	extra := map[string]string{}
+	if wpsErr.Status == 401 {
+		// Never relay whether credentials exist or which failed; the fixed
+		// code only says the session needs a refresh.
+		status = http.StatusServiceUnavailable
+		message = "WPS session expired; refresh the configured credentials"
+		code = "wps_session_expired"
+		extra["Retry-After"] = "60"
+	}
+	if rest {
+		payload := wpsErrorPayload{Error: message, Code: code}
+		if wpsErr.Status != 0 {
+			upstream := wpsErr.Status
+			payload.UpstreamStatus = &upstream
+		}
+		if err := sendJSON(w, r, status, payload, DefaultControlLimits(), extra); err != nil {
+			// The payload is a few bytes; sendJSON cannot exceed the limit
+			// here, but stay safe instead of recursing.
+			writeResponse(w, r, status, []byte(message+"\n"), contentTypeText, extra, false)
+		}
+		return
+	}
+	sendError(w, r, status, message, false, extra, false)
 }

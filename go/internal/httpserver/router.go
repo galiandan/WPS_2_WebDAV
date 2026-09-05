@@ -69,14 +69,17 @@ type RESTRoute struct {
 }
 
 // Handlers carries the route targets the application assembly wires in.
-// The health, web, REST, and DAV handlers are implemented by their own
-// migration stages; the router only selects between them.
+// The health and web handlers cannot produce domain errors (they never
+// touch storage); REST and DAV handlers return errors which the router
+// maps through the domain status table (B602) with the right framing
+// context — JSON for REST, text for everything else, exactly like
+// Python's do_* methods deciding the rest= flag.
 type Handlers struct {
 	Health   http.HandlerFunc
 	WebApp   http.HandlerFunc
 	WebAsset func(w http.ResponseWriter, r *http.Request, name string)
-	REST     func(w http.ResponseWriter, r *http.Request, route RESTRoute)
-	DAV      func(w http.ResponseWriter, r *http.Request, davPath string)
+	REST     func(w http.ResponseWriter, r *http.Request, route RESTRoute) error
+	DAV      func(w http.ResponseWriter, r *http.Request, davPath string) error
 }
 
 // RouterConfig configures the explicit router. Empty prefixes fall back to
@@ -181,11 +184,11 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if route, ok := rt.restRoute(path, rawQuery); ok {
-			rt.handlers.REST(w, r, route)
+			rt.dispatchREST(w, r, route)
 			return
 		}
 		if davPath, ok := rt.davPath(path); ok {
-			rt.handlers.DAV(w, r, davPath)
+			rt.dispatchDAV(w, r, davPath)
 			return
 		}
 		sendUnknownRoute(w, r)
@@ -197,24 +200,24 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if davPath, ok := rt.davPath(path); ok {
-			rt.handlers.DAV(w, r, davPath)
+			rt.dispatchDAV(w, r, davPath)
 			return
 		}
 		sendUnknownRoute(w, r)
 	case "PUT", "DELETE":
 		if route, ok := rt.restRoute(path, rawQuery); ok {
-			rt.handlers.REST(w, r, route)
+			rt.dispatchREST(w, r, route)
 			return
 		}
 		if davPath, ok := rt.davPath(path); ok {
-			rt.handlers.DAV(w, r, davPath)
+			rt.dispatchDAV(w, r, davPath)
 			return
 		}
 		sendUnknownRoute(w, r)
 	case "POST":
 		// POST exists only for REST routes; DAV paths are unknown to it.
 		if route, ok := rt.restRoute(path, rawQuery); ok {
-			rt.handlers.REST(w, r, route)
+			rt.dispatchREST(w, r, route)
 			return
 		}
 		sendUnknownRoute(w, r)
@@ -222,16 +225,34 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// PATCH exists only for REST routes; anywhere else Python reports
 		// 501 instead of 404 because rename/move via DAV is unavailable.
 		if route, ok := rt.restRoute(path, rawQuery); ok {
-			rt.handlers.REST(w, r, route)
+			rt.dispatchREST(w, r, route)
 			return
 		}
 		sendError(w, r, http.StatusNotImplemented, patchRouteMessage, false, nil, true)
 	case "PROPFIND", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK":
 		if davPath, ok := rt.davPath(path); ok {
-			rt.handlers.DAV(w, r, davPath)
+			rt.dispatchDAV(w, r, davPath)
 			return
 		}
 		sendUnknownRoute(w, r)
+	}
+}
+
+// dispatchREST runs a REST handler and maps its error with the REST framing
+// (compact JSON), mirroring the do_* wrappers calling _handle_exception
+// with rest=True.
+func (rt *Router) dispatchREST(w http.ResponseWriter, r *http.Request, route RESTRoute) {
+	if err := rt.handlers.REST(w, r, route); err != nil {
+		mapError(w, r, err, true)
+	}
+}
+
+// dispatchDAV runs a DAV handler and maps its error with the plain text
+// framing, mirroring the do_* wrappers calling _handle_exception with the
+// default rest=False.
+func (rt *Router) dispatchDAV(w http.ResponseWriter, r *http.Request, davPath string) {
+	if err := rt.handlers.DAV(w, r, davPath); err != nil {
+		mapError(w, r, err, false)
 	}
 }
 
