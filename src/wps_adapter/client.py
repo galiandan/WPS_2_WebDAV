@@ -1434,6 +1434,7 @@ class WpsDriveClient:
         with_link: bool | None = None,
         review_pic_thumbnail: bool | None = None,
         with_sharefolder_type: bool | None = None,
+        next_filter: str | None = None,
     ) -> ListPage:
         """List a remote folder using the captured v5 endpoint shape."""
 
@@ -1455,6 +1456,8 @@ class WpsDriveClient:
             if value is None:
                 continue
             query.append((name, self._bool(value) if isinstance(value, bool) else str(value)))
+        if next_filter is not None:
+            query.append(("next_filter", next_filter))
 
         selected_group_id = self.group_id if group_id is None else group_id
         payload = self._request_json(
@@ -1507,7 +1510,8 @@ class WpsDriveClient:
         entries: list[RemoteEntry] = []
         seen_entry_ids: set[str] = set()
         offset = 0
-        seen_offsets: set[int] = set()
+        page_filter: str | None = None
+        seen_cursors: set[tuple[int, str | None]] = set()
         page_count = 0
         page_limit = max_entries + 1 if max_entries is not None else 10000
         while True:
@@ -1525,6 +1529,7 @@ class WpsDriveClient:
                 with_link=with_link,
                 review_pic_thumbnail=review_pic_thumbnail,
                 with_sharefolder_type=with_sharefolder_type,
+                next_filter=page_filter,
             )
             if max_entries is not None and len(entries) + len(page.entries) > max_entries:
                 raise InsufficientStorageError("remote folder exceeds the configured entry limit")
@@ -1533,12 +1538,17 @@ class WpsDriveClient:
             seen_entry_ids.update(entry.id for entry in page.entries)
             entries.extend(page.entries)
             next_offset = page.next_offset
-            if next_offset is None or next_offset < 0 or next_offset in seen_offsets:
+            next_filter = page.next_filter
+            if next_offset is None or next_offset < 0:
                 return tuple(entries)
-            seen_offsets.add(next_offset)
-            if next_offset <= offset:
+            next_cursor = (next_offset, next_filter)
+            if next_cursor in seen_cursors:
                 return tuple(entries)
+            if next_offset < offset or (next_offset == offset and next_filter == page_filter):
+                return tuple(entries)
+            seen_cursors.add(next_cursor)
             offset = next_offset
+            page_filter = next_filter
 
     def _csrf(self, csrf_token: str | None) -> str:
         token = csrf_token or self._credentials().csrf_token

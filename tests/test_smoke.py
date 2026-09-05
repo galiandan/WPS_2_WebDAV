@@ -1123,6 +1123,31 @@ class ClientTests(unittest.TestCase):
             ["0", "1"],
         )
 
+    def test_iter_entries_passes_wps_next_filter_to_the_next_page(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(b'{"files":[{"id":1,"fname":"one","ftype":"file"}],"next_offset":14,"next_filter":"file"}'),
+            FakeResponse(b'{"files":[{"id":2,"fname":"two","ftype":"file"}],"next_offset":-1,"next_filter":"file"}'),
+        ])
+        client = WpsDriveClient(WpsClientConfig(group_id="group-1"), opener=opener)
+
+        entries = client.iter_entries("folder-1", count=20)
+
+        self.assertEqual([entry.id for entry in entries], ["1", "2"])
+        self.assertEqual(
+            parse_qsl(urlsplit(opener.requests[0][0].full_url).query),
+            [
+                ("parentid", "folder-1"),
+                ("offset", "0"),
+                ("count", "20"),
+                ("orderby", "mtime"),
+                ("order", "desc"),
+            ],
+        )
+        self.assertIn(
+            ("next_filter", "file"),
+            parse_qsl(urlsplit(opener.requests[1][0].full_url).query),
+        )
+
     def test_iter_entries_bounds_broken_pagination(self) -> None:
         class EndlessOpener:
             def __init__(self) -> None:

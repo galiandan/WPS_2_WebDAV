@@ -148,7 +148,7 @@ WebDAV XML 必须转义文件名和路径，校验大小与修改时间，执行
 
 ## 9. 当前实现边界
 
-- `offset` 分页继续使用 WPS 已观察到的 `next_offset`；不会猜测游标接口。
+- `offset` 分页继续使用 WPS 已观察到的 `next_offset` 和 `next_filter` 游标字段；不会猜测其他游标接口。
 - 单次目录和递归响应仍受条目、深度和 XML 响应大小限制。
 - 当前 PROPFIND 仍会先构造受限的元数据结果，再发送 XML；真正的流式 XML 仍未实现。
 

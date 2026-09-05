@@ -114,7 +114,7 @@ query:
 
 - `ftype` 的文件夹实际值。
 - `groupid`、`corpid` 和 `id` 的边界及相互关系。
-- `next_filter` 的含义，以及 `offset` / `count` 的分页规则。
+- `next_filter` 的完整取值集合，以及目录变化期间 `offset` / `count` 的一致性规则。
 - `fsha` 的算法和是否可用于上传校验。
 - `link_id` / `link_url` 是否与普通下载流程有关；在适配器中暂不使用分享链接。
 
@@ -138,7 +138,7 @@ query:
 | 文件夹 ID | `metadata.fileinfo.fileid` / 列表对象 `id` 候选 | observed | 原值不入库 |
 | 父目录字段 | `parentid` | observed | - |
 | 下载上下文 ID | 列表/文件对象中的 `link_id` 与下载请求 query 的 `cid` 形状一致 | observed | 适配器按文件传递，不记录原值 |
-| 分页 | `offset`、`count`，响应有 `next_offset` | observed | 完整分页边界待验证 |
+| 分页 | `offset`、`count`，响应有 `next_offset`、`next_filter`；下一页请求传回 `next_filter` | observed + reproduced | 适配器按两个字段组成的游标继续分页 |
 | 文件/文件夹区分 | `ftype`；已观察到 `file` 和 `folder` | observed | 其他类型待验证 |
 
 ## 上传与下载
