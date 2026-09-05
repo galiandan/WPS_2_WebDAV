@@ -1406,3 +1406,81 @@ windows amd64、darwin arm64 通过；Python 参照套件 169 项、
 contract_tests 119 项全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B503 单空间 Storage
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B503 执行；必读 storage.py:127-510。
+storage 包新增 storage.go（单空间 WpsStorage 移植）；新增
+workspace.ConfiguredRootID() 访问器（镜像 Python
+workspace.configured_root_id 属性，构造后不变，无锁）。
+
+- 路径解析：resolveParts 从虚拟 root 起逐层按父 ID+精确名称解析；
+  child 匹配规则与 _child 一致（name 全等 + unknown kind 永不匹配；
+  0 匹配 → EntryNotFound "entry not found: {name}"；多匹配 →
+  AmbiguousPath "multiple entries have the name: {name}"；parent_id
+  非空且不等于父 ID → EntryNotFound；文件下钻 → NotFolder
+  "not a folder: {name}"）。Root() 返回 id/root_name/kind=folder/
+  parent_id=None/size=0 的虚拟根。
+- list/metadata 全部走 B502 缓存：children() 以 Key{group,
+  generation, parentID} GetOrLoad，loader 调 IterEntries 且参数与
+  Python _children 完全一致（count=list_count、max_entries、
+  linkgroup=True、include="acl,pic_thumbnail"、with_link=True、
+  review_pic_thumbnail=True、with_sharefolder_type=True）；缓存键
+  的 group 来自 syncWorkspaceRoot 选定值。
+- syncWorkspaceRoot 与 _sync_workspace_root 一致：仅 configured
+  root == "auto" 时跟随登录选择（固定根绝不跟随，测试固定）；
+  group 变化 → 清缓存并更新；root 变化 → 更新并清缓存。workspace
+  以 WorkspaceSelection 函数注入（返回 group/root/autoRoot/err），
+  避免 storage 直接依赖 workspace 包（依赖方向第 4 条）；nil 即
+  Python 的 client.config.workspace 缺省，不同步。选择错误沿读取
+  路径传播。
+- 写操作（upload/create_folder/rename/move/delete）按任务要求只
+  定义接口与冲突检查，不接写 API：定义 Writer 接口（Upload/
+  CreateFolder/Delete/Rename/Move，形状对齐 client.py 的调用面，
+  UploadRequest 镜像 upload 关键字参数），conflict 检查全部按
+  Python 实现并在调用 Writer 前完成——upload_path 的
+  "overwrite is not enabled for: {path}"（非 overwrite/多于一个
+  同名/目标非 file）、create_folder*"entry already exists"、
+  rename_path 同名提前返回不调 writer、同父同名 move 短路、
+  move_to_parent_path 的 move-into-self 前缀检查与
+  "not a destination folder"、move_path 的同父改名转 rename_path、
+  跨目录改名 → UnsupportedOperation "cross-folder move with
+  rename is not supported"。Writer 未接线时统一返回固定
+  UnsupportedOperation 错误（阶段内临时路径，写阶段替换）。
+  move_to_parent_path 返回值按 Python 重建（保留
+  size/modified_at/etag/link_id，丢弃 raw）。
+- 下载：OpenPath 绑定全局下载槽——resolve → 非 file → NotFolder
+  "not a downloadable file: {path}" → budget.AcquireDownload(ctx)
+  → 打开失败/Downloader 缺失即释放 → managedDownloadStream 在
+  首次 Close 时关流并释放槽（幂等，适配所有返回路径）；cid 传
+  entry.LinkID，offset/length 透传。OpenDownload(entryID, offset)
+  与 Python open_download 一致，不占槽。上传槽在 writer 调用期间
+  持有，错误路径经 defer 释放（测试断言槽计数归零）。
+- 新增 workspace 侧小访问器后无其他行为改动；wps 包未动。
+- 测试 24 组（internal 20 + workspace 同步外部 4）：默认值 pin、
+  构造校验 9 态（文案与 Python 一致）+ nil lister/budget、嵌套
+  解析与缓存命中计数、child 匹配 4 规则、文件下钻、缓存目录数
+  上限（1 槽时调用序列 [root docs root docs] 证明 docs 占槽且
+  root 先被驱逐——root-walk 解析下逐次重取，与 Python 行为一致）、
+  上传新路径/冲突拒绝/overwrite 透传/文件夹不可覆盖、上传槽全
+  返回路径释放、改名/ID 改名/非法名/同名短路、删除/根拒绝/成功
+  后缓存失效、移动/自移入拒绝/move_path 三分派（同名父内改名/
+  跨目录改名 unsupported/同名跨目录移动/原地短路）、link_id 作
+  cid、下载槽开-关绑定/关闭幂等/打开失败释放/文件夹拒绝、
+  Writer/Downloader 缺省拒绝、CreateFolder(nil)=root 与名字校验、
+  ListByID(nil)=root、等待超时→busy、auto 根跟随登录选择、group
+  变化清缓存（root 不变）、固定根不跟随、选择错误传播。fake
+  client 完整实现 Lister+Writer+Downloader（镜像
+  tests/test_storage.py 的 FakeClient），等价测试全绿。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；-race 全绿
+（storage/cache/budget/wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+阶段 5（B500–B503）至此全部完成：storage 包 37 项测试、cache 12 项、
+budget 13 项，全部门禁绿灯。
+
+回滚：git revert 本提交。

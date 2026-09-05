@@ -224,6 +224,13 @@ func (s *WorkspaceState) Configured() (bool, error) {
 	return groupID != "", nil
 }
 
+// ConfiguredRootID returns the raw configured root identifier ("auto" or a
+// fixed id), mirroring Python's workspace.configured_root_id attribute. It
+// is fixed at construction and never reloaded.
+func (s *WorkspaceState) ConfiguredRootID() string {
+	return s.configuredRootID
+}
+
 // Update validates and persists a new selection, then adopts it in memory
 // for every field still on auto. Like Python, configured (non-auto) values
 // are never overwritten.
