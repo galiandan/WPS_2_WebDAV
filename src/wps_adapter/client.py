@@ -1068,8 +1068,10 @@ class WpsDriveClient:
 
         try:
             # A single root listing proves that the selected group/root is
-            # readable without fetching a complete directory.
-            self.list_entries(root_id, count=1)
+            # readable without fetching a complete directory.  D-02: the
+            # whole status path stays read-only, so this listing must never
+            # trigger the refresh-token grant.
+            self.list_entries(root_id, count=1, retry_on_401=False)
         except WpsApiError as exc:
             return self._status_from_error(
                 exc,
@@ -1435,6 +1437,7 @@ class WpsDriveClient:
         review_pic_thumbnail: bool | None = None,
         with_sharefolder_type: bool | None = None,
         next_filter: str | None = None,
+        retry_on_401: bool = True,
     ) -> ListPage:
         """List a remote folder using the captured v5 endpoint shape."""
 
@@ -1463,6 +1466,7 @@ class WpsDriveClient:
         payload = self._request_json(
             f"/3rd/drive/api/v5/groups/{quote(selected_group_id, safe='')}/files",
             query=query,
+            retry_on_401=retry_on_401,
         )
         raw_entries = payload.get("files", [])
         if not isinstance(raw_entries, list):

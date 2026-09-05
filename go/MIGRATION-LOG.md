@@ -1079,3 +1079,69 @@ wps/pyjson.go，无新依赖。
 已更新。
 
 回滚：git revert 本提交。
+
+## B402 登录状态检查
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B402 执行；必读 client.py:832-1191。
+新增 wps/status.go 与 status_test.go。含 D-02 决策的 Python/Go 同步
+修正（见下）。
+
+- 未配置直接返回 not_configured 不发网：凭据读取失败且"凭据文件缺失"
+  （FileCredentialSource 任一非空路径 stat 失败，对齐 os.path.exists
+  的宽松语义）→ not_configured；凭据值校验失败（如控制字符）且文件
+  都在 → invalid_response；快照 cookie 为空 → not_configured；
+  group 未解析（503 WpsApiError）→ not_configured。workspace 文件
+  本身的 ConfigError 与 Python 一样向上抛出（CheckStatus 返回错误而
+  非状态值）。
+- 登录预检：account 主机 /api/v3/islogin（accountBaseURL 推导或配置
+  值，B401 已移植校验）；islogin 标记可判定时按其判定，不可判定视为
+  已登录（对齐 OpenList 兼容行为）；标记未知 → invalid_response，
+  false → session_expired(401)。粗粒度 account_type：布尔标记 →
+  business/personal；companyid 类字段（bool/数值/字符串语义逐条对齐
+  Python 的 ==0 与 strip 判断）→ business；否则 unknown。json.Number
+  Int64 失败（如 1.5）与 Python float → None 一致。
+- 根预检：对 /3rd/drive/api/v5/groups/{group}/files 发起
+  parentid/offset=0/count=1/orderby=mtime/order=desc 的只读列表，
+  group 段用 quote(safe='') 语义的 quotePathSegment 编码；响应校验
+  files 必须为 list、result 字符串非 ok 即错（与 list_entries 的
+  状态可观测分支一致；完整分页解析在 B404 接入）。
+- D-02 同步修正：决策表已批准"status 全流程不得刷新"。Go 全路径
+  RetryOn401=false；Python list_entries 增加 retry_on_401 参数
+  （默认 True 不变），_probe_status 传 False；契约特征测试
+  DEC-D02-A 从断言"会刷新"改为断言"绝不刷新"（该测试注释本就写明
+  修正后的契约方向）；CHANGELOG [Unreleased] 增加发布说明。Python
+  套件新增 1 项（169 项全绿）。
+- 六态映射：connected / session_expired / permission_denied（仅
+  workspace 阶段 403/404，wps 保持 connected）/ invalid_response /
+  not_configured / upstream_unavailable；只含固定脱敏字段
+  （status/wps/workspace/account_type/last_checked_at/retry_after）。
+- 缓存与退避：marker = cookie\x00csrf\x00group\x00root（凭据快照+
+  group+root；控制字符已在校验层拒绝，\x00 不会碰撞），marker 变化
+  即失效；成功缓存 StatusProbeTTL（默认 30s），失败缓存
+  StatusFailureBackoff（默认 5s）；命中时 connected 返回
+  retry_after=0，失败返回剩余秒（ceil）。
+- singleflight：进程内 inflight + done channel 广播；等待者 deadline
+  = max(timeout,1)+1s，超时返回 upstream_unavailable(retry_after=1)；
+  等待者醒来后重新走 marker/缓存/inflight 判定循环（修复 Python 中
+  两个等待者同时醒来可能互相覆盖 inflight 归属的竞态；行为只更严）。
+  偏差：Python 等待者醒来后即使 marker 已变也可能返回他人 marker 的
+  缓存，Go 重查 marker 后以自己的 marker 重新探测（无人钉住该怪癖，
+  Go 行为更正确）。
+- 测试 15 项：预检两次请求+缓存命中、未配置不发网、凭据文件缺失、
+  islogin 401 不刷新、workspace 403 → permission_denied、畸形 islogin
+  → invalid_response、失败退避复用（retry_after≥1、1 次请求）、并发
+  singleflight（2 goroutine 共享 2 次请求）、根列表 401 不触发 grant
+  （D-02）、marker 失效、传输失败/500 → upstream_unavailable、凭据值
+  控制字符 → invalid_response、root_id 必填、GroupID 三态解析、
+  quotePathSegment、statusTruth/accountType 表、等待者超时路径。全部
+  使用虚构值。
+
+检查：go fmt/go vet 无差异；wps 32 项 + 全套 go test 全绿；-race
+全绿（wps -count=4）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已更新。
+
+回滚：git revert 本提交；Python/契约侧同步回滚 client.py 的
+retry_on_401 参数、test_decisions.py 与 CHANGELOG 对应行。

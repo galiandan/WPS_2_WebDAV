@@ -230,6 +230,35 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(opener.requests), 1)
         self.assertEqual(urlsplit(opener.requests[0][0].full_url).path, "/api/v3/islogin")
 
+    def test_status_root_list_401_does_not_refresh(self) -> None:
+        """D-02: the root listing inside check_status must never refresh."""
+
+        class ExpiredRootOpener:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def open(self, request, timeout: float):
+                self.requests.append((request, timeout))
+                if len(self.requests) == 1:
+                    return FakeResponse(b'{"islogin":true}')
+                raise HTTPError(request.full_url, 401, "expired", {}, BytesIO())
+
+        opener = ExpiredRootOpener()
+        client = WpsDriveClient(
+            WpsClientConfig(group_id="group-1", cookie="Cookie-secret"),
+            opener=opener,
+        )
+
+        result = client.check_status(root_id="0")
+
+        self.assertEqual(result.status, "session_expired")
+        self.assertEqual(result.wps, "session_expired")
+        self.assertEqual(len(opener.requests), 2)
+        self.assertEqual(
+            urlsplit(opener.requests[1][0].full_url).path,
+            "/3rd/drive/api/v5/groups/group-1/files",
+        )
+
     def test_status_distinguishes_workspace_permission_failure(self) -> None:
         class PermissionOpener:
             def __init__(self) -> None:

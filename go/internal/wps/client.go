@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/credentials"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
 
@@ -117,6 +118,15 @@ type Client struct {
 	// credentialRefreshLock serializes 401 refresh grants so a rotated rtk
 	// cookie cannot be overwritten by a concurrent grant response.
 	credentialRefreshLock sync.Mutex
+
+	// Status cache fields (guarded by statusMu). statusDone is closed when
+	// the current inflight probe finishes; waiters select on it.
+	statusMu          sync.Mutex
+	statusInflight    bool
+	statusDone        chan struct{}
+	statusCache       *model.WpsStatus
+	statusCacheUntil  time.Time
+	statusCacheMarker string
 }
 
 // Option adjusts a Client at construction. The options are test seams that

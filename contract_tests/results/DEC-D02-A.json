@@ -2,5 +2,5 @@
   "request": "GET /api/v1/status while every list returns 401",
   "status": 200,
   "wps_status": "session_expired",
-  "refresh_command_ran": true
+  "refresh_command_ran": false
 }

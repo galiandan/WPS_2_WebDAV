@@ -90,7 +90,7 @@ class TestD01VirtualRoot(DecisionTests):
 class TestD02StatusRefresh(DecisionTests):
     """D-02: does the status path trigger the credential refresh command?"""
 
-    def test_a_status_root_list_triggers_refresh_on_401(self) -> None:
+    def test_a_status_root_list_does_not_refresh_on_401(self) -> None:
         marker_dir = tempfile.mkdtemp(prefix="wps-d02-")
         marker = os.path.join(marker_dir, "refresh-marker")
         with Service(
@@ -118,10 +118,9 @@ class TestD02StatusRefresh(DecisionTests):
             )
             self.assertEqual(status, 200, body)
             self.assertEqual(payload.get("status"), "session_expired")
-            # Current behavior: the status root listing retries with the
-            # refresh command; the corrected contract would forbid refresh
-            # on the whole status path.
-            self.assertTrue(refreshed, "refresh command did not run during status")
+            # D-02 ratified: the whole status path stays read-only, so the
+            # 401 on the root listing must not trigger the refresh command.
+            self.assertFalse(refreshed, "refresh command ran during status")
 
 
 class TestD03BudgetMultiplication(DecisionTests):
