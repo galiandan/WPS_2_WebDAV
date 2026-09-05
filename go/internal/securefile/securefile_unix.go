@@ -58,20 +58,6 @@ func validateParent(path string, requireExisting bool) error {
 	return nil
 }
 
-// rawDirName mirrors os.path.dirname: a pure string split that keeps ".."
-// and "." components unnormalized, so the walk below sees exactly what the
-// Python realpath/abspath comparison would see.
-func rawDirName(path string) string {
-	index := strings.LastIndexByte(path, '/')
-	if index < 0 {
-		return ""
-	}
-	if index == 0 {
-		return "/"
-	}
-	return path[:index]
-}
-
 // parentHasSymlinkComponent reproduces os.path.realpath(parent) !=
 // os.path.abspath(parent) by walking every component, including ones above
 // a missing tail that filepath.EvalSymlinks cannot resolve.

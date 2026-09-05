@@ -722,7 +722,7 @@ read.go（平台无关逻辑）：
 - CheckCredentialValues：值级检查，控制字符（<0x20 或 0x7F）与大小
   上限，防凭据值变成出站 HTTP 头。
 - 错误只有类别码（Code），Error() 固定文案，永不携带路径或内容；
-  调用方（B303/B304/B400）负责把码翻译成各自的 Python 奇迹文案
+  调用方（B303/B304/B400）负责把码翻译成各自的 Python 对应文案
   （workspace 与 settings 对同一条件的文案本就不同，码一一区分：
   预检过宽 file_unsafe vs 打开后 post_open_unsafe 等共 17 类）。
 
@@ -748,6 +748,54 @@ unsupported_platform 失败关闭，不伪装 POSIX mode 检查通过（交叉�
 行为一致）。
 
 检查：go fmt/go vet 无差异；securefile 16 项 + 全套 go test 全绿；
+-race 全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
+
+## B302 原子写
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B302 执行；必读 client.py:291-314、
+workspace.py:273-318、settings.py:169-196。write.go 并入
+internal/securefile，与 B301 读取共用 validateParent/错误码体系。
+
+- WriteAtomic（workspace/settings 纪律）：仅校验父目录（缺失允许，
+  与 Python _persist_locked 一致——缺目录在 mkstemp 阶段失败）；在同
+  目录建 .{name}. 前缀临时文件（os.CreateTemp 默认 0600）；写入全部
+  内容后追加单个 "\n"（三个 Python 调用点都写尾部换行，统一收敛到
+  原语里）；flush+fsync+close 后 os.Rename 原子替换；成功后 Lstat 返回
+  新 mtime 纳秒（供 B303/B304 刷新缓存）；失败时 defer 清理临时文件，
+  旧目标保持可读。
+- WriteCredentialAtomic（凭据纪律）：父目录必须已存在，写入前
+  chmod 0700 收紧（"protect credential directory" 阶段）。
+- WriteCredentialPair（Cookie/CSRF 成对更新原语）：先 ReadSecret 快照
+  两半（快照失败则不写任何文件——对齐 Python _snapshot 先行）；任一
+  半写失败时用快照回写两半（回滚错误吞掉，返回首个错误），保证成对
+  不出现半新半旧。
+- 错误码按写入阶段细分：chmod_dir/temp_create/temp_write/replace +
+  读取侧父目录码，调用方映射各自的 Python 文案；错误不携带路径或
+  内容。
+- rename 语义记录：Linux rename(2) 原子替换是生产验收标准；Windows
+  走 MoveFileEx(REPLACE_EXISTING) 属开发 fixture 级（且 securefile 在
+  Windows 整体 fail-closed）；两平台 rename 均直接替换目标目录项，
+  与 Python os.replace 一致（对 symlink 目标也是替换条目本身）。
+- 已知加强（待负责人知悉）：Go 侧凭据写入也执行 fsync；Python 凭据
+  写入只 close 不 fsync。行为只强不弱，观察面无差异。
+
+测试（write_test.go，11 项）：正常写（0600+尾换行+mtime）、原子替换
+旧目标、临时文件创建失败（只读目录）旧目标保持、写入中途失败（注入
+write seam）旧目标保持且无临时残留、rename 失败（目标是非空目录）清
+理临时、父目录过宽/缺失拒绝、凭据写收紧父目录到 0700、成对更新、成
+对失败回滚两半（csrf 父目录过宽 → cookie 回滚、csrf 原样、返回原错
+误）、快照失败不写任何文件。chmod 阶段失败作为非 root 无法确定性注
+入（属主总可 chmod），该阶段错误码与映射靠代码审查覆盖。
+
+顺带修正 B301 日志错别字（"对应文案"）。
+
+检查：go fmt/go vet 无差异；securefile 27 项 + 全套 go test 全绿；
 -race 全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
 通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
 已更新。

@@ -164,6 +164,20 @@ func CheckCredentialValues(cookie string, csrfToken string) error {
 	return nil
 }
 
+// rawDirName mirrors os.path.dirname: a pure string split that keeps ".."
+// and "." components unnormalized, so the parent walk sees exactly what the
+// Python realpath/abspath comparison would see.
+func rawDirName(path string) string {
+	index := strings.LastIndexByte(path, '/')
+	if index < 0 {
+		return ""
+	}
+	if index == 0 {
+		return "/"
+	}
+	return path[:index]
+}
+
 // checkPathShape rejects paths the discipline can never accept. Credential
 // paths only reject NUL (client.py) while state paths also reject CR/LF
 // (workspace.py/settings.py).
