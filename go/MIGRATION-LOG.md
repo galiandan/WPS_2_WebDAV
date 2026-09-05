@@ -611,3 +611,41 @@ linux arm64 全部产出可执行文件；release-manifest.txt 已更新；Pytho
 workspace 的私有性校验在加载期执行（与 Python 一致，非偏差）。
 
 回滚：git revert 本提交。
+
+## B202 生命周期和信号
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B202 执行；服务仍是仅 /healthz 的空
+HTTP 服务，不访问 WPS。
+
+- 信号处理：SIGINT/SIGTERM 经 signal.NotifyContext 触发停止接收新
+  连接，shutdownServer(10s) 有期限优雅排空；期限到达时 server.Close()
+  强制关闭残留连接。信号触发的停止一律退出 0（对齐 Python
+  KeyboardInterrupt → 0），强制关闭仅向 stderr 打一行 "adapter
+  shutdown forced: ..."。
+- 启动失败（配置错误、公共 bind 拒绝、监听冲突/失败）退出 1 并输出
+  "adapter failed: ..."；启动成功保持两行非敏感监听输出
+  （listening=... 与 webdav=... rest=...）。
+- 非 loopback bind 且未启用 Basic Auth 拒绝启动（B201 的
+  CheckPublicBind，语义与 Python 相同）。
+- 关闭顺序：Shutdown/Close 返回后才退出进程，信号通知经 defer stop()
+  释放；无 package init 网络行为，check-config 全程无网络请求（配置
+  与 workspace 均为本地文件读取）。
+
+进程级测试（cmd/wps-adapter/main_test.go，TestMain 先构建真实二进制，
+7 项全绿）：
+- 启动输出两行监听地址 + SIGTERM 退出 0；
+- SIGINT 退出 0；
+- 存活期间 GET /healthz 返回契约 JSON；
+- 端口被占用 → 退出 1 + "adapter failed"；
+- 0.0.0.0 无凭据 → 退出 1 + "refusing a non-local bind"；
+- 0.0.0.0 + ADAPTER_USERNAME/PASSWORD → 正常启动并退出 0；
+- 半开连接挂在服务端 → SIGTERM 后在期限内强制关闭并退出 0
+  （超时强停路径）。
+
+检查：go fmt/go vet 无差异；go test ./... 与 -race 全绿（cmd 7 项、
+config 14 组、workspace 5 组、app 2 组）；Python 参照套件 168 项全绿；
+manifest 已更新。
+
+回滚：git revert 本提交。

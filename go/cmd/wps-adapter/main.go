@@ -143,11 +143,11 @@ func runServe(args []string) int {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
-			return 1
+		// Stop accepting connections, then drain with a deadline. Like the
+		// Python service, a signal-initiated stop is a normal stop: even a
+		// forced shutdown still exits 0.
+		if err := shutdownServer(server, shutdownTimeout); err != nil {
+			fmt.Fprintf(os.Stderr, "adapter shutdown forced: %v\n", err)
 		}
 		return 0
 	case err := <-serveErr:
@@ -157,4 +157,21 @@ func runServe(args []string) int {
 		}
 		return 0
 	}
+}
+
+// shutdownTimeout bounds the graceful drain after SIGINT/SIGTERM.
+const shutdownTimeout = 10 * time.Second
+
+// shutdownServer stops new connections and waits up to the deadline for the
+// active ones; on deadline expiry the leftovers are force-closed.
+func shutdownServer(server *http.Server, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		if closeErr := server.Close(); closeErr != nil {
+			return closeErr
+		}
+		return err
+	}
+	return nil
 }
