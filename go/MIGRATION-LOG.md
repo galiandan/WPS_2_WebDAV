@@ -1145,3 +1145,41 @@ darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
 
 回滚：git revert 本提交；Python/契约侧同步回滚 client.py 的
 retry_on_401 参数、test_decisions.py 与 CHANGELOG 对应行。
+
+## B403 远端 entry 解析
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B403 执行；必读 client.py:1377-1421。
+新增 wps/entries.go 与 entries_test.go。
+
+- entryFromItem 镜像 _entry_from_item：id 缺失或 null → 固定错误
+  "normalize file metadata"（upstream，错误永不携带条目内容，测试
+  固定）；name（fname）必须是非空字符串、非 "."/".."、无 / \\ NUL、
+  无控制字符、UTF-8 字节 ≤4096（Go len 即字节数，与 Python
+  encode 后长度一致）；kind 只认 file/folder，缺失/未知/非字符串一律
+  unknown（未知 kind 不破坏整页解析的页级容忍在 B404 的跳过规则中
+  闭环）；size 只接受非负整数 token（json.Number Int64；"5.0"/负数/
+  布尔/字符串 → null）；mtime 非 null 即 str() 化；etag（fsha）仅
+  接受无控制字符且 ≤4096 字节的字符串，否则 null；parentid 非 null
+  即 str()；link_id 按 Python 真值判定（空串/0/False/null → null）。
+- pyStr 镜像 Python str()：数字保留原始 token、布尔输出 True/False
+  （Python repr 怪癖，测试固定）；pyTruthy 镜像真值（0/0.0/空串/
+  空容器假，NaN 真）。
+- raw 保存在 model.RemoteEntry.Raw（内部字段），序列化层由 B300 的
+  MarshalJSON/Public 排除——测试断言公开投影不含 link_id 与
+  signed_url。
+- 已知收窄：超出 int64 的 size token（Python 任意精度 int 可保留）
+  归为 null；id 为 list/dict 时 Go 以 %v 文本化（Python 为 repr 格式
+  且现实中不会出现）。其余字段逐一对齐。
+- 测试 9 项：完整形态（含 Raw 保留与公开投影隔离）、id 缺失/null、
+  id 字符串化（含布尔怪癖）、name 12 拒 3 收（含 4096 边界与多字节）、
+  kind 5 态、size 7 态、mtime 4 态、etag 6 态（4096 边界收）、
+  parent/link 真值 10 态、pyTruthy 12 态。全部虚构值。
+
+检查：go fmt/go vet 无差异；wps 41 项 + 全套 go test 全绿；-race
+全绿（wps -count=4）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已更新。
+
+回滚：git revert 本提交。
