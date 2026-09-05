@@ -1232,3 +1232,63 @@ _probe_status → list_entries 的调用关系一致）。
 已更新。
 
 回滚：git revert 本提交。
+
+## B500 路径解析与 href 编码
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B500 执行；必读 storage.py:27-81、
+D-04 决策（MIGRATION-LOG B100 决策表 + DEC-D04-A 特征证据）。新建
+internal/storage 包（path.go），目标架构 4.3 规定的位置
+（storage/path.go 远端路径解析与编码）。
+
+- D-04 落地：Go 全入口只解码一次。SplitRemotePath 接收传输层已解码
+  的业务路径，内部绝不二次 percent-decode——含 '%' 的段保持字面。
+  与 Python 参照的差异（Python 在 WSGI 解码后 split_remote_path 又
+  unquote 一次，导致 %2F 名字 404、需 %25252F 才命中）按 D-04 决策
+  作为批准修正移植；golden 表用 DEC-D04-A 的反向用例固定（wire
+  %252F → 业务段 "%2F" 命中；wire %25252F → 业务段 "%252F"）。
+- SplitRemotePath 校验顺序与 Python 逐条对应：必须以 '/' 开头
+  （"remote paths must start with '/'"）→ utf8.ValidString
+  （"remote path is not valid UTF-8"，对应 Python unquote
+  errors=strict）→ 全路径禁止字符扫描（反斜线/NUL/C0/DEL →
+  "remote path contains a forbidden character"）→ 根返回空 → 弹出
+  恰好一个尾随空段 → 空/./.. 段（"…empty or traversal component"）
+  → 段内 NUL、'/'、>4096 字节（"…forbidden component"）。错误以
+  model.StorageError/KindInvalidPath 承载，文案与 Python 一致。
+- JoinRemotePath 镜像 join_remote_path：逐段拒绝空/./..//'/'/反斜线/
+  控制字符/超 4096 字节（"remote path contains an invalid
+  component"）。trailing_slash 参数保留以对齐 Python 调用点——实测
+  参照实现的 posixpath.normpath 总是吞掉尾斜杠（'/a/b/' → '/a/b'），
+  故两种取值结果相同；该 quirk 用 golden 固定（"trailing slash flag
+  is neutralized"用例），避免后续被静默"修复"。
+- href 编码：QuoteRemoteSegment 逐段镜像 urllib.parse.quote(part,
+  safe="")——仅 A-Za-z0-9-._~ 保留，其余字节（含 + @ / ; , : $ & =
+  ? 与空格）全部 %XX 大写。Go 的 url.PathEscape 会保留保留字符，
+  不满足参照字节形状，故自实现并加 golden 对比用例。EncodedPath
+  以 '/' + 逐段编码拼接（对应 _href 的 "/".join(quote(...))），
+  DAV 前缀由 HTTP 层拼接（Stage 7）。
+- 传输层契约测试（TestTransportDecodeContract）固定 HTTP 阶段必须
+  使用的原语：DAV 路径走 url.PathUnescape 语义（'+' 保持字面）、
+  REST query 走表单解析语义（'+' → 空格）、两者都恰好解码一次且
+  不递归、%FF 解码出的非法 UTF-8 由 SplitRemotePath 以
+  "remote path is not valid UTF-8" 拒绝、url.ParseRequestURI 的
+  Path 即单次解码结果（%2F 解码后与真实 '/' 不可区分）。
+  Stage 7 的 handler 必须直接把 r.URL.Path/解析后的 query 值交给
+  SplitRemotePath，且不得经 ServeMux（其自动路径清理会改写业务路径）。
+- 记录的行为差异（D-04 单次解码的连带结果）：wire 裸 %FF 在 Python
+  参照中经 latin-1 式解码可能变成 'ÿ' 段，Go 传输层解码为原始字节
+  后由业务层拒绝；该差异属于 D-04 批准的入口解码语义修正，端到端
+  golden 在 HTTP 阶段补齐。
+- 测试 10 组：split golden 15 收 + 24 拒（含校验顺序、4096 边界、
+  多字节边界、仅弹一个尾随空段、traversal 先于长度上报）、join
+  golden 9 收 + 9 拒、split↔join 往返 6 例、segment 编码 12 例
+  （含 url.PathEscape 对比）、单次解码往返、EncodedPath 4 例、
+  传输层契约 5 组。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿（新增 storage 包）；
+-race 全绿（wps+storage -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
