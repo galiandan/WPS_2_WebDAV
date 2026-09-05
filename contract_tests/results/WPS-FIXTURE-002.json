@@ -1,10 +1,10 @@
 {
   "credential_violations": [],
-  "object_put_sha256": "a295fc0cc419cf1c6d6ca1b5cdc023be",
+  "object_put_sha256": "492635c4bf30b324e0be37c993f5c291",
   "part_md5s": [
-    "ff8752fd6daaa53478e131ec6a565ea3",
-    "1d9aeb64c02229377e5f39868e9bb63d",
-    "a295fc0cc419cf1c6d6ca1b5cdc023be"
+    "5fd90dab2372508e7fdd5a590b54da58",
+    "85127c546f40b14b8b5217c298612119",
+    "492635c4bf30b324e0be37c993f5c291"
   ],
   "request_contract_violations": [],
   "served": {

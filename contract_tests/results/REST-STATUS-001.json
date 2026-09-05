@@ -2,7 +2,7 @@
   "content_type": "application/json; charset=utf-8",
   "payload": {
     "account_type": "business",
-    "last_checked_at": 1788613565,
+    "last_checked_at": 1788614234,
     "retry_after": 0,
     "status": "connected",
     "workspace": "ready",

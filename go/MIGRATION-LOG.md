@@ -1352,3 +1352,57 @@ windows amd64、darwin arm64 通过；Python 参照套件 169 项、
 contract_tests 119 项全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B502 元数据缓存
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B502 与 03-target-architecture.md
+（4.3 cache/metadata.go、"缓存键至少包含 group ID + root generation
++ parent ID"、epoch/generation 防迟到污染）执行；参照 storage.py
+的 _children 缓存体（TTL 2.0s、max_cached_folders 1024、最旧条目
+淘汰、读检查 cached[0] >= now）、_sync_workspace_root/invalidate
+/set_root_id 的清理时机。新建 internal/cache 包（cache/metadata.go）。
+
+- 缓存键 Key{GroupID, Generation, ParentID}：group 与 root generation
+  双重隔离，切空间/切根后旧 entry 绝不可能被新键命中（Python 用
+  整体 clear 达成同一目的；Go 的 generation 键控额外保证迟到加载
+  无法写入新代）。
+- GetOrLoad：冷 miss 同键合并（per-key inflight + done channel，
+  leader 在锁外加载，waiter 等待后取同一结果）；不同键天然并行
+  （加载不持有全局锁）。完成条件达成：并发冷目录恰好一次完整上游
+  分页（8 并发调用者 loader 计数 =1 的测试）。
+- 只缓存"完整且成功"的结果：loader 返回 error → 传播给该次全部
+  调用者且绝不入库（连续 3 次都重新加载的测试）；空目录是合法完整
+  结果，正常缓存。"部分分页"由 B503 的 loader 契约保证（要么完整
+  iter_entries 结果要么错误），缓存层结构上只收 (结果, nil)。
+- 淘汰：仅在新键插入且达到 max 时驱逐；按 expireAt 最早优先，
+  同刻并列按插入序（seq 单调）——Python min() 在插入序 dict 上
+  的行为等价复现（Go map 无序，必须显式 seq 才能确定性并列），
+  并列驱逐有确定性测试。过期条目占位不删、驱逐时最先出局
+  （Python 同款行为）测试固定。TTL 读检查 now.After(expireAt)
+  取反，恰好等于过期时刻仍有效（与 Python >= 一致）。
+- Invalidate：清空全部条目并 bump generation。成功 mutation 与
+  workspace 重映射共用（storage 侧调用点在 B503 接线）。迟到加载
+  的 leader 用捕获的 generation 与当前值比较，不一致则丢弃结果
+  不入库（"迟到请求不污染新 workspace"，严格强于 Python 的
+  锁外写回竞态），测试固定：阻断式 loader + Invalidate + 放行，
+  断言新代 Get 必 miss。
+- 默认值 TTL 2s / 1024 目录（Python storage.py 默认），零值回落
+  默认（沿用此前记录的 Go 侧约定）；TTL 为负/目录数非正的校验
+  文案与 Python 一致（"cache_ttl must not be negative"/
+  "max_cached_folders must be positive"）。
+- 测试 12 组：校验与默认值、成功结果缓存（含空目录）、错误不缓存、
+  同键合并（8 caller 恰 1 次加载）、异键并行（双 loader 屏障）、
+  键三分量隔离、TTL 过期与重载、确定性并列驱逐（两阶段）、
+  过期条目优先驱逐、迟到加载不污染 + generation 递增 + 新代重建、
+  全清、6 goroutine 加载/失效混合 race。
+- cache 包对 wps/storage 无反向依赖，仅依赖 model（符合依赖方向
+  第 4/5 条）；B503 单空间 Storage 将注入该缓存并接线清理点。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿（新增 cache 包）；
+-race 全绿（cache+budget+wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
