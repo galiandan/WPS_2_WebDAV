@@ -1,0 +1,15 @@
+{
+  "payload": {
+    "entry": {
+      "etag": null,
+      "id": "bench-file-1",
+      "kind": "file",
+      "modified_at": "1788268272",
+      "name": "bench-renamed2.txt",
+      "parent_id": "0",
+      "size": 11
+    },
+    "path": "/bench-renamed2.txt"
+  },
+  "status": 200
+}

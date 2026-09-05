@@ -1,0 +1,17 @@
+{
+  "object_put_sha256": "c8c787ecf3a525809ca77eec54291b4526c890437b552956da61fa40cbd9128d",
+  "object_put_size": 20,
+  "payload": {
+    "entry": {
+      "etag": null,
+      "id": "bench-file-new",
+      "kind": "file",
+      "modified_at": "1788268272",
+      "name": "bench-uploaded.bin",
+      "parent_id": "0",
+      "size": 20
+    },
+    "path": "/bench-uploaded.bin"
+  },
+  "status": 201
+}

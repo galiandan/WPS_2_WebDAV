@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"query parameter 'path' must contain one non-empty path\"}",
+  "status": 400
+}

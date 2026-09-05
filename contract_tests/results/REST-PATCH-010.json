@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"an entry cannot be moved into itself\"}",
+  "status": 400
+}

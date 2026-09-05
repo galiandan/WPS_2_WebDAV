@@ -1,0 +1,12 @@
+{
+  "content_type": "application/json; charset=utf-8",
+  "payload": {
+    "account_type": "business",
+    "last_checked_at": 1788585436,
+    "retry_after": 0,
+    "status": "connected",
+    "workspace": "ready",
+    "wps": "connected"
+  },
+  "status": 200
+}

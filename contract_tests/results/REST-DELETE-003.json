@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"the root cannot be deleted\"}",
+  "status": 400
+}

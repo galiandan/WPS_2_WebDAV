@@ -1,0 +1,8 @@
+{
+  "body": "bench-bytes",
+  "content_disposition": "attachment; filename=\"download.txt\"; filename*=UTF-8''bench-one.txt",
+  "content_length": "11",
+  "content_type": "text/plain",
+  "sha256": "ca809146f650802ba8c8a4e1077e4bbb24745af5e521c3837128515fe59e1fb2",
+  "status": 200
+}

@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"JSON field 'name', 'destination' or 'parent_path' is required\"}",
+  "status": 400
+}

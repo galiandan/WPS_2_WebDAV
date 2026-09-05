@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"cross-folder move with rename is not supported\"}",
+  "status": 501
+}

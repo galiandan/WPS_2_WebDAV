@@ -1,0 +1,17 @@
+{
+  "alias_name": "bench-created-alias",
+  "alias_status": 201,
+  "payload": {
+    "entry": {
+      "etag": null,
+      "id": "bench-folder-new",
+      "kind": "folder",
+      "modified_at": "1788268272",
+      "name": "bench-created",
+      "parent_id": "0",
+      "size": 0
+    },
+    "path": "/bench-created"
+  },
+  "status": 201
+}

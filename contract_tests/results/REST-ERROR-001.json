@@ -1,0 +1,9 @@
+{
+  "payload": {
+    "code": "wps_unavailable",
+    "error": "upstream WPS request failed",
+    "upstream_status": 500
+  },
+  "retry_after": null,
+  "status": 502
+}

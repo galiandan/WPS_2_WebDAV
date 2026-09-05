@@ -1,0 +1,14 @@
+{
+  "dot_component": {
+    "body": "{\"error\":\"remote path contains an empty or traversal component\"}",
+    "status": 400
+  },
+  "dotdot_first": {
+    "body": "{\"error\":\"remote path contains an empty or traversal component\"}",
+    "status": 400
+  },
+  "dotdot_middle": {
+    "body": "{\"error\":\"remote path contains an empty or traversal component\"}",
+    "status": 400
+  }
+}

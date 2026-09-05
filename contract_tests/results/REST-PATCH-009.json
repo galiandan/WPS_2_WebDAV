@@ -1,0 +1,16 @@
+{
+  "payload": {
+    "entry": {
+      "etag": "bench-etag-bench-file-1",
+      "id": "bench-file-1",
+      "kind": "file",
+      "modified_at": "1788268272",
+      "name": "bench-one.txt",
+      "parent_id": "0",
+      "size": 11
+    },
+    "path": "/bench-one.txt"
+  },
+  "status": 200,
+  "upstream_move_calls": 0
+}

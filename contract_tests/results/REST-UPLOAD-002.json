@@ -1,0 +1,9 @@
+{
+  "conflict_request_upstream_paths": [
+    "/3rd/drive/api/v5/groups/bench-group/files"
+  ],
+  "default_existing_name_body": "{\"error\":\"overwrite is not enabled for: /bench-one.txt\"}",
+  "default_existing_name_status": 409,
+  "new_name_with_upstream_403_status": 502,
+  "overwrite_true_status": 201
+}
