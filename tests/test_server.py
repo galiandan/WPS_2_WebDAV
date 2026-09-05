@@ -416,6 +416,17 @@ class ServerTests(unittest.TestCase):
             status, _headers, _body = self.request("GET", path)
             self.assertEqual(status, 404, path)
 
+    def test_web_assets_send_no_store_with_exact_length(self) -> None:
+        for path in ("/assets/style.css", "/assets/app.js"):
+            status, headers, body = self.request("GET", path)
+            self.assertEqual(status, 200, path)
+            self.assertEqual(headers["Cache-Control"], "no-store", path)
+            self.assertEqual(headers["Content-Length"], str(len(body)), path)
+
+    def test_write_methods_on_web_assets_keep_the_legacy_result(self) -> None:
+        status, _headers, _body = self.request("POST", "/assets/style.css")
+        self.assertEqual(status, 404)
+
     def test_web_asset_head_sends_metadata_only(self) -> None:
         status, headers, body = self.request("HEAD", "/assets/style.css")
         self.assertEqual(status, 200)

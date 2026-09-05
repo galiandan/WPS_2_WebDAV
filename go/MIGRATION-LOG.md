@@ -469,3 +469,37 @@ app.js 与文件字节全等且无 token；settings PATCH 后 GET / 不再内嵌
 检查：tests 166 项全绿；contract_tests 119 项全绿；manifest 已更新。
 
 回滚：git revert 本提交（安全改动独立成提交，便于单独回退）。
+
+## M2/F5 Python 静态桥收尾与 M2 里程碑状态
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F5 收尾（F6 Go 嵌入属 B1301 阶段）。
+
+- 桥接能力即最终形态：仅白名单 {style.css, app.js} 参与 /assets/ 路由，
+  index.html 仅经 /、/web、/web/ 三入口返回；文件名不参与路径拼接，
+  不接受用户输入转换磁盘路径。
+- 新增测试：资源响应 no-store 且 Content-Length 与 body 全等（两个
+  资源）；POST /assets/* 维持现有 404 兼容结果。
+- 发布清单已包含 go/web/index.html、go/web/style.css、go/web/app.js
+  三个文件（测试强制校验）。
+
+M2 里程碑状态（08-executor-checklist.md）：
+- [x] M200 三文件已从 Python 字符串分离（go/web/）。
+- [x] M201 Python 服务白名单提供拆分后的资源。
+- [x] M202 根名称经 GET /api/v1/settings 获取；响应 HTML 不含用户
+  名称（字节全等断言）；首渲染前 await settings 避免名称闪烁；
+  浏览器侧确认列入门禁。
+- [ ] M203 桌面/窄屏/键盘/拖放/上传 E2E —— 本环境无浏览器，待负责人
+  在具备浏览器的环境执行（§17 最小用例集 30 项）。
+- [x] M204 CSP 已移除 unsafe-inline（头级别已验证；控制台无违规待
+  浏览器确认）。
+- [ ] M205 预取/缓存验收（24 上限、2 并发、30s TTL、命中、失效、导航
+  竞态）—— 同样待浏览器环境。
+
+负责人侧待办汇总：四张基线截图（F0）、§17 最小用例集、§15 五视口、
+§16 可访问性、FE-02 决策追认、FE-01 修正确认。
+
+检查：tests 168 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
