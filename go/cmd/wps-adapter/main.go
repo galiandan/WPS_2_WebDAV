@@ -81,11 +81,13 @@ func runCheckConfig() int {
 	if cfg.AuthEnabled() {
 		authState = "enabled"
 	}
-	// The skeleton does not parse workspace state yet; B201 migrates the
-	// real group-id resolution and keeps this summary shape.
+	groupState := "pending-login"
+	if cfg.ResolvedGroupID() != "" {
+		groupState = "ready"
+	}
 	fmt.Printf(
-		"config=ok group_id=pending-login auth=%s dav=%s rest=%s\n",
-		authState, cfg.DAVPrefix, cfg.RESTPrefix,
+		"config=ok group_id=%s auth=%s dav=%s rest=%s\n",
+		groupState, authState, cfg.DAVPrefix, cfg.RESTPrefix,
 	)
 	return 0
 }
@@ -103,6 +105,17 @@ func runServe(args []string) int {
 		return 2
 	}
 	if err := cfg.CheckPublicBind(); err != nil {
+		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
+		return 1
+	}
+	maxConnections, requestTimeout, err := config.ParseServerRuntime()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
+		return 1
+	}
+	cfg.MaxConnections = maxConnections
+	cfg.RequestTimeout = requestTimeout
+	if err := cfg.ValidateRuntime(); err != nil {
 		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
 		return 1
 	}

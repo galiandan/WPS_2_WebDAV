@@ -542,3 +542,72 @@ linux arm64 全部产出可执行文件；release-manifest.txt 已更新；Pytho
 
 回滚：git revert 本提交；go/ 内既有 MIGRATION-LOG、benchmarks、web
 不受影响。
+
+## B201 实现配置结构
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B201 执行；重写 go/internal/config，
+新增 go/internal/workspace（加载/校验子集，热加载归 M303）。
+
+- 全部 50 个环境变量建字段/默认值/类型/规则：WPS 客户端 17 项、
+  存储 10 项、应用限额 5 项、锁 1 项、适配器网络/认证 8 项、workspace
+  3 项、根名称 1 项、serve 专属 2 项。解析顺序与 Python 求值顺序一致
+  （刷新命令 → group/root → workspace 文件 → 凭据/URL/数值串 →
+  根名称与 web-settings 路径 → client 构造校验 → storage 选项 →
+  应用限额 → 网络）。
+- 规则分类（与 Python 逐条对齐）：
+  必须为正——list_count、max_list_entries、max_cached_folders、
+  max_uploads、max_downloads、transfer_wait_timeout、max_copy_entries、
+  max_copy_depth、max_propfind_entries、max_propfind_depth、
+  max_control_body、max_response_body_bytes、max_locks、
+  max_json_response_bytes（且仅当 group 已解析或存在 spaces 时才校验
+  storage 组——Python 此时不构造 WpsStorage）；
+  允许 0——cache_ttl、status_probe_ttl、status_failure_backoff、
+  upload_min_free_bytes、max_upload_bytes；
+  允许空——group_id、cookie/csrf 文件、referer/origin/cid、spool
+  目录、刷新命令、ADAPTER 四凭据项；
+  仅解析不校验——timeout、multipart/spool/chunk/retries/delay 等
+  （Python 加载期同样不校验，测试钉住该宽松语义）；
+  serve 专属——端口范围、ADAPTER_MAX_CONNECTIONS、
+  ADAPTER_REQUEST_TIMEOUT 在 ValidateRuntime/ParseServerRuntime 中
+  处理，check-config 不校验（Python 语义）；但 ADAPTER_PORT 的解析
+  错误全命令生效（Python 在 parser 构造期即失败）。
+- 布尔仅接受 1/true/yes/on、0/false/no/off（含大小写与空白）；空串
+  视为错误。浮点镜像 Python float()：空白可剥离、溢出得 ±Inf 而非
+  报错、NaN 照单全收（Python 的 NaN 比较恒假，"不为负"检查放行）。
+  整数镜像 Python：空白剥离；±Int64 溢出报"out of range"（Python
+  无界整数会照收——记录为已记录偏差）。
+- WPS_BASE_URL/WPS_OBJECT_STORAGE_HOST_SUFFIX 镜像
+  os.environ.get(name, default)：显式置空保留空值并照常校验失败。
+  base_url 规则：HTTPS、kdocs.cn 或 *.kdocs.cn（大小写/尾点归一）、
+  禁 userinfo/query/fragment/路径；对象 suffix 归一后必须落在
+  kdocs.cn。URL/凭据/文件内容永不进入错误文案。
+- workspace：标识符 ^[A-Za-z0-9._-]{1,256}$；文件缺失→默认值；仅当
+  group/root 为 auto 或文件存在时加载并校验（Python 同款条件，含
+  "显式 id + 无文件时不校验标识符"的怪癖测试）；路径必须绝对、父目
+  录/文件 0600/0700 且属主为 root 或本用户、拒绝符号链接父目录、
+  16KiB 上限；spaces 空/超 128/组重复/名重复/非法标识符/非法名均报
+  WorkspaceConfigError 同义错误。OwnedByService 按 unix/windows 拆
+  文件（windows 为开发平台跳过，B302 securefile 正式化）。
+- BasicAuth.enabled 修正为四者任一非空（B200 骨架曾误用"成对"语义，
+  本任务按 server.py BasicAuth.enabled 修正）。
+- check-config 输出与 Python 逐字符一致（group_id ready/pending-login
+  按 ResolvedGroupID 判定）。
+
+验证：
+- go test ./...（config 14 组、workspace 5 组、app 2 组）、
+  go test -race ./... 全绿；go fmt/go vet 无差异；三平台交叉构建
+  （windows/amd64、linux/amd64、linux/arm64）全部通过。
+- Python/Go check-config 同环境对比矩阵 18 场景（成功行逐字符一致、
+  失败退出码一致）0 差异，证据 contract_tests/results/
+  B201-CHECK-CONFIG-PARITY.json；Go 错误文案按 B201 规则只含变量名与
+  规则（Python 文案含字段名/值回显——如 BROKEN_PORT 的 traceback——
+  按规范有意不同）。
+- Python 参照套件 168 项、契约 119 项保持全绿；manifest 已更新。
+
+已记录偏差（待负责人追认）：整数溢出 Go 报错而 Python 接受无界整数；
+失败文案风格（变量名 vs Python 字段名/traceback）；web-settings 与
+workspace 的私有性校验在加载期执行（与 Python 一致，非偏差）。
+
+回滚：git revert 本提交。

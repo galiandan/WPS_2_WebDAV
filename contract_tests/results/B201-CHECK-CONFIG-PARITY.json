@@ -1,0 +1,183 @@
+{
+  "EMPTY": {
+    "env": {},
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "AUTH_ONLY": {
+    "env": {
+      "ADAPTER_USERNAME": "u",
+      "ADAPTER_PASSWORD": "p"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=enabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=enabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "AUTH_FILE_ONLY": {
+    "env": {
+      "ADAPTER_USERNAME_FILE": "/tmp/ufile"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=enabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=enabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "GROUP_FIXED": {
+    "env": {
+      "WPS_GROUP_ID": "bench-group"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "GROUP_AUTO_FILE": {
+    "env": {
+      "WPS_GROUP_ID": "auto"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "GROUP_FIXED_FILE": {
+    "env": {
+      "WPS_GROUP_ID": "bench-group"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "ROOT_AUTO_FILE": {
+    "env": {
+      "WPS_ROOT_ID": "auto"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "ROOT_FIXED_FILE": {
+    "env": {
+      "WPS_ROOT_ID": "bench-root"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "GROUP_INVALID_NOFILE": {
+    "env": {
+      "WPS_GROUP_ID": "not a valid id"
+    },
+    "py_rc": 1,
+    "py_line": "adapter failed: WPS_GROUP_ID is invalid",
+    "go_rc": 1,
+    "go_line": "adapter failed: WPS_GROUP_ID is invalid",
+    "match": true
+  },
+  "PREFIX_OVERRIDE": {
+    "env": {
+      "ADAPTER_DAV_PREFIX": "dav/",
+      "ADAPTER_REST_PREFIX": "api"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api",
+    "match": true
+  },
+  "BROKEN_PORT": {
+    "env": {
+      "ADAPTER_PORT": "abc"
+    },
+    "py_rc": 1,
+    "py_line": "ValueError: invalid literal for int() with base 10: 'abc'",
+    "go_rc": 1,
+    "go_line": "adapter failed: ADAPTER_PORT must be an integer",
+    "match": true
+  },
+  "RANGE_PORT": {
+    "env": {
+      "ADAPTER_PORT": "99999"
+    },
+    "py_rc": 0,
+    "py_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "go_rc": 0,
+    "go_line": "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1",
+    "match": true
+  },
+  "BAD_BOOL": {
+    "env": {
+      "WPS_AUTO_REFRESH": "maybe"
+    },
+    "py_rc": 1,
+    "py_line": "adapter failed: WPS_AUTO_REFRESH must be a boolean",
+    "go_rc": 1,
+    "go_line": "adapter failed: WPS_AUTO_REFRESH must be a boolean",
+    "match": true
+  },
+  "BAD_BASE_URL": {
+    "env": {
+      "WPS_BASE_URL": "http://evil.com"
+    },
+    "py_rc": 1,
+    "py_line": "adapter failed: base_url must be an HTTPS WPS host without a path or credentials",
+    "go_rc": 1,
+    "go_line": "adapter failed: WPS_BASE_URL must be an HTTPS WPS host without a path or credentials",
+    "match": true
+  },
+  "BAD_SUFFIX": {
+    "env": {
+      "WPS_OBJECT_STORAGE_HOST_SUFFIX": "evil.com"
+    },
+    "py_rc": 1,
+    "py_line": "adapter failed: object_storage_host_suffix must be within kdocs.cn",
+    "go_rc": 1,
+    "go_line": "adapter failed: WPS_OBJECT_STORAGE_HOST_SUFFIX must be within kdocs.cn",
+    "match": true
+  },
+  "BAD_ROOT_NAME": {
+    "env": {
+      "WPS_ROOT_NAME": " "
+    },
+    "py_rc": 1,
+    "py_line": "adapter failed: root name must not be empty",
+    "go_rc": 1,
+    "go_line": "adapter failed: WPS_ROOT_NAME must not be empty",
+    "match": true
+  },
+  "ZERO_LIST_NO_GROUP": {
+    "env": {
+      "WPS_LIST_COUNT": "0"
+    },
+    "py_rc": 1,
+    "py_line": "adapter failed: list_count must be positive",
+    "go_rc": 1,
+    "go_line": "adapter failed: WPS_LIST_COUNT must be positive",
+    "match": true
+  },
+  "ZERO_LIST_WITH_GROUP": {
+    "env": {
+      "WPS_GROUP_ID": "bench-group",
+      "WPS_LIST_COUNT": "0"
+    },
+    "py_rc": 1,
+    "py_line": "adapter failed: list_count must be positive",
+    "go_rc": 1,
+    "go_line": "adapter failed: WPS_LIST_COUNT must be positive",
+    "match": true
+  }
+}
