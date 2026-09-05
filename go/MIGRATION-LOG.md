@@ -503,3 +503,42 @@ M2 里程碑状态（08-executor-checklist.md）：
 检查：tests 168 项全绿；contract_tests 119 项全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B200 初始化 Go module
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B200 执行；目录与依赖方向遵循
+03-target-architecture.md §4/§5。
+
+- go.mod：module path 固定为 GitHub 仓库路径
+  github.com/galiandan/WPS_2_WebDAV/go（module 根即 go/ 目录）；go
+  指令 1.25.0（保守下限，本机工具链 1.27 构建，待负责人确认）。
+- cmd/wps-adapter/main.go：三命令形状——--version 输出 0.9.8；
+  check-config 输出 "config=ok group_id=pending-login auth=<enabled|
+  disabled> dav=<prefix> rest=<prefix>"（骨架不解析 workspace，
+  B201 接管真实语义）；serve 支持 --bind/--port（默认取
+  ADAPTER_BIND/ADAPTER_PORT 与 Python 相同的 127.0.0.1:54321），
+  非本地 bind 且未启用 Basic Auth 拒绝启动（错误文案与 Python 一致），
+  监听后输出与 Python 相同的 listening/webdav/rest 两行，SIGINT/
+  SIGTERM 优雅退出码 0，监听失败退出码 1。
+- 骨架 serve 仅提供 /healthz（JSON 字节与 Python 契约逐字符一致，
+  单测固定）与其余路由的 404 "unknown route" 文本回退；未认证挑战、
+  REST/DAV 路由属 B5xx 阶段，不提前实现。
+- internal/config：骨架级 Load（bind/port/认证四变量/双前缀），前缀
+  规范化对齐 _normalise_prefix；错误只含变量名与规则，不回显值。
+- internal/app：Application + healthPayload（struct 顺序即 JSON 键序，
+  与 Python json.dumps 键序一致）。
+- 版本注入位：main.version / main.commit 预留 ldflags -X，README 记录
+  fmt/vet/test/race/build/交叉构建命令。
+- go/web/ 已在 M2 阶段就位（三前端文件，Python 桥与未来 Go embed
+  共用）。
+
+检查：go fmt 无差异、go vet 通过、go test ./... 全绿（config 6 组表
+驱动用例 + app 2 项含 healthz 逐字节契约）；serve smoke（listening 行
++ healthz + 404 + 退出）通过；交叉构建 GOOS=windows/linux amd64/
+linux arm64 全部产出可执行文件；release-manifest.txt 已更新；Python
+参照套件保持全绿。
+
+回滚：git revert 本提交；go/ 内既有 MIGRATION-LOG、benchmarks、web
+不受影响。
