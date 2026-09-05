@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import unittest
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -155,8 +156,12 @@ class LoginHelperTests(unittest.TestCase):
             WpsWorkspaceCandidate("tenant", "456", "个人团队"),
             WpsWorkspaceCandidate("tenant", "789", "自动备份"),
         )
-        with patch("builtins.input", return_value="1,3"):
+        with patch("builtins.input", return_value="1,3"), patch("sys.stdout", new_callable=StringIO) as output:
             self.assertEqual(_select_workspaces(candidates), (candidates[0], candidates[2]))
+        self.assertIn("发现 3 个可用 WPS 空间", output.getvalue())
+        self.assertIn("[1] 学校云盘", output.getvalue())
+        self.assertIn("[2] 个人团队", output.getvalue())
+        self.assertIn("[3] 自动备份", output.getvalue())
         with patch("builtins.input", return_value="all"):
             self.assertEqual(_select_workspaces(candidates), candidates)
 

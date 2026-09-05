@@ -1753,7 +1753,11 @@ def _select_workspaces(candidates: tuple[WpsWorkspaceCandidate, ...]) -> tuple[W
     """Select one, several, or all discovered spaces by display name."""
 
     if len(candidates) == 1:
+        print(f"已找到 WPS 空间：{candidates[0].name}，将自动使用它。", flush=True)
         return candidates
+    print(f"发现 {len(candidates)} 个可用 WPS 空间：", flush=True)
+    for index, candidate in enumerate(candidates, 1):
+        print(f"  [{index}] {candidate.name}", flush=True)
     print("可输入一个或多个序号（例如 1,3），也可以输入 all 使用全部空间。", flush=True)
     while True:
         answer = input("请选择空间 [1]: ").strip() or "1"
