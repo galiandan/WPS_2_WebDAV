@@ -1,0 +1,10 @@
+{
+  "request": "4 concurrent REST uploads across 2 mounted spaces (default WPS_MAX_UPLOADS=2)",
+  "statuses": [
+    201,
+    201,
+    201,
+    201
+  ],
+  "upstream_pre_check_arrivals": 4
+}

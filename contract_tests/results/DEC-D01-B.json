@@ -1,0 +1,8 @@
+{
+  "request": "GET /api/v1/entries?path=%2F with fixed WPS_GROUP_ID, no workspace file",
+  "status": 200,
+  "names": [
+    "bench-one.txt",
+    "bench-folder"
+  ]
+}

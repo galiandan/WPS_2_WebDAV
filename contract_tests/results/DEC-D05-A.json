@@ -1,0 +1,6 @@
+{
+  "request": "GET /api/v1/entries with only ADAPTER_USERNAME_FILE set, bind 0.0.0.0",
+  "startup": "succeeded",
+  "status_without_credentials": 401,
+  "body": ""
+}

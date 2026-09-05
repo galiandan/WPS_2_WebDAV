@@ -1,0 +1,5 @@
+{
+  "request": "POST /api/v1/session/import with fixed WPS_GROUP_ID but an existing workspace file",
+  "status": 200,
+  "body": "{\"status\":\"ok\",\"cookie_count\":3,\"workspace\":\"updated\"}"
+}

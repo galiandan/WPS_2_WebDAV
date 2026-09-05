@@ -1,0 +1,5 @@
+{
+  "request": "POST /api/v1/session/import with fixed WPS_GROUP_ID and no workspace file",
+  "status": 400,
+  "body": "{\"error\":\"workspace import requires WPS_GROUP_ID=auto or WPS_ROOT_ID=auto\"}"
+}

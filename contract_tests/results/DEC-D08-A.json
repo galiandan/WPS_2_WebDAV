@@ -1,0 +1,8 @@
+{
+  "request": "PROPFIND Depth 0 requesting only displayname",
+  "status": 207,
+  "content_type": "application/xml; charset=utf-8",
+  "response_contains_getlastmodified": true,
+  "response_contains_getetag": true,
+  "response_contains_displayname": true
+}

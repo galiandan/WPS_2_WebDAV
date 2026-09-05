@@ -1,0 +1,5 @@
+{
+  "request": "GET /api/v1/entries?path=%2F with WPS_GROUP_ID=auto, no workspace file",
+  "status": 200,
+  "entry_count": 0
+}

@@ -132,3 +132,40 @@ Go 侧（net/http 默认 TCP_NODELAY）不会复现。**属于潜在行为差异
 同一 harness 形状对比。
 
 回滚：仅新增 `go/benchmarks/` 与本记录；`git revert` 本提交即可。
+
+## B003 兼容性决策记录（D-01 至 D-09）
+
+日期：2026-09-05
+
+新增 `contract_tests/`（黑盒契约测试目录，同时是 B100 的基础设施）：
+真实 Python 服务以子进程运行（生产入口 + 生产环境变量 + 生产 secret 文件
+语义），仅上游传输层为进程内 fake；`python -m unittest discover -s
+contract_tests -v` 当前 **13 项全部通过**。每个场景的观察结果保存在
+`contract_tests/results/DEC-*.json`。
+
+按负责人指示"严格遵守 docs/go-rewrite-plan 指导"，D-01..D-09 采用
+`03-target-architecture.md` 第 17 节的推荐决定作为工作决定；下表
+"当前行为"列均有自动化测试证据。若负责人日后否决某项，仅需更改对应
+决定并调整 Go 侧契约，特征测试本身就是证据链。
+
+| 编号 | 当前行为（证据/测试） | 决定（采纳文档推荐） | 破坏性 |
+| --- | --- | --- | --- |
+| D-01 | `WPS_GROUP_ID=auto` 且无 workspace 文件：根列表返回 200+空列表（DEC-D01-A）；固定 group：正常单空间（DEC-D01-B） | 不移植"空根成功"；Go 在 auto+未配置时显式报错 | 是（对未配置部署） |
+| D-02 | status 根列表 401 会触发凭据刷新（refresh 命令已执行，DEC-D02-A） | status 全流程禁止刷新；Go 对 status 探测关闭 401 重试 | 是（行为收紧） |
+| D-03 | 2 空间挂载时 4 个上传同时进入 pre_check，全局 WPS_MAX_UPLOADS=2 被放大（DEC-D03-A） | Go 实现真正进程级全局 ResourceBudget | 是（资源行为收紧） |
+| D-04 | REST 业务路径被二次解码：`%2Fweird%252Fname.txt`→404 "weird"；`%25252F` 才命中字面 `%2F` 条目；`+`→空格（DEC-D04-A） | Go 全入口只解码一次；以 DEC-D04 的反向 golden 固定 | 是（修正） |
+| D-05 | 仅配用户名文件时 0.0.0.0 可启动且所有请求 401（DEC-D05-A）；完整凭据正常（DEC-D05-B）；完全未配置则拒绝启动（DEC-D05-C） | Go 非本地 bind 必须用户名与密码都有效，启动期失败且错误不含值 | 是（启动期失败提前） |
+| D-06 | 固定 WPS_GROUP_ID 但存在 workspace 文件时 session import 可改映射并返回 200（DEC-D06-A/B） | 只有 auto 配置允许改映射；Go 按配置来源判断，不按文件是否存在 | 是（收紧） |
+| D-07 | session import 接受含换行的 mount 名并原样返回（DEC-D07-A） | Go 拒绝 mount 名中的控制字符，错误指明配置无效 | 是（安全收紧） |
+| D-08 | PROPFIND 忽略请求 body，固定返回完整属性集（含 getlastmodified/getetag）（DEC-D08-A） | 保持：Go 首版固定属性集合，不引入通用 WebDAV 库语义 | 否 |
+| D-09 | 超过 max_connections 的 TCP 连接在 accept 后被直接关闭，无任何 HTTP 状态（probe 收到 EOF，DEC-D09-A） | 保持：首个兼容版本维持并记录，后续再评估 503 | 否 |
+
+说明：D-01/02/03/04/05/06/07 的"先修 Python"步骤未在本轮执行（参照实现
+保持冻结，避免语言迁移与行为修正混在一个变更里）；Go 按上表"决定"列
+实现，B1302 对照时这些差异按"批准变更"归类，归类依据即本表与
+`contract_tests/results/`。
+
+安全检查：`results/` 与上游记录仅含 bench-* 占位值；未发现任何真实
+凭据/ID/签名 URL。
+
+回滚：仅新增 `contract_tests/` 与本记录；`git revert` 本提交即可。

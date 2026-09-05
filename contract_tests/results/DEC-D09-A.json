@@ -1,0 +1,8 @@
+{
+  "request": "third TCP connection while max_connections=2 requests are held",
+  "probe_received": "b''",
+  "held_request_statuses": [
+    200,
+    200
+  ]
+}
