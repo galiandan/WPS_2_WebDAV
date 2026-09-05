@@ -856,3 +856,45 @@ amd64、darwin arm64 通过；Python 参照套件 168 项、contract_tests 119
 项全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B304 web settings
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B304 执行；settings.py 全文对齐。
+新文件 internal/workspace/settings.go（目录归属按 03-target-architecture
+workspace/settings.go），复用 securefile（读 B301/写 B302）与 pyjson
+的 ensure_ascii 转义。
+
+- WebSettings：filePath（""=仅内存，对应 Python file_path=None）+
+  fallbackName；名称热加载（mtime 变化才重读，语义与 B303 的
+  WorkspaceState 一致）；payload 为空/文件缺失 → fallback 名称；
+  payload 有 name 键但非法（缺失键/空/超长/控制字符）→ fail closed
+  （对齐 Python validate_root_name(payload.get("name"))，缺失键报
+  "root name must be a string"）。
+- ValidateRootName(value any)：trim、非空、字符数 ≤256、UTF-8 字节
+  ≤1024、控制字符（<0x20 或 0x7F）拒绝；保持 value 为 any 以对接
+  JSON payload。字节上限对合法 UTF-8 实际不可达（256 rune × 4 字节
+  = 恰 1024），与 Python 相同，测试固定该边界。
+- 错误双类型：SettingsError（值非法，对应 WebSettingsError）与
+  SettingsFileError（文件问题，对应 WebSettingsFileError），从
+  securefile 码映射的文案逐条对齐 Python（"stat web settings
+  directory failed" 仅 stat 失败；已存在但过宽目录是 "must be
+  private"）。
+- 写入：SetName 先校验（锁外）→ WriteAtomic 原子持久化 → 内存更新；
+  写失败时旧名保持；内存模式不落盘。全程无 WPS 访问。
+- 双向兼容：字节级 {"name":"\uXXXX"}+\n（测试固定）；Python 写出的
+  ensure_ascii 文件 Go 可读；重启（新实例）后名称一致（测试覆盖）。
+
+顺带修复 B202 遗留 flake：main.go 在打印两行监听地址之后才安装
+signal.NotifyContext，测试读到首行立即发 SIGTERM 时可能命中默认处置
+（进程被信号杀死、退出码 -1、stderr 为空）。现把 NotifyContext 提前
+到 net.Listen/打印之前（Python 参照本就无 SIGTERM 处理，该时序不属
+行为契约；-count=6 -race 复跑全绿验证）。
+
+检查：go fmt/go vet 无差异；workspace 18 项 + 全套 go test 全绿；
+-race 全绿（cmd 6 连跑）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 168 项、contract_tests 119 项全绿；
+manifest 已更新。
+
+回滚：git revert 本提交。

@@ -124,6 +124,14 @@ func runServe(args []string) int {
 	server := &http.Server{
 		Handler: application.Handler(),
 	}
+
+	// Handlers must be installed before anything observable (listening
+	// lines included): a signal arriving between the printed lines and
+	// registration would otherwise kill the process with the default
+	// disposition instead of shutting down gracefully.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
@@ -136,8 +144,6 @@ func runServe(args []string) int {
 		cfg.Bind, cfg.Port, cfg.RESTPrefix,
 	)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
