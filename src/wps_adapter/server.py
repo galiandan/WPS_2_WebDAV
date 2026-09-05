@@ -475,6 +475,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             body,
             content_type=web_asset_content_type(name or "") or "application/octet-stream",
+            headers={"X-Content-Type-Options": "nosniff"},
         )
 
     def _authorise(self) -> bool:
@@ -780,10 +781,11 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             content_type="text/html; charset=utf-8",
             headers={
                 "Content-Security-Policy": (
-                    "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                    "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                    "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
-                )
+                    "default-src 'self'; script-src 'self'; style-src 'self'; "
+                    "img-src 'self'; connect-src 'self'; object-src 'none'; "
+                    "base-uri 'none'; frame-ancestors 'none'"
+                ),
+                "X-Content-Type-Options": "nosniff",
             },
         )
 

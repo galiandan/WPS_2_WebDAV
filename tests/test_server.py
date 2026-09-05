@@ -354,10 +354,11 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(headers["Cache-Control"], "no-store")
             self.assertEqual(
                 headers["Content-Security-Policy"],
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self'; connect-src 'self'; object-src 'none'; "
+                "base-uri 'none'; frame-ancestors 'none'",
             )
+            self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
             bodies.append(body)
         self.assertEqual(bodies[0], bodies[1])
         self.assertEqual(bodies[1], bodies[2])
@@ -401,6 +402,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b'<link rel="stylesheet" href="/assets/style.css">', body)
         self.assertNotIn(b"<style>", body)
+        self.assertNotIn(b" style=", body)
+        self.assertNotIn(b"<script>", body)
 
     def test_unknown_web_assets_are_not_served(self) -> None:
         for path in (
@@ -417,6 +420,7 @@ class ServerTests(unittest.TestCase):
         status, headers, body = self.request("HEAD", "/assets/style.css")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "text/css; charset=utf-8")
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(body, b"")
 
     def test_web_assets_require_basic_auth_when_enabled(self) -> None:

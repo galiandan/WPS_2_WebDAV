@@ -446,3 +446,26 @@ app.js 与文件字节全等且无 token；settings PATCH 后 GET / 不再内嵌
 检查：tests 166 项全绿；contract_tests 119 项全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## M2/F4 收紧内容安全策略
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F4 执行，对应里程碑 M204。
+
+- index.html 已确认无内联 style、无内联 script（仅
+  <script src="/assets/app.js" defer> 外链）。
+- CSP 从 script/style 的 'unsafe-inline' 收紧为纯 'self'；img-src
+  由 'self' data: 收紧为 'self'（页面不使用 data 图片）；显式
+  connect-src 'self'；保留 object-src 'none'、base-uri 'none'、
+  frame-ancestors 'none'。
+- 网页入口与静态资源响应新增 X-Content-Type-Options: nosniff。
+- 特征测试更新为新的逐字符 CSP 值；页面断言新增无 style= 属性、
+  无内联 <script>；HEAD 资源断言含 nosniff。
+
+浏览器控制台无 CSP 违规、Basic Auth 挑战页无资源依赖两项依赖真实
+浏览器，列入负责人侧门禁（M203/M204 汇总）。
+
+检查：tests 166 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交（安全改动独立成提交，便于单独回退）。
