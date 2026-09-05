@@ -30,7 +30,7 @@ from wps_adapter.server import (
 )
 from wps_adapter.settings import WebSettings
 from wps_adapter.storage import split_remote_path
-from wps_adapter.web import load_web_asset, render_web_app, render_web_asset
+from wps_adapter.web import load_web_asset, render_web_app
 from wps_adapter.workspace import WorkspaceState
 
 
@@ -144,10 +144,6 @@ class WebRenderTests(unittest.TestCase):
     def test_render_web_app_uses_default_for_empty_root_name(self) -> None:
         rendered = render_web_app("")
         self.assertIn("WPS Enterprise Drive", rendered)
-
-    def test_extracted_script_escapes_line_separators_in_the_name_token(self) -> None:
-        rendered = render_web_asset("app.js", "a\u2028b")
-        self.assertIn('let rootName = "a\\u2028b";'.encode("utf-8"), rendered)
 
 
 class WebAssetLoaderTests(unittest.TestCase):
@@ -481,24 +477,30 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b'let rootName = "WPS Enterprise Drive";', body)
 
     def test_web_file_manager_uses_configured_root_name(self) -> None:
-        self.server.application.web_root_name = "示例云盘 <script>alert('x')</script> \"资料\""
+        index_html = Path(__file__).resolve().parents[1] / "go" / "web" / "index.html"
+        self.server.application.web_root_name = (
+            "示例云盘 <script>alert('x')</script> & \"资料\" \u2028 "
+        )
         status, _headers, body = self.request("GET", "/")
         self.assertEqual(status, 200)
-        self.assertIn(
-            "示例云盘 &lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt; &quot;资料&quot;".encode("utf-8"),
-            body,
-        )
+        # The page is fixed: the configured name arrives via the settings
+        # API, so no form of it may appear in the served HTML.
+        self.assertNotIn("示例云盘".encode("utf-8"), body)
+        self.assertNotIn(b"&lt;script&gt;", body)
         self.assertNotIn(b"<script>alert('x')</script>", body)
+        self.assertNotIn(b"\u2028", body)
+        self.assertEqual(body, index_html.read_bytes())
 
-    def test_web_script_escapes_the_configured_root_name(self) -> None:
+    def test_web_script_is_static_and_free_of_the_name_token(self) -> None:
+        app_js = Path(__file__).resolve().parents[1] / "go" / "web" / "app.js"
         self.server.application.web_root_name = "示例云盘 <script>alert('x')</script> \"资料\""
         status, _headers, body = self.request("GET", "/assets/app.js")
         self.assertEqual(status, 200)
-        self.assertIn(
-            'let rootName = "示例云盘 \\u003cscript\\u003ealert(\'x\')\\u003c/script\\u003e'.encode("utf-8"),
-            body,
-        )
-        self.assertNotIn(b"<script>alert('x')</script>", body)
+        self.assertEqual(body, app_js.read_bytes())
+        self.assertNotIn("__WPS_ROOT_NAME_JSON__".encode("utf-8"), body)
+        self.assertNotIn("示例云盘".encode("utf-8"), body)
+        self.assertIn(b'let rootName = "WPS Enterprise Drive";', body)
+        self.assertIn(b"await initRootName()", body)
 
     def test_web_settings_can_be_updated_without_wps_access(self) -> None:
         with TemporaryDirectory() as directory:
@@ -522,7 +524,7 @@ class ServerTests(unittest.TestCase):
 
             status, _headers, body = self.request("GET", "/")
             self.assertEqual(status, 200)
-            self.assertIn("我的云盘".encode("utf-8"), body)
+            self.assertNotIn("我的云盘".encode("utf-8"), body)
             self.assertEqual(WebSettings(str(Path(directory) / "web-settings.json")).name, "我的云盘")
 
             invalid = b'{"name":""}'

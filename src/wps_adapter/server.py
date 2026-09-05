@@ -39,7 +39,7 @@ from .provider import (
 )
 from .storage import WpsStorage, join_remote_path, split_remote_path
 from .settings import WebSettings, validate_root_name
-from .web import render_web_app, render_web_asset, web_asset_content_type
+from .web import load_web_asset, load_web_page, web_asset_content_type
 from .workspace import WorkspaceConfigError, WorkspaceMount, validate_workspace_identifier
 
 
@@ -466,7 +466,7 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def _handle_web_asset(self) -> None:
         name = self._web_asset_name()
         try:
-            body = render_web_asset(name or "", self.application.current_web_root_name())
+            body = load_web_asset(name or "")
         except (KeyError, OSError, UnicodeError):
             self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown web asset")
@@ -766,9 +766,17 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
         )
 
     def _handle_web_app(self) -> None:
+        # The page is a fixed document; the root name arrives via
+        # GET /api/v1/settings from app.js, never via template substitution.
+        try:
+            body = load_web_page()
+        except OSError:
+            self.close_connection = True
+            self._send_error(HTTPStatus.NOT_FOUND, "web page is unavailable")
+            return
         self._send_bytes(
             HTTPStatus.OK,
-            render_web_app(self.application.current_web_root_name()).encode("utf-8"),
+            body,
             content_type="text/html; charset=utf-8",
             headers={
                 "Content-Security-Policy": (

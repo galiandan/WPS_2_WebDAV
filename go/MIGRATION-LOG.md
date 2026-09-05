@@ -409,3 +409,40 @@ link/script、无 <style>）与脚本断言（apiRoot、轮询、缓存/预取�
 检查：tests 167 项全绿；contract_tests 119 项全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## M2/F3 固定 index.html，根名称改走 settings API
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F3 与 §20 第 9-10 步执行，对应里程碑
+M200（三文件分离完成）与 M202。
+
+- 新增 go/web/index.html（102 行）：页面结构自模板迁出，
+  __WPS_ROOT_NAME_HTML__ 全部替换为固定占位文案 "WPS Enterprise
+  Drive"；brand-title 增加 id="brand-title"。
+- app.js：rootName 改为静态默认值；新增 applyRootName()（统一更新
+  document.title、左上角品牌文字、根面包屑/标题/说明——顺带修复
+  FE-01 品牌文字不随改名更新的缺口，属批准变更候选）；新增
+  initRootName()（GET /api/v1/settings，成功则更新名称，失败显示
+  可理解错误并继续用默认名称）；启动改为 boot()：await
+  initRootName() 后再首渲染与 load("/")，占位名不会先闪现再翻转。
+- web.py：删除 render_web_asset 与 JSON token 替换依赖；新增
+  load_web_page()（index.html 不参与 /assets/ 白名单路由，杜绝
+  /assets/index.html 旁路）。
+- server.py：_handle_web_app 改为直接返回 index.html 字节，不再调用
+  current_web_root_name()，页面服务完全不触碰设置文件与存储；CSP
+  暂保持不变（F4 收紧）。
+- WEB_APP_TEMPLATE/render_web_app 保留为待 F7 删除的遗留参照，仍有
+  单测覆盖其自身行为。
+
+新增/更新测试：GET / 与 index.html 字节全等；配置恶意根名称（HTML
+标签、引号、&、U+2028、尾随空格）后响应中任何形式均不出现该名称；
+app.js 与文件字节全等且无 token；settings PATCH 后 GET / 不再内嵌
+新名称（改由 GET /api/v1/settings 返回）。
+
+浏览器侧验证（无闪烁、settings→status→entries 请求顺序、改名后五处
+同步更新）依赖真实浏览器，与 M203/M205 一并列入负责人侧门禁。
+
+检查：tests 166 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。

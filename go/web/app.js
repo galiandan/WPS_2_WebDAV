@@ -12,7 +12,7 @@
       let prefetchActive = 0;
       let prefetchGeneration = 0;
       let navigationGeneration = 0;
-      let rootName = __WPS_ROOT_NAME_JSON__;
+      let rootName = "WPS Enterprise Drive";
       let modalResolve = null;
       let modalMode = "input";
 
@@ -441,6 +441,24 @@
         link.remove();
       }
 
+      function applyRootName() {
+        document.title = rootName;
+        $("brand-title").textContent = rootName;
+        renderBreadcrumbs();
+      }
+
+      async function initRootName() {
+        try {
+          const data = await apiRequest("settings");
+          if (data && typeof data.name === "string" && data.name) {
+            rootName = data.name;
+            applyRootName();
+          }
+        } catch (error) {
+          setStatus("云盘名称读取失败，使用默认名称", "error");
+        }
+      }
+
       async function changeRootName() {
         const name = await openInputModal("设置云盘名称", "云盘名称", rootName, "例如：我的云盘", "保存");
         if (!name || name === rootName) return;
@@ -456,8 +474,7 @@
           const data = await responseData(response);
           if (!data || typeof data.name !== "string") throw new Error("服务器没有返回新的云盘名称");
           rootName = data.name;
-          document.title = rootName;
-          renderBreadcrumbs();
+          applyRootName();
           setStatus("云盘名称已更新", "success");
         } catch (error) { showError(error); }
         finally { setBusy(false); renderBreadcrumbs(); }
@@ -705,6 +722,12 @@
           await load(state.path, true, true);
         }
       }, 30000);
-      renderBreadcrumbs();
-      load("/");
+      async function boot() {
+        // Fetch the configured root name before the first render so the
+        // placeholder never flips to the real name and back.
+        await initRootName();
+        renderBreadcrumbs();
+        load("/");
+      }
+      boot();
     })();
