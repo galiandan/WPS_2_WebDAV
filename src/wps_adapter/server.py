@@ -803,25 +803,66 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
             return
 
         stream = self.application.storage.open_path(path, offset=offset, length=length)
-        if "Content-Length" not in headers and stream.content_length is not None:
-            headers["Content-Length"] = str(stream.content_length)
+        stream_length = stream.content_length
+        if range_requested:
+            # A range response must have a known, exact length before its
+            # headers are sent. WpsDriveClient already validates this against
+            # the object-store Content-Range; keep the HTTP boundary strict
+            # for storage implementations as well.
+            if stream_length != length:
+                stream.close()
+                raise WpsApiError("range download length was not honored")
+        else:
+            # WPS metadata can lag behind the object that the signed URL
+            # serves. Prefer the object-store length, otherwise omit the
+            # header and use connection close framing instead of advertising
+            # a stale length that makes clients wait after reaching 100%.
+            headers.pop("Content-Length", None)
+            if stream_length is not None and stream_length >= 0:
+                headers["Content-Length"] = str(stream_length)
+            else:
+                self.close_connection = True
+
         self.send_response(HTTPStatus.PARTIAL_CONTENT if range_requested else HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         for name, value in headers.items():
             self.send_header(name, value)
         if "Content-Length" not in headers:
             self.send_header("Connection", "close")
-            self.close_connection = True
         self.end_headers()
+        expected_length = length if range_requested else stream_length
+        written = 0
         try:
             while True:
                 if self._client_disconnected():
                     return
-                chunk = stream.read(self.application.storage.client.config.stream_chunk_size)
+                chunk_size = self.application.storage.client.config.stream_chunk_size
+                if expected_length is not None:
+                    remaining = expected_length - written
+                    if remaining <= 0:
+                        break
+                    chunk_size = min(chunk_size, remaining + 1)
+                chunk = stream.read(chunk_size)
                 if not chunk:
                     break
+                if expected_length is not None:
+                    remaining = expected_length - written
+                    if len(chunk) > remaining:
+                        self.wfile.write(chunk[:remaining])
+                        written += remaining
+                        self.close_connection = True
+                        LOG.warning("download stream exceeded its declared length")
+                        return
                 self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout):
+                written += len(chunk)
+            if expected_length is not None and written != expected_length:
+                self.close_connection = True
+                LOG.warning(
+                    "download stream ended early: sent %d of %d bytes",
+                    written,
+                    expected_length,
+                )
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError, ValueError):
             self.close_connection = True
         finally:
             stream.close()

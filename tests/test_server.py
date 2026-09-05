@@ -412,6 +412,56 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(headers["Content-Length"], "11")
         self.assertEqual(body, b"hello world")
 
+    def test_download_uses_object_length_when_metadata_is_stale(self) -> None:
+        class StaleMetadataStorage(FakeStorage):
+            def open_path(self, path: str, *, offset: int = 0, length: int | None = None) -> FakeStream:
+                self.metadata(path)
+                return FakeStream(b"hello")
+
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=3)
+        self.connection.close()
+        self.storage = StaleMetadataStorage()
+        self.server = AdapterHTTPServer(("127.0.0.1", 0), AdapterApplication(self.storage))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+
+        status, headers, body = self.request("GET", "/dav/hello.txt")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Length"], "5")
+        self.assertEqual(body, b"hello")
+
+    def test_download_without_object_length_uses_connection_close(self) -> None:
+        class UnknownLengthStream(FakeStream):
+            def __init__(self) -> None:
+                super().__init__(b"hello")
+                self.content_length = None
+
+        class UnknownLengthStorage(FakeStorage):
+            def open_path(self, path: str, *, offset: int = 0, length: int | None = None) -> UnknownLengthStream:
+                self.metadata(path)
+                return UnknownLengthStream()
+
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=3)
+        self.connection.close()
+        self.storage = UnknownLengthStorage()
+        self.server = AdapterHTTPServer(("127.0.0.1", 0), AdapterApplication(self.storage))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+
+        status, headers, body = self.request("GET", "/dav/hello.txt")
+
+        self.assertEqual(status, 200)
+        self.assertNotIn("Content-Length", headers)
+        self.assertEqual(headers["Connection"], "close")
+        self.assertEqual(body, b"hello")
+
     def test_put_is_streamed_and_mkcol_creates_folder(self) -> None:
         status, _headers, body = self.request(
             "PUT",
