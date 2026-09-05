@@ -1531,12 +1531,11 @@ class WpsDriveClient:
                 with_sharefolder_type=with_sharefolder_type,
                 next_filter=page_filter,
             )
-            if max_entries is not None and len(entries) + len(page.entries) > max_entries:
+            new_entries = [entry for entry in page.entries if entry.id not in seen_entry_ids]
+            if max_entries is not None and len(entries) + len(new_entries) > max_entries:
                 raise InsufficientStorageError("remote folder exceeds the configured entry limit")
-            if any(entry.id in seen_entry_ids for entry in page.entries):
-                raise WpsApiError("remote folder pagination returned a duplicate entry")
-            seen_entry_ids.update(entry.id for entry in page.entries)
-            entries.extend(page.entries)
+            seen_entry_ids.update(entry.id for entry in new_entries)
+            entries.extend(new_entries)
             next_offset = page.next_offset
             next_filter = page.next_filter
             if next_offset is None or next_offset < 0:

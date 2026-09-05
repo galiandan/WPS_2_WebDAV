@@ -1148,6 +1148,21 @@ class ClientTests(unittest.TestCase):
             parse_qsl(urlsplit(opener.requests[1][0].full_url).query),
         )
 
+    def test_iter_entries_deduplicates_overlapping_wps_pages(self) -> None:
+        opener = FakeOpener([
+            FakeResponse(
+                b'{"files":[{"id":1,"fname":"one","ftype":"file"},{"id":2,"fname":"two","ftype":"file"}],"next_offset":1,"next_filter":"file"}'
+            ),
+            FakeResponse(
+                b'{"files":[{"id":2,"fname":"two","ftype":"file"},{"id":3,"fname":"three","ftype":"file"}],"next_offset":-1,"next_filter":"file"}'
+            ),
+        ])
+        client = WpsDriveClient(WpsClientConfig(group_id="group-1"), opener=opener)
+
+        entries = client.iter_entries("folder-1", count=2)
+
+        self.assertEqual([entry.id for entry in entries], ["1", "2", "3"])
+
     def test_iter_entries_bounds_broken_pagination(self) -> None:
         class EndlessOpener:
             def __init__(self) -> None:
