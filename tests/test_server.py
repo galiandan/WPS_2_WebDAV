@@ -348,6 +348,10 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b'window.setInterval', body)
         self.assertIn(b'id="settings-button"', body)
         self.assertNotIn(b"link.download", body)
+        self.assertIn(b"DIRECTORY_CACHE_TTL_MS", body)
+        self.assertIn(b"prefetchChildDirectories", body)
+        self.assertIn(b"PREFETCH_CONCURRENCY = 2", body)
+        self.assertIn(b"clearDirectoryCache", body)
 
     def test_web_file_manager_uses_configured_root_name(self) -> None:
         self.server.application.web_root_name = "示例云盘 <script>alert('x')</script> \"资料\""

@@ -318,6 +318,15 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       const state = { path: "/", entries: [], busy: false, search: "", connection: "checking" };
       const $ = (id) => document.getElementById(id);
       const apiRoot = "/api/v1/";
+      const DIRECTORY_CACHE_TTL_MS = 30 * 1000;
+      const PREFETCH_CONCURRENCY = 2;
+      const PREFETCH_MAX_FOLDERS = 24;
+      const directoryCache = new Map();
+      let directoryCacheEpoch = 0;
+      let prefetchQueue = [];
+      let prefetchActive = 0;
+      let prefetchGeneration = 0;
+      let navigationGeneration = 0;
       let rootName = __WPS_ROOT_NAME_JSON__;
       let modalResolve = null;
       let modalMode = "input";
@@ -364,6 +373,68 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
           ...options,
         });
         return responseData(response);
+      }
+
+      function clearDirectoryCache() {
+        directoryCacheEpoch += 1;
+        directoryCache.clear();
+        prefetchQueue = [];
+        prefetchGeneration += 1;
+      }
+
+      function directoryEntries(path, force = false) {
+        const key = canonicalPath(path);
+        const now = Date.now();
+        const existing = directoryCache.get(key);
+        if (!force && existing && existing.entries && existing.expiresAt > now) {
+          return Promise.resolve(existing.entries);
+        }
+        if (existing && existing.pending) return existing.pending;
+        if (force && existing) directoryCache.delete(key);
+
+        const epoch = directoryCacheEpoch;
+        const pending = api("entries", key).then((data) => {
+          const entries = Array.isArray(data.entries) ? data.entries : [];
+          if (epoch === directoryCacheEpoch) {
+            directoryCache.set(key, {
+              entries,
+              expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
+            });
+          }
+          return entries;
+        }).catch((error) => {
+          const current = directoryCache.get(key);
+          if (current && current.pending === pending) directoryCache.delete(key);
+          throw error;
+        });
+        directoryCache.set(key, {
+          entries: existing && existing.entries ? existing.entries : null,
+          expiresAt: 0,
+          pending,
+        });
+        return pending;
+      }
+
+      function pumpPrefetch(generation) {
+        if (generation !== prefetchGeneration) return;
+        while (prefetchActive < PREFETCH_CONCURRENCY && prefetchQueue.length) {
+          const path = prefetchQueue.shift();
+          prefetchActive += 1;
+          directoryEntries(path).catch(() => {}).finally(() => {
+            prefetchActive -= 1;
+            pumpPrefetch(generation);
+          });
+        }
+      }
+
+      function prefetchChildDirectories(parentPath, entries) {
+        prefetchGeneration += 1;
+        const generation = prefetchGeneration;
+        prefetchQueue = entries
+          .filter((entry) => entry && entry.kind === "folder" && typeof entry.name === "string")
+          .slice(0, PREFETCH_MAX_FOLDERS)
+          .map((entry) => joinPath(parentPath, entry.name));
+        pumpPrefetch(generation);
       }
 
       function setStatus(message, kind = "") {
@@ -622,10 +693,15 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       }
 
       async function checkConnection(quiet = false) {
+        const previousConnection = state.connection;
         setConnection("checking");
         try {
           const data = await apiRequest("status");
           const value = data && typeof data.status === "string" ? data.status : "invalid_response";
+          if (value === "connected" && previousConnection !== "connected") {
+            // A reconnect may point to a different WPS workspace.
+            clearDirectoryCache();
+          }
           setConnection(value);
           if (value !== "connected" && (!quiet || state.entries.length === 0)) {
             setStatus(connectionMessage(state.connection), "error");
@@ -639,7 +715,9 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
 
       async function load(path, quiet = false, force = false) {
         if (state.busy && !force) return;
-        state.path = canonicalPath(path);
+        const targetPath = canonicalPath(path);
+        const requestGeneration = ++navigationGeneration;
+        state.path = targetPath;
         state.search = "";
         $("search-input").value = "";
         renderBreadcrumbs();
@@ -647,16 +725,20 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         try {
           const connection = await checkConnection(quiet);
           if (connection !== "connected") {
+            if (requestGeneration !== navigationGeneration) return;
             state.entries = [];
             renderEntries();
             return;
           }
-          const data = await api("entries", state.path);
-          state.entries = Array.isArray(data.entries) ? data.entries : [];
+          const entries = await directoryEntries(targetPath, force);
+          if (requestGeneration !== navigationGeneration) return;
+          state.entries = entries;
           setConnection("connected");
           renderEntries();
+          prefetchChildDirectories(targetPath, state.entries);
           setStatus(`${state.entries.length} 个项目`, "success");
         } catch (error) {
+          if (requestGeneration !== navigationGeneration) return;
           state.entries = [];
           showError(error);
           renderEntries();
@@ -756,6 +838,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         setBusy(true);
         try {
           await api("folders", joinPath(state.path, name), { method: "POST" });
+          clearDirectoryCache();
           setStatus("文件夹已创建", "success");
           await load(state.path, true, true);
         } catch (error) { showError(error); }
@@ -768,6 +851,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         setBusy(true);
         try {
           await api("entries", path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+          clearDirectoryCache();
           setStatus("名称已更新", "success");
           await load(state.path, true, true);
         } catch (error) { showError(error); }
@@ -780,6 +864,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         setBusy(true);
         try {
           await api("entries", path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parent_path: canonicalPath(destination) }) });
+          clearDirectoryCache();
           setStatus("项目已移动", "success");
           await load(state.path, true, true);
         } catch (error) { showError(error); }
@@ -792,6 +877,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
         setBusy(true);
         try {
           await api("entries", path, { method: "DELETE" });
+          clearDirectoryCache();
           setStatus("项目已删除", "success");
           await load(state.path, true, true);
         } catch (error) { showError(error); }
@@ -860,6 +946,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
             }
             if (files.length > 1) setStatus(`准备上传第 ${index + 1}/${files.length} 个文件`);
             await uploadOne(file, overwrite);
+            clearDirectoryCache();
           }
           setStatus("上传完成", "success");
           await load(state.path, true, true);
@@ -883,7 +970,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       $("modal").addEventListener("cancel", (event) => { event.preventDefault(); closeModal(null); });
       $("settings-button").addEventListener("click", changeRootName);
       $("up-button").addEventListener("click", () => load(parentPath(state.path)));
-      $("refresh-button").addEventListener("click", () => load(state.path));
+      $("refresh-button").addEventListener("click", () => load(state.path, false, true));
       $("folder-button").addEventListener("click", createFolder);
       $("upload-button").addEventListener("click", () => $("file-input").click());
       $("drop-upload-button").addEventListener("click", () => $("file-input").click());
