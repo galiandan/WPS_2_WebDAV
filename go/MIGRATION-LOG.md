@@ -1012,3 +1012,70 @@ darwin arm64 通过；Python 参照套件 168 项、contract_tests 119 项
 全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B401 公共 WPS JSON 请求器
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B401 执行；必读 client.py:787-832、
+1193-1233、1255-1300（_credentials/_refresh_credentials/
+_persist_set_cookie_headers/_account_base_url/_refresh_wps_session/
+_refresh_json_body/_url/_request_json）。新增 wps/request.go 与
+wps/pyjson.go，无新依赖。
+
+- URL 构造（buildRequestURL）：rstrip("/") + "/" + lstrip("/")，
+  query 按传入顺序逐对 quote_plus 编码（Go url.QueryEscape 与 Python
+  quote_plus 同规则：空格→+、大写十六进制、UTF-8 百分号编码；Go 的
+  url.Values 会按键排序，故手工拼装保序，重复键允许）。
+- 请求头：Accept、Content-Type（仅 body 非 nil）、Cookie（非空才带）、
+  可选 Referer/Origin；不添加任何浏览器伪装头（测试固定无
+  User-Agent）。Go Config 不再携带静态 cookie/csrf 字段（B400 起
+  凭据只在 CredentialSource 后面），Python 里 "source 为空时回落
+  config.cookie" 的逐字段混合在 Go 由装配层组合 Source 表达。
+- 响应处理顺序：2xx 先 persist Set-Cookie 再有界读取；非 2xx 先
+  persist（对齐 exc.headers）再关体；错误只带 status + http 类别，
+  响应体永不进入错误文案（测试固定）。3xx 由 B400 的
+  ErrUseLastResponse 原样返回，此处按非 2xx 处理（等价 urllib 的
+  HTTPError 路径）。
+- 有界读取（readLimitedResponse）：声明的 Content-Length 超上限先拒；
+  逐块 64KiB、总量 max+1 判定；读取中途失败按调用方类别折叠
+  （JSON 路径 invalid_response，refresh 路径 upstream）。偏差：
+  "Content-Length: -5" 之类负值 Python 直接判错，Go 视为无声明长度
+  后靠有界读取兜底，安全等价。
+- JSON 解码：utf8.Valid 先行（Go json 会把非法 UTF-8 替换为 U+FFFD，
+  必须显式校验对齐 Python decode-then-parse）；UseNumber 保留原始
+  数字 token（Python int 不失真）；解码后要求单一 JSON 值且为 object
+  （数组/标量/null/空体/尾部数据 → invalid_response）。偏差：NaN/
+  Infinity Python 能解析，Go 判 invalid_response（响应不含此类值）。
+- 401 重试：仅一次，仅 RetryOn401；rotated（本次响应 Set-Cookie 落
+  盘成功）或 refreshCredentials() 成功才重试，重试前重新读取凭据并
+  用 _refresh_json_body 语义替换 body 中 csrfmiddlewaretoken。
+- refreshCredentials：全局锁串行（对齐 _credential_refresh_lock）；
+  source.Refresh()（B305 的文件变化检测/外部命令）→ auto_refresh →
+  refreshWPSSession；Refresh 的 ValueError 类错误向上传播。
+- refreshWPSSession：grant_token POST，体为定值
+  {"grant_type":"refresh_token"}，Accept/Content-Type application/json
+  + Cookie + 可选 Referer/Origin；传输失败一律视为未刷新；非 200 视
+  为未刷新；200 的有界读取失败按 Python 怪癖向上传播（令整个请求失
+  败）；成功以 Set-Cookie 落盘结果为准。
+- accountBaseURL：默认由 API 主机末两段推导（account.kdocs.cn），
+  配置值同样校验（HTTPS、kdocs.cn、无凭据/query/fragment、path 仅
+  根），错误文案 "resolve account refresh URL" 一致。
+- pyjson.go：有序 JSON 文档（pyObject 保序、重复键首位置末值，对齐
+  Python dict 语义）+ ensure_ascii/紧凑分隔符序列化（pyQuote 与
+  workspace.pyEscape 同逻辑；json.Number 原样输出）。已知收窄：
+  float 形数字 token（如 1e5）原样输出而 Python 会重排为 100000.0，
+  请求体均为我们自己构造的整数/字符串/布尔，不受影响。
+- 测试：17 项（请求头/URL/编码、非 object 响应 8 态、64 字节精确
+  边界、声明超限、403/302/500 文案且不泄漏响应体、传输失败
+  unavailable、401 文件轮换重试并逐字节固定重试体、401 grant 刷新
+  合并 cookie 并落盘、无重试/仅一次、Set-Cookie 先于读取失败落盘、
+  account URL 推导与校验、pyjson 保序/ensure_ascii/CSRF 替换边缘）。
+  凭据 fixture 全部虚构（sid=first 等），文件 0700/0600。
+
+检查：go fmt/go vet 无差异；wps 17 项 + 全套 go test 全绿；-race
+全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。

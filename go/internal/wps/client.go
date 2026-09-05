@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/credentials"
@@ -112,6 +113,10 @@ type Client struct {
 	config Config
 	opener Opener
 	signed *SignedObjectClient
+
+	// credentialRefreshLock serializes 401 refresh grants so a rotated rtk
+	// cookie cannot be overwritten by a concurrent grant response.
+	credentialRefreshLock sync.Mutex
 }
 
 // Option adjusts a Client at construction. The options are test seams that
