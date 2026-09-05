@@ -39,7 +39,7 @@ from .provider import (
 )
 from .storage import WpsStorage, join_remote_path, split_remote_path
 from .settings import WebSettings, validate_root_name
-from .web import load_web_asset, render_web_app, web_asset_content_type
+from .web import render_web_app, render_web_asset, web_asset_content_type
 from .workspace import WorkspaceConfigError, WorkspaceMount, validate_workspace_identifier
 
 
@@ -466,8 +466,8 @@ class AdapterRequestHandler(BaseHTTPRequestHandler):
     def _handle_web_asset(self) -> None:
         name = self._web_asset_name()
         try:
-            body = load_web_asset(name or "")
-        except (KeyError, OSError):
+            body = render_web_asset(name or "", self.application.current_web_root_name())
+        except (KeyError, OSError, UnicodeError):
             self.close_connection = True
             self._send_error(HTTPStatus.NOT_FOUND, "unknown web asset")
             return

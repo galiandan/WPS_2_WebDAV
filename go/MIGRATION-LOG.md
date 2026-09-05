@@ -376,3 +376,36 @@ Python 参照服务白名单提供）。
 release-manifest.txt 已重新生成。
 
 回滚：git revert 本提交。
+
+## M2/F2 提取 app.js
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F2 执行：只机械提取脚本，不改函数名、
+调用顺序、状态字段或文案。
+
+- 新增 go/web/app.js（710 行）：内联 IIFE 逐字节复制，含
+  "use strict"、目录缓存/预取常量（TTL 30s、并发 2、上限 24）与
+  全部交互逻辑。
+- 临时保留 rootName 注入（§F2.4）：app.js 内的
+  __WPS_ROOT_NAME_JSON__ token 由 Python 桥在响应时用
+  _safe_root_name_json 转义替换（render_web_asset），HTML 模板的
+  JSON token 随脚本外移自然消失；F3 将删除该替换。
+- web.py 模板 <script> 块替换为
+  <script src="/assets/app.js" defer></script>；defer 与原“body 末尾
+  内联脚本”的执行时点等价（DOM 解析完成后、DOMContentLoaded 前）。
+- 白名单新增 app.js → text/javascript; charset=utf-8。
+- FE-03 顺带核对：docs/language-migration.md 已在 F0 修正“取消状态”
+  措辞；app.js 中无 XMLHttpRequest.abort 调用，等价性保持。
+
+新增/更新测试：原 GET / 字符串断言按 F5.5 拆为页面断言（外链
+link/script、无 <style>）与脚本断言（apiRoot、轮询、缓存/预取常量、
+连接文案）；新增 JS token 对恶意根名称的转义断言；U+2028 特征测试
+目标从 render_web_app 迁至 render_web_asset("app.js")。
+
+流程备注：contract_tests 的证据 JSON 含随机 lock token（DAV-LOCK-001
+等），每次运行契约测试后必须重新生成 release-manifest.txt 再提交。
+
+检查：tests 167 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。

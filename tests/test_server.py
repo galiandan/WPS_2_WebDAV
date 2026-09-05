@@ -30,7 +30,7 @@ from wps_adapter.server import (
 )
 from wps_adapter.settings import WebSettings
 from wps_adapter.storage import split_remote_path
-from wps_adapter.web import load_web_asset, render_web_app
+from wps_adapter.web import load_web_asset, render_web_app, render_web_asset
 from wps_adapter.workspace import WorkspaceState
 
 
@@ -145,9 +145,9 @@ class WebRenderTests(unittest.TestCase):
         rendered = render_web_app("")
         self.assertIn("WPS Enterprise Drive", rendered)
 
-    def test_render_web_app_escapes_line_separators_in_inline_script(self) -> None:
-        rendered = render_web_app("a\u2028b")
-        self.assertIn('let rootName = "a\\u2028b";', rendered)
+    def test_extracted_script_escapes_line_separators_in_the_name_token(self) -> None:
+        rendered = render_web_asset("app.js", "a\u2028b")
+        self.assertIn('let rootName = "a\\u2028b";'.encode("utf-8"), rendered)
 
 
 class WebAssetLoaderTests(unittest.TestCase):
@@ -447,29 +447,38 @@ class ServerTests(unittest.TestCase):
             auth_server.server_close()
             thread.join(timeout=3)
 
-    def test_web_file_manager_is_served_without_storage_access(self) -> None:
+    def test_web_page_is_served_without_storage_access(self) -> None:
         status, headers, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn("Content-Security-Policy", headers)
         self.assertIn(b"WPS Enterprise Drive", body)
-        self.assertIn(b'const apiRoot = "/api/v1/";', body)
         self.assertIn(b"drop-overlay", body)
-        self.assertIn(b"window.addEventListener(\"drop\"", body)
-        self.assertIn(b"upload-speed", body)
-        self.assertIn(b"formatRate", body)
         self.assertIn(b'id="connection"', body)
+        self.assertIn(b'id="settings-button"', body)
+        self.assertIn(b'id="upload-speed"', body)
+        self.assertIn(b'<link rel="stylesheet" href="/assets/style.css">', body)
+        self.assertIn(b'<script src="/assets/app.js" defer></script>', body)
+        self.assertNotIn(b"link.download", body)
+
+    def test_web_script_is_served_without_storage_access(self) -> None:
+        status, headers, body = self.request("GET", "/assets/app.js")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertIn(b'const apiRoot = "/api/v1/";', body)
+        self.assertIn(b"window.addEventListener(\"drop\"", body)
+        self.assertIn(b"formatRate", body)
         self.assertIn("WPS 尚未连接".encode("utf-8"), body)
         self.assertIn("wps_login.py 同步凭据".encode("utf-8"), body)
-        self.assertIn(b'wps_unavailable', body)
+        self.assertIn(b"wps_unavailable", body)
         self.assertIn(b'apiRequest("status")', body)
-        self.assertIn(b'window.setInterval', body)
-        self.assertIn(b'id="settings-button"', body)
-        self.assertNotIn(b"link.download", body)
+        self.assertIn(b"window.setInterval", body)
         self.assertIn(b"DIRECTORY_CACHE_TTL_MS", body)
         self.assertIn(b"prefetchChildDirectories", body)
         self.assertIn(b"PREFETCH_CONCURRENCY = 2", body)
         self.assertIn(b"clearDirectoryCache", body)
+        self.assertIn(b'let rootName = "WPS Enterprise Drive";', body)
 
     def test_web_file_manager_uses_configured_root_name(self) -> None:
         self.server.application.web_root_name = "示例云盘 <script>alert('x')</script> \"资料\""
@@ -479,6 +488,12 @@ class ServerTests(unittest.TestCase):
             "示例云盘 &lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt; &quot;资料&quot;".encode("utf-8"),
             body,
         )
+        self.assertNotIn(b"<script>alert('x')</script>", body)
+
+    def test_web_script_escapes_the_configured_root_name(self) -> None:
+        self.server.application.web_root_name = "示例云盘 <script>alert('x')</script> \"资料\""
+        status, _headers, body = self.request("GET", "/assets/app.js")
+        self.assertEqual(status, 200)
         self.assertIn(
             'let rootName = "示例云盘 \\u003cscript\\u003ealert(\'x\')\\u003c/script\\u003e'.encode("utf-8"),
             body,
