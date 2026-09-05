@@ -1,0 +1,5 @@
+{
+  "depth_2_body": "Depth must be 0, 1 or infinity\n",
+  "depth_2_status": 400,
+  "depth_infinity_uppercase_status": 207
+}

@@ -1,0 +1,26 @@
+{
+  "entries": [
+    {
+      "collection": true,
+      "href": "/dav/",
+      "props": {
+        "displayname": "WPS Enterprise Drive",
+        "getcontentlength": "0",
+        "getcontenttype": "httpd/unix-directory"
+      }
+    },
+    {
+      "collection": false,
+      "href": "/dav/a%26b%3Cc%3E%22d%27.txt",
+      "props": {
+        "displayname": "a&b<c>\"d'.txt",
+        "getcontentlength": "11",
+        "getcontenttype": "text/plain",
+        "getetag": "\"bench-etag-bench-tricky\"",
+        "getlastmodified": "Tue, 01 Sep 2026 13:11:12 GMT"
+      }
+    }
+  ],
+  "raw_has_amp_entity": true,
+  "status": 207
+}

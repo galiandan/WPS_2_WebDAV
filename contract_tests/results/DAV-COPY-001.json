@@ -1,0 +1,16 @@
+{
+  "body": "{\"id\":\"bench-file-new\",\"name\":\"bench-copy.txt\",\"kind\":\"file\",\"parent_id\":\"0\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":null}",
+  "location": "/dav/bench-copy.txt",
+  "object_get_bytes": {
+    "control:create_update": 2,
+    "control:folder": 4,
+    "control:islogin": 5,
+    "control:pre_check": 3,
+    "control:progress": 4,
+    "control:task_delete": 4,
+    "control:task_move": 4,
+    "object:GET": 1
+  },
+  "object_put_sha256": "ca809146f650802ba8c8a4e1077e4bbb24745af5e521c3837128515fe59e1fb2",
+  "status": 201
+}

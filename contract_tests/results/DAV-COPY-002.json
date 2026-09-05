@@ -1,0 +1,6 @@
+{
+  "default_body": "COPY overwrite is disabled because the relay is not atomic\n",
+  "default_status": 501,
+  "overwrite_f_body": "destination already exists\n",
+  "overwrite_f_status": 412
+}

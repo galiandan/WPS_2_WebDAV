@@ -169,3 +169,104 @@ contract_tests -v` 当前 **13 项全部通过**。每个场景的观察结果�
 凭据/ID/签名 URL。
 
 回滚：仅新增 `contract_tests/` 与本记录；`git revert` 本提交即可。
+
+## B100 黑盒测试基础设施定稿
+
+日期：2026-09-05
+
+`contract_tests/` harness 定稿（B003 期间建立，本任务收尾）：
+
+- `harness.Service`：以子进程启动被测服务；预分配端口；0700 临时目录 +
+  0600 secret 文件；就绪信号为子进程 stdout 的 `listening=` 行（不做端口
+  探测，避免占用连接槽）；`stop()` 收集子进程 stderr 尾部用于诊断。
+- `python_service.py`：走真实 `wps_adapter.__main__.main` 生产入口；
+  仅注入 fake 传输层与测试用 web-settings 路径
+  （`CONTRACT_WEB_SETTINGS_FILE`，生产默认 `/etc/...` 无法在测试机写入）；
+  `CONTRACT_TRACEBACKS=1` 可输出未预期异常栈。
+- `fake_upstream.py`：scenario JSON 驱动（路由正则/状态码/延迟/barrier/
+  对象内容）；内置 islogin/grant_token/列表/上传/登记/文件夹/重命名/
+  任务轮询端点；全部请求写 JSONL 记录；计数原子写 stats。
+- `scenario()` 支持 listing/children/objects 覆盖。
+
+检查：`python -m unittest discover -s contract_tests` 与参照套件全绿。
+
+## B101 HTTP/auth/framing 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_http_auth.py`，23 项全部通过，证据在
+`results/HTTP-HEALTH-*.json`、`results/HTTP-AUTH-*.json`、
+`results/HTTP-FRAMING-*.json`。固定要点：
+
+- `/healthz` 无认证、不访问 upstream（upstream 记录为空）；带错误凭据仍 200。
+- Basic Auth：缺失/错误/非法 Base64/非 UTF-8/缺冒号/未知 scheme → 401，
+  `WWW-Authenticate: Basic realm="wps-adapter"`、`Connection: close`、
+  `Content-Length: 0`、空 body；scheme 大小写不敏感；正确凭据 200。
+- framing 检查先于认证：Transfer-Encoding、多个 Content-Length、
+  GET/HEAD/OPTIONS 带非零/负数/非法长度 body → 400；Content-Length: 0 放行。
+- PUT 无 Content-Length → 411；控制 body > 1 MiB → 413；session import
+  > 512 KiB → 413；LOCK body > 64 KiB → 413。
+- 声明 100 字节只发 10 字节并关闭 → 服务端返回 4xx/5xx（记录实际值），
+  绝不返回 201。
+- keep-alive 同连接两个请求均 200；401 响应带 `Connection: close`。
+
+## B102 REST 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_rest.py`，39 项全部通过，证据在
+`results/REST-*.json`。固定要点：
+
+- status schema 六字段；settings GET/PATCH（trim、非空、256 字符上限、
+  拒绝控制字符/非字符串/多余字段/非法 JSON）。
+- entries/list 别名等价；entry 固定 7 字段；缺失字段 → null
+  （fsize 非法 → size null）；path 默认 `/`、空值/多值/相对/穿越 → 400；
+  文件上 list → 409；未知路由 → 404 "unknown REST route"。
+- metadata/download；download 带 attachment Content-Disposition 与对象
+  字节（SHA-256 一致）。
+- upload：201 + {path, entry}；对象 PUT 字节 SHA-256 与请求一致；
+  已存在同名默认 409 且不发 pre_check；overwrite=true 继续
+  pre_check-403 → 201；新名 + pre_check 403 默认 → 502
+  （upstream_status=403）；布尔 1/true/yes/on/TRUE → 真，
+  0/false/no/off → 假，maybe/多值 → 400。
+- folders/folder 别名 201；同名 409。PATCH name/fname/destination/
+  parent_path 四种目标、冲突字段 400、空对象 400、改名撞名 409、
+  同父移动 no-op（无上游 move 调用）、移动进自身 400、跨目录改名 501。
+- delete 204 + 两个别名；根删除 400。
+- 上游 500 → 502 {"error","code":"wps_unavailable","upstream_status":500}
+  （上游正文不透传）；上游 401（auto_refresh 关闭）→ 503
+  code=wps_session_expired + Retry-After: 60。
+
+## B103 WebDAV 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_webdav.py`，37 项全部通过，证据在
+`results/DAV-*.json`。固定要点：
+
+- OPTIONS（含 DAV 前缀外路径）→ `DAV: 1,2` 与固定 Allow 列表。
+- PROPFIND：Depth 0/1/infinity/缺省(=1)；非法 Depth → 400；
+  合法值大小写不敏感；D: 命名空间、href 逐段编码、目录 href 以 `/` 结尾、
+  固定属性集（displayname/getcontentlength/getcontenttype/getetag/
+  getlastmodified/resourcetype）；请求 body 忽略；XML 转义正确；
+  前缀外 404。
+- GET/HEAD：文件 ETag 带引号、MIME 猜测、Accept-Ranges、no-store、
+  Connection: close；目录 GET 409、HEAD httpd/unix-directory + 长度 0。
+- PUT（默认 overwrite=true，撞 pre_check 403 继续 → 201）+ Location；
+  MKCOL 201/409；DELETE 204、根 400。
+- MOVE：Destination 校验（缺 header/query/fragment/userinfo/跨 host/
+  跨 port/前缀外 → 400，绝对 URL 同 host+port 允许）；目标存在时
+  默认 T → 501、F → 412、非法值 → 400；同路径 MOVE 允许（201）。
+- COPY 文件走下载+上传中继（对象字节 SHA-256 一致）；文件夹 Depth 0
+  仅建目标根、Depth 1 复制直接子项；目标存在 501/412。
+- LOCK：新建 200（已存在资源）/201（lock-null）；If token 刷新保号；
+  文件级兄弟锁互不冲突；祖先锁与已有后代锁冲突 → 423；目录 infinity
+  锁阻止后代写、带 token 放行；Depth 1 → 400；DOCTYPE/entity → 400；
+  Timeout Infinite/超大钳制到 86400（响应体可少 1 秒）、非法 → 400；
+  UNLOCK 错 token 409、缺 header 400、成功 204。
+- 跨源写保护：带非同源 Origin 的 PUT → 403；同源放行；读请求不受限。
+
+检查：`python -m unittest discover -s contract_tests` → 112 项全绿；
+参照套件 155 项全绿（release-manifest.txt 因新增文件重新生成）。
+
+回滚：`git revert` 相应提交即可；契约测试不进入发布产物。

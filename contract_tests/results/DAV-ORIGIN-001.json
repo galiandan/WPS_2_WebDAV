@@ -1,0 +1,6 @@
+{
+  "cross_origin_read": 200,
+  "evil_origin_body": "cross-origin mutation is not allowed\n",
+  "evil_origin_put": 403,
+  "same_origin_put": 201
+}

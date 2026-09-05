@@ -1,0 +1,9 @@
+{
+  "ancestor_lock_body": "resource is locked\n",
+  "ancestor_lock_status": 423,
+  "first_file_lock": 200,
+  "folder_lock_status": 200,
+  "put_with_folder_token": 201,
+  "put_without_token": 423,
+  "sibling_lock_status": 200
+}

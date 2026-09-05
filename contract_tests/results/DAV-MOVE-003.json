@@ -1,0 +1,33 @@
+{
+  "absolute_same_host": {
+    "status": 201
+  },
+  "fragment": {
+    "body": "Destination must not contain credentials, query, or fragment\n",
+    "status": 400
+  },
+  "missing": {
+    "body": "Destination header is required\n",
+    "status": 400
+  },
+  "other_host": {
+    "body": "Destination must point to this adapter\n",
+    "status": 400
+  },
+  "other_port": {
+    "body": "Destination must point to this adapter\n",
+    "status": 400
+  },
+  "outside_prefix": {
+    "body": "Destination must point inside the WebDAV path\n",
+    "status": 400
+  },
+  "query": {
+    "body": "Destination must not contain credentials, query, or fragment\n",
+    "status": 400
+  },
+  "userinfo": {
+    "body": "Destination must not contain credentials, query, or fragment\n",
+    "status": 400
+  }
+}

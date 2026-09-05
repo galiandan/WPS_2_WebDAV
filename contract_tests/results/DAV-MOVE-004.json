@@ -1,0 +1,7 @@
+{
+  "default_body": "MOVE overwrite is disabled because WPS move is not atomic\n",
+  "default_overwrite_status": 501,
+  "overwrite_f_body": "destination already exists\n",
+  "overwrite_f_status": 412,
+  "overwrite_x_status": 400
+}

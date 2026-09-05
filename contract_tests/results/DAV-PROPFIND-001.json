@@ -1,0 +1,17 @@
+{
+  "content_type": "application/xml; charset=utf-8",
+  "entries": [
+    {
+      "collection": false,
+      "href": "/dav/bench-one.txt",
+      "props": {
+        "displayname": "bench-one.txt",
+        "getcontentlength": "11",
+        "getcontenttype": "text/plain",
+        "getetag": "\"bench-etag-bench-file-1\"",
+        "getlastmodified": "Tue, 01 Sep 2026 13:11:12 GMT"
+      }
+    }
+  ],
+  "status": 207
+}

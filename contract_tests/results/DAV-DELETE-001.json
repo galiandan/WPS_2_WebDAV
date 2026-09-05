@@ -1,0 +1,7 @@
+{
+  "body": "",
+  "content_length": "0",
+  "root_body": "the root cannot be deleted\n",
+  "root_status": 400,
+  "status": 204
+}

@@ -1,0 +1,6 @@
+{
+  "allow": "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE, COPY, LOCK, UNLOCK",
+  "body": "",
+  "dav": "1,2",
+  "status": 200
+}
