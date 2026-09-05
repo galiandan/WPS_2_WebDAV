@@ -801,3 +801,58 @@ write seam）旧目标保持且无临时残留、rename 失败（目标是非空
 已更新。
 
 回滚：git revert 本提交。
+
+## B303 workspace 状态
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B303 执行；workspace.py 全文对齐。
+internal/workspace 重写为真正的 WorkspaceState，文件读取/写入全部改走
+internal/securefile（B301/B302 原语），B201 的临时 validatePath/readFile
+实现删除；securefile 新增导出 ValidateStatePath（构造期路径校验，不读
+文件），ReadJSONState 重构共享同一 checkStatePath。
+
+- 双 schema：旧 {group_id,root_id} 与新 spaces 兼容；spaces 校验
+  （数量 ≤128 且非空列表、逐项对象、group/root 标识符、名称规则）与
+  Python 一致；重复 group 拒绝。
+- D-07（负责人决定）：空间名拒绝控制字符（<0x20 或 0x7F），错误
+  "space.name is invalid"（安全收紧）。Mount 构造（NewMount）与文件
+  解析共用同一校验。
+- 未登录待命态：文件或父目录缺失时 auto 解析为空 group，服务保持
+  可启动（读取返回 nil payload）。
+- 热重载：每次属性访问（GroupID/RootID/Spaces/Configured）先 Lstat
+  比较 mtime，变化才重读；重读用 securefile.ReadJSONState（含全部
+  安全校验）；解析失败不应用部分内容（全部验证后一次性赋值），缓存
+  mtime 不更新，后续访问按 Python 语义继续报错；文件被删除后 auto
+  回到未登录态（nil payload 应用，mtime 缓存清空）。
+- 写入（Update）：标识符/数量/名称校验后经 securefile.WriteAtomic
+  原子持久化（0600 临时文件、fsync、rename）；仅 auto/空的配置项
+  采纳新值，固定配置项不被覆盖（对齐 Python update）。
+- 字节级契约（golden）：pyjson.go 逐字符复刻 json.dumps
+  (ensure_ascii=True, separators=(",",":"))——短转义 \b\f\n\r\t\"\\、
+  0x20-0x7E 之外的字符 \uXXXX（小写十六进制）、星面字符代理对、紧凑
+  分隔、旧字段 {group_id,root_id} 恒写、spaces 元素含 name；测试固定
+  非 ASCII 名称的逐字节输出。Python 写出的文件（含 ensure_ascii 转义）
+  Go 可读，Go 写出的文件按 Python json.loads 可读（测试覆盖双向）。
+- 错误映射：securefile 码 → Python 固定文案（读取与写入两张表，
+  "workspace file ..." / "write workspace file failed"），错误不携带
+  路径或内容。
+
+对齐修正（记录差异）：
+- 文件解析不再拒绝重复空间名——Python 的 "WPS space names must be
+  unique" 属 storage.py MultiSpaceStorage._rebuild_spaces（挂载时），
+  workspace 文件解析只有重复 group 检查；B201 曾把该检查放在加载器，
+  现按参照实现移回后续 multi-space 任务，config/workspace 两处测试
+  同步改写（重复名加载成功用例）。
+- 文件中 group_id/root_id 为非字符串（含 null/数字）现在按 Python
+  报 "workspace.group_id/root_id is invalid"；B201 实现曾把非字符串
+  静默当作缺失（修复）。
+- 无效 UTF-8 现在报 "workspace file is not valid UTF-8"（B201 曾报
+  not valid JSON；Python 先解码后解析）。
+
+检查：go fmt/go vet 无差异；workspace 12 项 + 全套 go test 全绿
+（config 不回归）；-race 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 168 项、contract_tests 119
+项全绿；manifest 已更新。
+
+回滚：git revert 本提交。

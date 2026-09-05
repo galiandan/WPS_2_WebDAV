@@ -556,7 +556,6 @@ func TestWorkspaceResolutionAndFileErrors(t *testing.T) {
 		{"not an object", "[1]", "workspace file must contain a JSON object"},
 		{"empty spaces", `{"spaces": []}`, "workspace.spaces is invalid"},
 		{"duplicate groups", `{"spaces": [{"group_id": "g1"}, {"group_id": "g1"}]}`, "duplicate groups"},
-		{"duplicate names", `{"spaces": [{"group_id": "g1", "name": "same"}, {"group_id": "g2", "name": "same"}]}`, "unique"},
 		{"bad file group", `{"group_id": "bad id"}`, "workspace.group_id is invalid"},
 		{"bad space name", `{"spaces": [{"group_id": "g1", "name": "a/b"}]}`, "space.name is invalid"},
 	}

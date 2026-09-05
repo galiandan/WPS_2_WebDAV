@@ -91,6 +91,40 @@ func ReadSecret(path string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+// ValidateStatePath applies the state-file path discipline (shape, parent,
+// pre-open file checks) without reading the file.
+func ValidateStatePath(path string) error {
+	if !supported() {
+		return errCode(CodeUnsupportedPlatform)
+	}
+	return checkStatePath(path)
+}
+
+// checkStatePath applies shape, parent, and pre-open file checks shared by
+// ReadJSONState and ValidateStatePath.
+func checkStatePath(path string) error {
+	if err := checkPathShape(path, true); err != nil {
+		return err
+	}
+	if err := validateParent(path, false); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return errCode(CodeStatFailed)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errCode(CodeNotRegular)
+	}
+	if info.Mode().Perm()&0o077 != 0 || !ownedByService(info) {
+		return errCode(CodeFileUnsafe)
+	}
+	return nil
+}
+
 // ReadJSONState applies the state-file discipline shared by the workspace
 // and web settings files and returns the decoded JSON object plus the file
 // mtime in nanoseconds. A missing file or a missing parent directory is not
@@ -100,24 +134,8 @@ func ReadJSONState(path string, maxBytes int64) (map[string]any, *int64, error) 
 	if !supported() {
 		return nil, nil, errCode(CodeUnsupportedPlatform)
 	}
-	if err := checkPathShape(path, true); err != nil {
+	if err := checkStatePath(path); err != nil {
 		return nil, nil, err
-	}
-	if err := validateParent(path, false); err != nil {
-		return nil, nil, err
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, nil
-		}
-		return nil, nil, errCode(CodeStatFailed)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, nil, errCode(CodeNotRegular)
-	}
-	if info.Mode().Perm()&0o077 != 0 || !ownedByService(info) {
-		return nil, nil, errCode(CodeFileUnsafe)
 	}
 	file, err := openSecure(path)
 	if err != nil {
