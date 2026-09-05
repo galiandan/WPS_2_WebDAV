@@ -1292,3 +1292,63 @@ windows amd64、darwin arm64 通过；Python 参照套件 169 项、
 contract_tests 119 项全绿；manifest 已更新。
 
 回滚：git revert 本提交。
+
+## B501 全进程 ResourceBudget
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B501 执行；参照 storage.py 的
+BoundedSemaphore 上传/下载槽（WpsStorage.__init__、_upload_stream、
+open_path）、server.py 的连接槽（acquire(blocking=False)，拒绝即
+关连接，D-09 保持）、client.py 的 spool 预留（_reserve_spool_bytes
+/_release_spool_bytes/_check_upload_budget 的磁盘部分）。新建
+internal/budget 包（budget/budget.go，目标架构 4.3 规定位置）。
+
+- D-03 决策落地：budget 是全进程唯一实例、注入所有空间（app 装配
+  在 B503/HTTP 阶段接入；本任务交付类型与语义）。两个空间共享默认
+  2 上传/4 下载上限，不再随空间数翻倍；用 golden 测试固定（同一
+  Budget 实例上空间 A 占满后空间 B 等待并超时）。
+- 上传/下载槽：信号量语义（token 缓冲 channel），Acquire 等待受
+  transfer_wait_timeout（默认 30s，与 storage.py 相同）与调用方
+  context 双重约束，谁先到谁生效；超时与取消统一映射为
+  model.StorageError/KindServiceBusy，文案与 Python 一致
+  （"too many uploads are active"/"too many downloads are active"），
+  调用方无法区分等待失败原因（与参照行为一致）。
+- 释放函数幂等（sync.OnceFunc），适配所有返回路径（defer 即安全）；
+  与 Python BoundedSemaphore 的差异：重复 release 在参照里抛
+  ValueError，Go 侧因释放函数与获取一一配对，重复调用为 no-op，
+  已在测试中固定（幂等释放不得改变容量计数）。
+- 连接槽：TryAcquireConnection 非阻塞，拒绝即返回 false（调用方
+  直接关闭连接，不释放任何东西）——保持 D-09 行为；由 HTTP 阶段
+  在 accept/连接级接入。
+- Spool 预留进程内一致视图（client.py 语义上移到进程级）：
+  total ≤ upload_spool_memory（默认 8MiB）不预留也不查盘；否则
+  required = total + upload_min_free_bytes（默认 512MiB），锁内
+  读取真实磁盘可用空间（free − 其他预留 < required 拒绝），错误
+  文案与 Python 一致（"upload spool directory is unavailable"/
+  "not enough free space for concurrent upload spools"，均为
+  KindInsufficientStorage→507）；支持以 current 传旧预留原子改额；
+  Release 钳位到 0（max(0, ·) 同款）。磁盘可用空间按平台实现
+  （linux f_bavail*f_frsize、darwin f_bsize*f_bavail、windows
+  GetDiskFreeSpaceExW 用户可用），均镜像 shutil.disk_usage().free；
+  其他平台 fail-closed。spool 目录缺省回落 os.TempDir()
+  （upload_spool_dir or tempfile.gettempdir() 同款）。
+- 观测值 Stats 只含数量与字节（各池容量/活跃/等待、spool 已预留
+  字节），类型即保证不含路径或文件名。
+- 测试 13 组：默认值 pin、校验 6 态（文案与 Python 一致）、
+  N-1/N/N+1（第 N+1 个可观测为 waiting、可超时可取消）、跨空间
+  共享 2/4 上限（D-03 反向 golden）、下载槽同语义、连接槽 64 拒绝
+  与幂等释放、Stats 全零基线、spool 基线（≤阈值不查盘/预留=total+
+  余量/改额/释放/钳位）、并发预留共享磁盘视图、free==required 恰好
+  通过（严格 < 与 Python 一致）、磁盘不可用、24 goroutine spool
+  竞争恰好 1 个成功、8 goroutine 全池竞争后归零。合成时钟测试固定
+  30s 等待全耗时不依赖真实睡眠。
+- 交叉构建补丁：windows 的 syscall 无 GetDiskFreeSpaceEx，改用
+  kernel32 LazyDLL（stdlib 内实现，不引入新模块依赖）。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿（新增 budget 包）；
+-race 全绿（budget+wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
