@@ -673,7 +673,7 @@ WEB_APP_TEMPLATE = r"""<!doctype html>
       }
 
       async function changeRootName() {
-        const name = await openInputModal("设置云盘名称", "云盘名称", rootName, "例如：我的学校云盘", "保存");
+        const name = await openInputModal("设置云盘名称", "云盘名称", rootName, "例如：我的云盘", "保存");
         if (!name || name === rootName) return;
         setBusy(true);
         try {

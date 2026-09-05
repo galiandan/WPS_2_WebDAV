@@ -1456,7 +1456,7 @@ def login_and_sync(
                 page_workspace = workspace_root_from_page_url(session.current_url())
                 tenant_id = page_workspace.tenant_id if page_workspace is not None else _cookie_value(selected_cookies, "cid")
                 if not tenant_id:
-                    raise LoginError("无法识别 WPS 企业空间，请确认已登录学校云盘")
+                    raise LoginError("无法识别 WPS 企业空间，请确认已登录 WPS 企业云盘")
                 workspace = page_workspace or WpsWorkspaceSelection(tenant_id, "", "0")
             else:
                 credentials, names, selected_cookies, workspace = wait_for_login_snapshot(

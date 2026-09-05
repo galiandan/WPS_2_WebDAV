@@ -106,7 +106,7 @@ class LoginHelperTests(unittest.TestCase):
     def test_workspace_discovery_parses_names_and_uses_candidate_endpoint(self) -> None:
         class Response:
             def read(self, _size: int = -1) -> bytes:
-                return b'{"groups":[{"id":123,"name":"\\u5b66\\u6821\\u4e91\\u76d8"},{"group_id":"456","group_name":"\\u4e2a\\u4eba\\u56e2\\u961f"}]}'
+                return b'{"groups":[{"id":123,"name":"\\u793a\\u4f8b\\u7a7a\\u95f4 A"},{"group_id":"456","group_name":"\\u793a\\u4f8b\\u7a7a\\u95f4 B"}]}'
 
             def close(self) -> None:
                 pass
@@ -127,8 +127,8 @@ class LoginHelperTests(unittest.TestCase):
         self.assertEqual(
             candidates,
             (
-                WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
-                WpsWorkspaceCandidate("tenant", "456", "个人团队"),
+                WpsWorkspaceCandidate("tenant", "123", "示例空间 A"),
+                WpsWorkspaceCandidate("tenant", "456", "示例空间 B"),
             ),
         )
         self.assertIn("/3rd/plus/groups/v1/companies/tenant/users/self/groups/private", opener.request.full_url)
@@ -136,15 +136,15 @@ class LoginHelperTests(unittest.TestCase):
 
     def test_workspace_selection_uses_human_readable_name(self) -> None:
         candidates = (
-            WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
-            WpsWorkspaceCandidate("tenant", "456", "个人团队"),
+            WpsWorkspaceCandidate("tenant", "123", "示例空间 A"),
+            WpsWorkspaceCandidate("tenant", "456", "示例空间 B"),
         )
         with patch("builtins.input", return_value="2"):
             selected = _select_workspace(candidates)
         self.assertEqual(selected, candidates[1])
 
     def test_single_workspace_is_selected_without_an_extra_prompt(self) -> None:
-        candidate = WpsWorkspaceCandidate("tenant", "123", "学校云盘")
+        candidate = WpsWorkspaceCandidate("tenant", "123", "示例空间 A")
         with patch("builtins.input") as prompt:
             selected = _select_workspace((candidate,))
         self.assertEqual(selected, candidate)
@@ -152,16 +152,16 @@ class LoginHelperTests(unittest.TestCase):
 
     def test_workspace_selection_supports_multiple_and_all(self) -> None:
         candidates = (
-            WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
-            WpsWorkspaceCandidate("tenant", "456", "个人团队"),
-            WpsWorkspaceCandidate("tenant", "789", "自动备份"),
+            WpsWorkspaceCandidate("tenant", "123", "示例空间 A"),
+            WpsWorkspaceCandidate("tenant", "456", "示例空间 B"),
+            WpsWorkspaceCandidate("tenant", "789", "示例空间 C"),
         )
         with patch("builtins.input", return_value="1,3"), patch("sys.stdout", new_callable=StringIO) as output:
             self.assertEqual(_select_workspaces(candidates), (candidates[0], candidates[2]))
         self.assertIn("发现 3 个可用 WPS 空间", output.getvalue())
-        self.assertIn("[1] 学校云盘", output.getvalue())
-        self.assertIn("[2] 个人团队", output.getvalue())
-        self.assertIn("[3] 自动备份", output.getvalue())
+        self.assertIn("[1] 示例空间 A", output.getvalue())
+        self.assertIn("[2] 示例空间 B", output.getvalue())
+        self.assertIn("[3] 示例空间 C", output.getvalue())
         with patch("builtins.input", return_value="all"):
             self.assertEqual(_select_workspaces(candidates), candidates)
 
@@ -180,8 +180,8 @@ class LoginHelperTests(unittest.TestCase):
 
         session = Session()
         candidates = (
-            WpsWorkspaceCandidate("tenant", "123", "学校云盘"),
-            WpsWorkspaceCandidate("tenant", "456", "自动备份"),
+            WpsWorkspaceCandidate("tenant", "123", "示例空间 A"),
+            WpsWorkspaceCandidate("tenant", "456", "示例空间 B"),
         )
 
         def choose(items):

@@ -17,13 +17,13 @@ class WebSettingsTests(unittest.TestCase):
             settings = WebSettings(str(path), fallback_name="初始云盘")
             self.assertEqual(settings.name, "初始云盘")
 
-            self.assertEqual(settings.set_name("我的学校云盘"), "我的学校云盘")
+            self.assertEqual(settings.set_name("我的云盘"), "我的云盘")
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")),
-                {"name": "我的学校云盘"},
+                {"name": "我的云盘"},
             )
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
-            self.assertEqual(WebSettings(str(path), fallback_name="其他名称").name, "我的学校云盘")
+            self.assertEqual(WebSettings(str(path), fallback_name="其他名称").name, "我的云盘")
 
     def test_name_validation_allows_normal_text_and_rejects_unsafe_values(self) -> None:
         with TemporaryDirectory() as directory:

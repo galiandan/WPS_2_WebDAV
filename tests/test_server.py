@@ -349,15 +349,15 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b'id="settings-button"', body)
 
     def test_web_file_manager_uses_configured_root_name(self) -> None:
-        self.server.application.web_root_name = "学校云盘 <script>alert('x')</script> \"资料\""
+        self.server.application.web_root_name = "示例云盘 <script>alert('x')</script> \"资料\""
         status, _headers, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(
-            "学校云盘 &lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt; &quot;资料&quot;".encode("utf-8"),
+            "示例云盘 &lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt; &quot;资料&quot;".encode("utf-8"),
             body,
         )
         self.assertIn(
-            'let rootName = "学校云盘 \\u003cscript\\u003ealert(\'x\')\\u003c/script\\u003e'.encode("utf-8"),
+            'let rootName = "示例云盘 \\u003cscript\\u003ealert(\'x\')\\u003c/script\\u003e'.encode("utf-8"),
             body,
         )
         self.assertNotIn(b"<script>alert('x')</script>", body)
@@ -371,7 +371,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body), {"status": "ok", "name": "Drive"})
 
-            payload = json.dumps({"name": "我的学校云盘"}, ensure_ascii=False).encode("utf-8")
+            payload = json.dumps({"name": "我的云盘"}, ensure_ascii=False).encode("utf-8")
             status, _headers, body = self.request(
                 "PATCH",
                 "/api/v1/settings",
@@ -379,13 +379,13 @@ class ServerTests(unittest.TestCase):
                 headers={"Content-Length": str(len(payload)), "Content-Type": "application/json"},
             )
             self.assertEqual(status, 200)
-            self.assertEqual(json.loads(body), {"status": "ok", "name": "我的学校云盘"})
-            self.assertEqual(self.server.application.current_web_root_name(), "我的学校云盘")
+            self.assertEqual(json.loads(body), {"status": "ok", "name": "我的云盘"})
+            self.assertEqual(self.server.application.current_web_root_name(), "我的云盘")
 
             status, _headers, body = self.request("GET", "/")
             self.assertEqual(status, 200)
-            self.assertIn("我的学校云盘".encode("utf-8"), body)
-            self.assertEqual(WebSettings(str(Path(directory) / "web-settings.json")).name, "我的学校云盘")
+            self.assertIn("我的云盘".encode("utf-8"), body)
+            self.assertEqual(WebSettings(str(Path(directory) / "web-settings.json")).name, "我的云盘")
 
             invalid = b'{"name":""}'
             status, _headers, _body = self.request(
