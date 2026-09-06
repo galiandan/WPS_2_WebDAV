@@ -35,21 +35,29 @@ type DAVDispatcher struct {
 	propfind  DAVLimits
 	download  DownloadLimits
 	downloads DownloadStorage
-	davPrefix string
+	uploads   UploadStorage
+	// maxUploadBytes mirrors the declared-upload gate reading
+	// client.config.max_upload_bytes; zero disables the check like the
+	// Python getattr fallback.
+	maxUploadBytes int64
+	davPrefix      string
 }
 
 // NewDAVDispatcher wires the dispatcher. Zero limits select the Python
 // AdapterApplication defaults (1 MiB / 16 MiB control bounds, 10000
 // PROPFIND entries, depth 64, 1 MiB download chunks); the prefix is
 // trimmed like Python's dav_prefix.rstrip("/") before href building. The
-// download surface is the same storage, but it is declared separately so
-// test fakes can scope what each route observes.
-func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimits, download DownloadLimits, downloads DownloadStorage, davPrefix string) (*DAVDispatcher, error) {
+// download and upload surfaces are the same storage, but they are declared
+// separately so test fakes can scope what each route observes.
+func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimits, download DownloadLimits, downloads DownloadStorage, uploads UploadStorage, maxUploadBytes int64, davPrefix string) (*DAVDispatcher, error) {
 	if storage == nil {
 		return nil, errChainConfig("a storage is required")
 	}
 	if downloads == nil {
 		return nil, errChainConfig("a download storage is required")
+	}
+	if uploads == nil {
+		return nil, errChainConfig("an upload storage is required")
 	}
 	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
 		limits = DefaultControlLimits()
@@ -61,12 +69,14 @@ func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimi
 		propfind.MaxPropfindDepth = 64
 	}
 	return &DAVDispatcher{
-		storage:   storage,
-		limits:    limits,
-		propfind:  propfind,
-		download:  download,
-		downloads: downloads,
-		davPrefix: strings.TrimRight(davPrefix, "/"),
+		storage:        storage,
+		limits:         limits,
+		propfind:       propfind,
+		download:       download,
+		downloads:      downloads,
+		uploads:        uploads,
+		maxUploadBytes: maxUploadBytes,
+		davPrefix:      strings.TrimRight(davPrefix, "/"),
 	}, nil
 }
 
@@ -80,6 +90,8 @@ func (d *DAVDispatcher) ServeDAV(w http.ResponseWriter, r *http.Request, davPath
 		return d.doHead(w, r, davPath)
 	case "PROPFIND":
 		return d.doPropfind(w, r, davPath)
+	case "PUT":
+		return d.doDavPut(w, r, davPath)
 	default:
 		sendUnknownRoute(w, r)
 		return nil

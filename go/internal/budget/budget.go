@@ -254,6 +254,14 @@ func (b *Budget) Stats() Stats {
 	}
 }
 
+// DiskFree reports the free bytes of the directory's filesystem, mirroring
+// shutil.disk_usage(path).free. The upload budget check in the wps client
+// performs the same uncoordinated free-space probe Python runs before each
+// spool reservation, so the platform implementations are shared.
+func DiskFree(path string) (int64, error) {
+	return diskFreeBytes(path)
+}
+
 func secondsDuration(value float64) time.Duration {
 	return time.Duration(value * float64(time.Second))
 }

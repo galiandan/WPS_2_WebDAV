@@ -1,7 +1,7 @@
-// The writer adapter binds the WPS write surface into Storage. Methods land
-// with their own migration stages; until then they refuse with a fixed
-// unsupported error that is distinct from errWritesNotWired (a Storage with
-// no Writer at all).
+// The writer adapter binds the WPS write surface into Storage. Every method
+// delegates to the ported client call; the upload flow still refuses inside
+// the client until its object-storage half lands, so a partial flow can
+// never fake a mutation.
 
 package storage
 
@@ -10,17 +10,12 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/wps"
 )
 
-// errWriteNotImplemented refuses a write method whose WPS call has not been
-// ported yet, so a partially wired Writer can never fake a mutation.
-var errWriteNotImplemented = model.NewStorageError(model.KindUnsupportedOperation, "write operation is not implemented in this stage")
-
 // wpsWriter adapts *wps.Client to the Writer interface.
 type wpsWriter struct {
 	client *wps.Client
 }
 
-// NewWriter returns the real WPS write surface for a client. Write methods
-// that belong to later migration stages fail with a fixed unsupported error.
+// NewWriter returns the real WPS write surface for a client.
 func NewWriter(client *wps.Client) Writer {
 	return wpsWriter{client: client}
 }
@@ -30,7 +25,15 @@ func (w wpsWriter) CreateFolder(parentID string, name string) (model.RemoteEntry
 }
 
 func (w wpsWriter) Upload(request UploadRequest) (model.RemoteEntry, error) {
-	return model.RemoteEntry{}, errWriteNotImplemented
+	return w.client.Upload(wps.UploadRequest{
+		ParentID:    request.ParentID,
+		Name:        request.Name,
+		Source:      request.Source,
+		Size:        request.Size,
+		ContentType: request.ContentType,
+		CSRFToken:   request.CSRFToken,
+		Overwrite:   request.Overwrite,
+	})
 }
 
 func (w wpsWriter) Delete(entryID string) error {

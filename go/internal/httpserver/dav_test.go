@@ -107,7 +107,7 @@ func (f *davHeadStorage) ListChildren(scopePath string, entry model.RemoteEntry)
 
 func newDAVRouter(t *testing.T, storage DAVStorage) *Router {
 	t.Helper()
-	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, DownloadLimits{}, stubDownloadStorage{}, "/dav")
+	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, DownloadLimits{}, stubDownloadStorage{}, stubUploadStorage{}, 0, "/dav")
 	if err != nil {
 		t.Fatal(err)
 	}

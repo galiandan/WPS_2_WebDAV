@@ -227,6 +227,14 @@ func mapError(w http.ResponseWriter, r *http.Request, err error, rest bool) {
 				map[string]string{"Retry-After": "5"}, false)
 		case model.KindUnsupportedOperation:
 			sendError(w, r, http.StatusNotImplemented, storageErr.Message, rest, nil, false)
+		case model.KindBadRequest:
+			// Python maps bare ValueError/TypeError to 400 with the exact
+			// message; the kind keeps that mapping text-free of heuristics.
+			sendError(w, r, http.StatusBadRequest, storageErr.Message, rest, nil, false)
+		case model.KindIOFailure:
+			// Python maps OSError to a fixed 502 message: the underlying
+			// filesystem or transport detail never reaches the client.
+			sendError(w, r, http.StatusBadGateway, "local or upstream I/O failed", rest, nil, false)
 		default:
 			sendError(w, r, http.StatusInternalServerError, "internal server error", rest, nil, false)
 		}

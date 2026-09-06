@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/budget"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/credentials"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
@@ -75,6 +76,11 @@ type Config struct {
 	UploadRetryDelay        float64
 	ObjectStorageHostSuffix string
 	MaxJSONResponseBytes    int64
+
+	// SpoolLimiter coordinates the spool reservations with every other
+	// upload in the process; app wiring injects the shared Budget. A client
+	// without one refuses uploads instead of reserving uncoordinated.
+	SpoolLimiter SpoolLimiter
 }
 
 // DefaultConfig mirrors the WpsClientConfig dataclass defaults. Construct
@@ -115,6 +121,10 @@ type Client struct {
 	opener Opener
 	signed *SignedObjectClient
 
+	// diskFree mirrors shutil.disk_usage(spool_dir).free for the upload
+	// budget; WithDiskFree replaces it where tests monkeypatch shutil.
+	diskFree func(string) (int64, error)
+
 	// credentialRefreshLock serializes 401 refresh grants so a rotated rtk
 	// cookie cannot be overwritten by a concurrent grant response.
 	credentialRefreshLock sync.Mutex
@@ -151,6 +161,16 @@ func WithSignedTransport(transport http.RoundTripper) Option {
 	}
 }
 
+// WithDiskFree replaces the free-space probe behind the upload budget —
+// the same seam Python's tests reach by monkeypatching shutil.disk_usage.
+func WithDiskFree(probe func(string) (int64, error)) Option {
+	return func(client *Client) {
+		if probe != nil {
+			client.diskFree = probe
+		}
+	}
+}
+
 // NewClient validates the configuration and builds both transports.
 func NewClient(config Config, options ...Option) (*Client, error) {
 	if config.GroupID == "" && config.Workspace == nil {
@@ -175,9 +195,10 @@ func NewClient(config Config, options ...Option) (*Client, error) {
 	}
 
 	client := &Client{
-		config: config,
-		opener: newControlHTTPClient(config.Timeout),
-		signed: NewSignedObjectClient(config),
+		config:   config,
+		opener:   newControlHTTPClient(config.Timeout),
+		signed:   NewSignedObjectClient(config),
+		diskFree: budget.DiskFree,
 	}
 	for _, option := range options {
 		option(client)

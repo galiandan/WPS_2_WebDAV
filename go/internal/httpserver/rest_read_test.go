@@ -79,7 +79,7 @@ func newReadDispatcherDownloads(t *testing.T, read RESTReadStorage, status *Stat
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := NewRESTDispatcher(limits, controller, session, read, status, DownloadLimits{}, downloads)
+	dispatcher, err := NewRESTDispatcher(limits, controller, session, read, status, DownloadLimits{}, downloads, stubUploadStorage{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func TestRESTDispatcherRequiresStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRESTDispatcher(limits, controller, session, nil, nil, DownloadLimits{}, stubDownloadStorage{}); err == nil {
+	if _, err := NewRESTDispatcher(limits, controller, session, nil, nil, DownloadLimits{}, stubDownloadStorage{}, stubUploadStorage{}, 0); err == nil {
 		t.Fatal("a nil storage must be rejected")
 	}
 }

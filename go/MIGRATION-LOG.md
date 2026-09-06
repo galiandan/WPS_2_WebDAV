@@ -2783,3 +2783,122 @@ darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
 序重建）、contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## B904 删除（2026-09-06）
+
+提交主题：B904 Implement confirmed v5 delete task endpoint with observed completion
+
+go/internal/wps/writes.go 新增 Delete（client.py delete 1950-1990）：
+
+- 请求面全等：POST /3rd/drive/api/v5/files/batch/task/delete；body
+  按 fileids,groupid,csrfmiddlewaretoken 顺序 ensure_ascii 紧凑序列
+  化，golden 逐字节比对 `{"fileids":[7],"groupid":1,` `"csrfmiddlewaretoken":"csrf-secret"}`（数字 ID 列表与 Python 捕获一致）。
+- 参数校验对齐：file_id 空抛 "file_id is required"，随后
+  currentCredentials + 空 token ValueError、group_id 解析——空 ID
+  零请求（测试固定）。
+- 任务面：result 非 {None,"ok"} → WpsApiError("delete file")；
+  taskuuid 缺席/空/非字符串 → WpsApiError("delete file task")；
+  WaitForTask（B902）以 "delete file" operation 轮询，默认 0.5s /
+  60s；observed task 失败 → "delete file task"——task 未成功绝不
+  返回删除成功（两帧失败路径测试固定）。
+- 401 一次重试与 csrf 字段重写由 RequestJSON 承接；403/transport
+  沿用既有映射。
+
+storage 层不变：Delete/DeletePath 的根拒绝（"the root cannot be
+deleted"，空间挂载根经 MultiSpace 路由落到同一空路径拒绝）、成功
+后清缓存、失败不假装成功均为 B503/B504 既有实现与测试；
+wpsWriter.Delete 改为一行委托，适配层拒绝测试仅剩 Upload。
+
+测试：writes_test.go 新增 5 项——body 逐字节 golden + 进度帧断言、
+空 file_id 零请求、result 失败、taskuuid 三形态、observed task 失
+败传播。
+
+偏差：无新偏差；ctx 与 B903 同注（Background 承接）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B1000 请求正文与 spool（2026-09-06）
+
+提交主题：B1000 Implement upload request-body framing with spooled checksummed buffering
+
+必读 client.py:1553-1605,2258-2375 全部核对。新建
+internal/wps/upload.go、spool.go（镜像 SpooledTemporaryFile）与
+internal/httpserver/upload.go：
+
+- HTTP 帧序（REST upload/files 路由与 DAV PUT）：
+  _content_length(required=True) 先行——缺 Content-Length → 411 文本
+  帧 "Content-Length is required\n" + Connection: close（B7xx 已建
+  helper）；新增 checkDeclaredUploadLength 镜像
+  _check_declared_upload_length：声明超过 max_upload_bytes 时在读第
+  一个 body 字节前回答 507 "upload exceeds the configured size
+  limit" + close（Python 经 storage.client.config 读取，Go 由装配传
+  静态值，0 关闭检查与 getattr 回退一致）。REST 顺序
+  length→507→queryPath→queryBool(overwrite)→uploads；DAV 顺序
+  length→507→uploads（overwrite 恒 true）。queryBool 镜像
+  _query_bool（"must contain one value"/"must be boolean"，400）。
+  未知 REST PUT 后缀先 discardBody 再 404。
+- 上传核心（wps.Client.Upload→spoolUpload）：名称守卫
+  "name must be one remote file name"（空/含 / 或 \）、8 项配置守卫
+  （逐字与 Python 2292-2307 对齐）、声明尺寸 _check_upload_budget
+  （负值、超 max → 507、>upload_spool_memory 才查盘：目录不可用 /
+  空间不足两条 507，free==total+min_free 恰好通过）、_csrf
+  （显式 token 或凭据，缺失 → "csrf_token is required for write
+  operation"）、content_type 缺省 application/octet-stream。
+- spool 循环：逐块单次 read(stream_chunk_size)（镜像 Python 的单次
+  read 语义，(0,nil) 视为流结束）；每块先 _check_upload_budget
+  （total+len）再 ReserveSpool（进程级协调预留，随流增长、原子改
+  额）后写入；MD5/SHA-1/SHA-256 流式同算。SpooledTemporaryFile 镜
+  像：内存 ≤ 阈值（恰好等于不落盘，> 才 rollover），rollover 用
+  os.CreateTemp(0600) 写入 upload_spool_dir（缺省 TempDir），close
+  恒 remove——每个错误注入点（预算失败/读失败/rollover 失败/长度
+  失配/阶段边界）断言 spool 目录清空 + 预留归零。声明尺寸与实际
+  不符 → "source size mismatch: expected N, read M"。
+- 存储接线：writer.go 的 Upload 由本地桩改为转发
+  wps.Client.Upload（wps.UploadRequest 字段一一对应）；
+  budget 导出 DiskFree（平台实现复用），wps.Client 增加 diskFree
+  seam（对应 Python 测试 monkeypatch shutil.disk_usage）与
+  WithDiskFree 选项。
+- 错误表补两 Kind（加法，不改既有映射）：KindBadRequest→400 逐字
+  文案（Python 的裸 ValueError/TypeError 分支）、KindIOFailure→502
+  固定文案 "local or upstream I/O failed"（Python 的 OSError 分
+  支）；源读失败与 spool 写失败归入 IOFailure，磁盘类归入
+  InsufficientStorage→507。httpserver/upload.go 增加 UploadStorage
+  接口（*Storage/*MultiSpace 满足），两个 dispatcher 构造签名新增
+  uploads 与 maxUploadBytes 参数（必填，缺失即 errChainConfig）。
+- 阶段边界：spool 完成后（pre_check 之前）固定回答
+  KindUnsupportedOperation "upload is not implemented in this
+  stage"——pre_check/create_update/对象 PUT/登记分别在
+  B1001/B1002/B1003 接入；预留释放在 spoolUpload 成功路径暂不
+  执行，由整条上传流程结束时的 close 统一释放（对齐 Python
+  with 块生命周期，B1002 起覆盖对象 PUT 全程）。
+
+偏差：①SpoolLimiter 为 nil 的客户端拒绝上传（"upload spool
+limiter is required"）——Python 的预留计数器内建在客户端；Go 侧按
+B501 决策上移到进程级 Budget，客户端缺协调器时宁拒不静默跳过。
+②REST/DAV 未接 _check_locks：LOCK 落地前的恒真等价，B901 已记录同
+款延后，阶段 12 验证。③源流直接用 r.Body：Python _LimitedReader 是
+为 socket 级 framing 防护而生，Go net/http 自带 Content-Length 分
+帧，读取上限由传输层保证；异常路径的 drain 同理由 net/http 收尾
+（未读尽则连接关闭，不产生 Python 需防的串流风险）。④HTTP 501 边
+界为 Go 中间态，Python 无对应（其 upload 全流程可用）；B1003 完成后
+自然消失。
+
+测试：wps 新增 18 组（名称/配置/limiter/声明预算 5 面/CSRF、
+spool+哈希 pinned、空文件哈希、逐块预留与边界释放、预算中途失败/
+读失败/rollover 失败/长度失配的临时文件+预留双释放、411、507 帧序
+与"未读 body"断言、路由顺序）；spool 6 组（阈值恰好/越界/0 阈值/
+rollover 失败/重读/close 清理）；httpserver 9 组黑盒经 Router 全帧
+断言；storage 2 组证明转发真实客户端。Python 逐串核对 16 条消息全
+等。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps/storage/httpserver
+-race -count=2 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺序
+重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。

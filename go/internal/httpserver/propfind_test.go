@@ -100,7 +100,7 @@ func newPropfindRouter(t *testing.T, storage *propfindStorage, mutate func(*DAVD
 	t.Helper()
 	limits := ControlLimits{MaxControlBody: 64 * 1024, MaxResponseBody: 16 * 1024 * 1024}
 	dispatcher, err := NewDAVDispatcher(storage, limits, DAVLimits{MaxPropfindEntries: 10000, MaxPropfindDepth: 64},
-		DownloadLimits{}, stubDownloadStorage{}, "/dav")
+		DownloadLimits{}, stubDownloadStorage{}, stubUploadStorage{}, 0, "/dav")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -114,14 +114,19 @@ type RESTDispatcher struct {
 	status    *StatusController
 	download  DownloadLimits
 	downloads DownloadStorage
+	uploads   UploadStorage
+	// maxUploadBytes mirrors the declared-upload gate reading
+	// client.config.max_upload_bytes; zero disables the check like the
+	// Python getattr fallback.
+	maxUploadBytes int64
 }
 
 // NewRESTDispatcher wires the dispatcher; a zero limits value selects the
 // AdapterApplication defaults and a nil status controller keeps the
-// not_configured preflight answer. The download storage is the same
-// storage, but declared separately so test fakes can scope what each route
-// observes.
-func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter, read RESTReadStorage, status *StatusController, download DownloadLimits, downloads DownloadStorage) (*RESTDispatcher, error) {
+// not_configured preflight answer. The download and upload surfaces are the
+// same storage, but they are declared separately so test fakes can scope
+// what each route observes.
+func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter, read RESTReadStorage, status *StatusController, download DownloadLimits, downloads DownloadStorage, uploads UploadStorage, maxUploadBytes int64) (*RESTDispatcher, error) {
 	if session == nil {
 		return nil, errChainConfig("a session importer is required")
 	}
@@ -131,13 +136,16 @@ func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, sessi
 	if downloads == nil {
 		return nil, errChainConfig("a download storage is required")
 	}
+	if uploads == nil {
+		return nil, errChainConfig("an upload storage is required")
+	}
 	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
 		limits = DefaultControlLimits()
 	}
 	if status == nil {
 		status = NewStatusController(nil, nil)
 	}
-	return &RESTDispatcher{limits: limits, rootName: rootName, session: session, read: read, status: status, download: download, downloads: downloads}, nil
+	return &RESTDispatcher{limits: limits, rootName: rootName, session: session, read: read, status: status, download: download, downloads: downloads, uploads: uploads, maxUploadBytes: maxUploadBytes}, nil
 }
 
 // ServeREST fits Handlers.REST in the router.
@@ -157,9 +165,20 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 		}
 		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
 		return nil
+	case "PUT":
+		// _do_rest_put serves exactly upload and files; every other suffix
+		// discards the body and answers the unknown-route 404.
+		if route.Suffix == "upload" || route.Suffix == "files" {
+			return d.doRestPut(w, r, route)
+		}
+		if err := discardBody(w, r, d.limits); err != nil {
+			return err
+		}
+		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
+		return nil
 	default:
-		// PUT/POST/DELETE route suffixes land with the write stages;
-		// unknown routes discard the body first, exactly like Python.
+		// DELETE route suffixes land with the write stages; unknown routes
+		// discard the body first, exactly like Python.
 		if err := discardBody(w, r, d.limits); err != nil {
 			return err
 		}

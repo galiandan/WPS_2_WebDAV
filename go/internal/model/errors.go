@@ -18,6 +18,8 @@ const (
 	KindServiceBusy          ErrorKind = "service_busy"
 	KindAmbiguousPath        ErrorKind = "ambiguous_path"
 	KindUnsupportedOperation ErrorKind = "unsupported_operation"
+	KindIOFailure            ErrorKind = "io_failure"
+	KindBadRequest           ErrorKind = "bad_request"
 )
 
 // StorageError is a domain error the HTTP layer can translate into a status
