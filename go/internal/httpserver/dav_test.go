@@ -72,10 +72,12 @@ func TestPythonSplitExt(t *testing.T) {
 // be selected per path (the live framing test serves a directory and a
 // file on one connection) with a fallback for single-entry tests.
 type davHeadStorage struct {
-	entry  model.RemoteEntry
-	byPath map[string]model.RemoteEntry
-	err    error
-	calls  []string
+	entry    model.RemoteEntry
+	byPath   map[string]model.RemoteEntry
+	children []model.RemoteEntry
+	err      error
+	listErr  error
+	calls    []string
 }
 
 func (f *davHeadStorage) Metadata(path string) (model.RemoteEntry, error) {
@@ -91,9 +93,17 @@ func (f *davHeadStorage) Metadata(path string) (model.RemoteEntry, error) {
 	return f.entry, nil
 }
 
+func (f *davHeadStorage) ListPath(path string) ([]model.RemoteEntry, error) {
+	f.calls = append(f.calls, "list:"+path)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.children, nil
+}
+
 func newDAVRouter(t *testing.T, storage DAVStorage) *Router {
 	t.Helper()
-	dispatcher, err := NewDAVDispatcher(storage)
+	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, "/dav")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,22 +284,19 @@ func TestDAVHeadErrors(t *testing.T) {
 	}
 }
 
-// TestDAVHeadUnknownMethods pins the interim answer of the not-yet-implemented
-// DAV methods.
+// TestDAVUnknownDAVMethods pins the interim answer of the DAV methods
+// whose stages have not landed yet.
 func TestDAVUnknownDAVMethods(t *testing.T) {
 	router := newDAVRouter(t, &davHeadStorage{entry: headFileEntry()})
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, newTestRequest("PROPFIND", "/dav/"))
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("PROPFIND status = %d", recorder.Code)
-	}
-	if recorder.Body.String() != "unknown route\n" {
-		t.Errorf("PROPFIND body = %q", recorder.Body.String())
-	}
-	recorder = httptest.NewRecorder()
-	router.ServeHTTP(recorder, newTestRequest("GET", "/dav/bench-one.txt"))
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("dav GET status = %d", recorder.Code)
+	for _, method := range []string{"GET", "MKCOL", "LOCK"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, newTestRequest(method, "/dav/bench-one.txt"))
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d", method, recorder.Code)
+		}
+		if recorder.Body.String() != "unknown route\n" {
+			t.Errorf("%s body = %q", method, recorder.Body.String())
+		}
 	}
 }
 

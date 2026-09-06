@@ -32,7 +32,10 @@ func writeResponse(w http.ResponseWriter, r *http.Request, status int, body []by
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	header.Set("Cache-Control", "no-store")
 	for name, value := range extra {
-		header.Set(name, value)
+		// Raw map assignment keeps the caller's exact spelling on the
+		// wire (Set would canonicalize "DAV" to "Dav", which Python
+		// never does); every existing caller passes canonical keys.
+		header[name] = []string{value}
 	}
 	if closeConn && !hasHeader(extra, "Connection") {
 		header.Set("Connection", "close")

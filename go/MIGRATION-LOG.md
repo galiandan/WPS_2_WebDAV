@@ -2200,3 +2200,84 @@ amd64、darwin arm64 通过；Python 参照套件 169 项（manifest
 重建。
 
 回滚：git revert 本提交。
+
+## B702 PROPFIND Depth 0/1
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：server.py `_do_propfind`、`_webdav_entries`、
+`_propfind_body`、`_href`、`_http_date`、
+`join_remote_path`；契约 goldens DAV-PROPFIND-001..009。
+
+实现（go/internal/httpserver/propfind.go）：
+
+- 流程：`_discard_body`（不解析 prop 选择——固定属性集）→
+  Depth 校验（缺省 "1"、strip+lower；0/1/infinity 之外 400
+  "Depth must be 0, 1 or infinity"；显式空头 = 空 ≠ 缺省）→
+  遍历 → 207 multistatus（Content-Type "application/xml;
+  charset=utf-8"、DAV: 1,2、Cache-Control no-store ——
+  _send_bytes 语义）。
+- 遍历（webdavEntries）：split_remote_path 先行（相对路径/
+  非法组件 → 400），metadata 一次；Depth 0 只答自身，
+  Depth 1 加直接子项（仅对请求根 list_path 一次，目录 href
+  由 join 的 trailing_slash 语义 + kind 检查补 "/"），infinity
+  继续递归。重复 entry ID → WpsApiError（502 固定文案）；
+  max_propfind_entries=10000 / max_propfind_depth=64 越界 →
+  507 固定文案；响应体超过 max_response_body → 507（写头
+  前计账，与 Python 逐 chunk 计账一致）。
+- href（buildHref + pythonQuote）：urllib quote(part,
+  safe="") 逐字节移植 —— 保留 [A-Za-z0-9_.~-]，其余（含
+  UTF-8 各字节）→ 大写 %XX；每段编码后以 / 连接，目录以 /
+  结尾；请求根的 parts 来自请求路径（D-04 已一次解码）。
+- XML（propfindBody + propfindResponseChunk）：逐字节复刻
+  ElementTree.tostring(encoding="utf-8") 输出 —— 前缀
+  `<?xml version="1.0" encoding="utf-8"?><D:multistatus
+  xmlns:D="DAV:">`；每个 <D:response> 块自带
+  xmlns:D="DAV:" 重声明；空元素 `<D:resourcetype />`（带
+  空格斜杠）；目录 `<D:resourcetype><D:collection /></
+  D:resourcetype>`；文本仅转义 &amp;/&lt;/&gt;（引号、CR/LF、
+  中文原样 UTF-8）。固定属性集与顺序：resourcetype、
+  displayname、getcontentlength（size or 0）、getcontenttype
+  （httpd/unix-directory 或 guessMimeType）、getetag（引用
+  剥引号再包一层）、getlastmodified（`_http_date`）、
+  status "HTTP/1.1 200 OK"。
+- `_http_date`（httpDate）：float() 解析（含周边空白）→
+  floor → formatdate(usegmt=True) 等价格式 "Mon, 02 Jan 2006
+  15:04:05 GMT"；NaN/Inf/溢出/非法 → 无该属性。
+- Python 列表 path 参数形状核实：join_remote_path 的
+  trailing_slash 在 normpath 后**无尾随斜杠**（Python 与 Go
+  相同），请求根的 list_path 用原始请求路径（带斜杠）——
+  测试 fake 的 map 键据此区分。
+- writeResponse 的 extra 头改为原始 map 赋值：保持调用方拼
+  写上线（DAV 不再被 Go 规范化为 Dav）；既有调用方均为规范
+  键，行为不变。PROPFIND-007（前缀外 404 unknown route）由
+  路由层既有行为满足。
+
+测试（propfind_test.go）：
+
+- Depth 0 文件/目录逐字节 golden（含无 etag/无 mtime 时属
+  性缺席）、Depth 1 根目录逐字节（顺序 + 目录尾斜杠 +
+  folder 的 getcontentlength 直传 11）、缺省 Depth=1 字节
+  相等、Depth 1 子目录逐字节 + 仅 list 一次且参数带原始斜
+  杠、Depth 2/空头 400、INFINITY/带空白 → 207。
+- 契约 href 重放：DAV-PROPFIND-002/003/004/005（004 =
+  infinity 小树全等；B703 仍负责队列化遍历与断连检查的加
+  固）；DAV-PROPFIND-001/009 以完整字节 golden 等价覆盖。
+- 特殊字符：`a&b<c>"d'.txt` → href 逐段大写百分号编码 +
+  displayname 原样引号仅实体化 & < >；中文 → displayname
+  原样 UTF-8、href %E6%8A%A5…；错误表 404/400/502/前缀外
+  404。
+- 限制：entry 507、depth 507（infinity 触发）、响应 507、
+  重复 ID → 502 固定文案。
+- 体处理：prop 选择 XML 体被丢弃且不影响固定属性集；超大
+  声明体 → 413 空消息（"\n" 文本框架）。
+- pythonQuote 8 例、httpDate 9 例（分数取整/负纪元/空白/
+  nan/inf/溢出）。
+- live wire：207 + wire 级 "DAV: 1,2" 拼写 + XML 类型。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 169 项（manifest
+重建后全绿）、contract_tests 119 项全绿；manifest 按门禁顺
+序重建。
+
+回滚：git revert 本提交。

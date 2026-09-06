@@ -87,7 +87,15 @@ func TestWriteResponseConnectionClose(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	writeResponse(recorder, newTestRequest("GET", "/"), http.StatusForbidden, nil, contentTypeText,
 		map[string]string{"connection": "close"}, true)
-	if count := len(recorder.Header().Values("Connection")); count != 1 {
+	// Python keeps the caller's key spelling on the wire ("connection:")
+	// and writes it exactly once; raw map assignment mirrors both.
+	count := 0
+	for name, values := range recorder.Header() {
+		if strings.EqualFold(name, "connection") {
+			count += len(values)
+		}
+	}
+	if count != 1 {
 		t.Errorf("Connection header count = %d, want 1", count)
 	}
 }

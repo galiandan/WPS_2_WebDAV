@@ -8,28 +8,54 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
 
-// DAVStorage is the metadata surface the WebDAV methods share. Path
-// resolution and listing arrive with the PROPFIND stages; HEAD needs only
-// Metadata because a HEAD answer never reads the object body.
-type DAVStorage interface {
-	Metadata(path string) (model.RemoteEntry, error)
+// DAVStorage is the storage surface the WebDAV methods share: Metadata
+// for HEAD/PROPFIND answers, ListPath for the Depth 1/infinity walks. It
+// is the same surface the REST read routes use — Python duck-types one
+// storage for both.
+type DAVStorage = RESTReadStorage
+
+// DAVLimits mirrors the AdapterApplication PROPFIND bounds.
+type DAVLimits struct {
+	MaxPropfindEntries int
+	MaxPropfindDepth   int
 }
 
 // DAVDispatcher routes the WebDAV methods under the DAV prefix. B701
-// delivers HEAD; PROPFIND lands with B702/B703, GET with the download
-// stage, and the write methods with their stages — until then every other
-// method answers the router's unknown-route fallback exactly like an
-// unimplemented do_* would.
+// delivers HEAD and B702 PROPFIND Depth 0/1 (infinity shares the walk but
+// its B703 hardening — queue traversal, disconnect checks — is pending);
+// GET lands with the download stage and the write methods with their
+// stages — until then every unimplemented method answers the router's
+// unknown-route fallback exactly like an unimplemented do_* would.
 type DAVDispatcher struct {
-	storage DAVStorage
+	storage   DAVStorage
+	limits    ControlLimits
+	propfind  DAVLimits
+	davPrefix string
 }
 
-// NewDAVDispatcher wires the dispatcher.
-func NewDAVDispatcher(storage DAVStorage) (*DAVDispatcher, error) {
+// NewDAVDispatcher wires the dispatcher. Zero limits select the Python
+// AdapterApplication defaults (1 MiB / 16 MiB control bounds, 10000
+// PROPFIND entries, depth 64); the prefix is trimmed like Python's
+// dav_prefix.rstrip("/") before href building.
+func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimits, davPrefix string) (*DAVDispatcher, error) {
 	if storage == nil {
 		return nil, errChainConfig("a storage is required")
 	}
-	return &DAVDispatcher{storage: storage}, nil
+	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
+		limits = DefaultControlLimits()
+	}
+	if propfind.MaxPropfindEntries <= 0 {
+		propfind.MaxPropfindEntries = 10000
+	}
+	if propfind.MaxPropfindDepth <= 0 {
+		propfind.MaxPropfindDepth = 64
+	}
+	return &DAVDispatcher{
+		storage:   storage,
+		limits:    limits,
+		propfind:  propfind,
+		davPrefix: strings.TrimRight(davPrefix, "/"),
+	}, nil
 }
 
 // ServeDAV fits Handlers.DAV in the router; returned errors map through
@@ -38,6 +64,8 @@ func (d *DAVDispatcher) ServeDAV(w http.ResponseWriter, r *http.Request, davPath
 	switch r.Method {
 	case "HEAD":
 		return d.doHead(w, r, davPath)
+	case "PROPFIND":
+		return d.doPropfind(w, r, davPath)
 	default:
 		sendUnknownRoute(w, r)
 		return nil
