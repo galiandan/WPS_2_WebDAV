@@ -7,6 +7,7 @@ package wps
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -48,6 +49,13 @@ func (r JSONRequest) method() string {
 // WpsAPIError carrying the status and the http category without any
 // response body content; transport failures carry the unavailable category.
 func (c *Client) RequestJSON(request JSONRequest) (map[string]any, error) {
+	return c.RequestJSONContext(context.Background(), request)
+}
+
+// RequestJSONContext is RequestJSON bound to ctx: an in-flight request
+// aborts and the poll loop observes cancellation immediately. A transport
+// failure caused by ctx cancellation surfaces as the context error itself.
+func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (map[string]any, error) {
 	baseURL := request.BaseURL
 	if baseURL == "" {
 		baseURL = c.config.BaseURL
@@ -64,6 +72,7 @@ func (c *Client) RequestJSON(request JSONRequest) (map[string]any, error) {
 		if err != nil {
 			return nil, model.NewWpsAPIError(request.Path, 0, model.WpsCategoryUpstream)
 		}
+		httpRequest = httpRequest.WithContext(ctx)
 		httpRequest.Header.Set("Accept", "*/*")
 		if currentBody != nil {
 			httpRequest.Header.Set("Content-Type", "application/json")
@@ -80,6 +89,9 @@ func (c *Client) RequestJSON(request JSONRequest) (map[string]any, error) {
 
 		opened, err := c.opener.Do(httpRequest)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, model.NewWpsAPIError(request.Path, 0, model.WpsCategoryUnavailable)
 		}
 		if opened.StatusCode >= 200 && opened.StatusCode <= 299 {
