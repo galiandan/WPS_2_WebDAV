@@ -193,3 +193,52 @@ func (c *Client) Move(fileID string, sourceParentID string, destinationParentID 
 	return c.WaitForTask(context.Background(), taskUUID, "move file",
 		DefaultTaskPollInterval, DefaultTaskPollTimeout)
 }
+
+// Delete mirrors delete: the confirmed v5 batch task endpoint, waiting for
+// the observed task to finish before returning.
+func (c *Client) Delete(fileID string) error {
+	if fileID == "" {
+		return errors.New("file_id is required")
+	}
+	current, err := c.currentCredentials()
+	if err != nil {
+		return err
+	}
+	if current.CSRFToken == "" {
+		return errors.New("csrf_token is required for write operation")
+	}
+	groupID, err := c.GroupID()
+	if err != nil {
+		return err
+	}
+	body := &pyObject{
+		keys: []string{"fileids", "groupid", "csrfmiddlewaretoken"},
+		values: map[string]any{
+			"fileids":             []any{pyJSONID(fileID)},
+			"groupid":             pyJSONID(groupID),
+			"csrfmiddlewaretoken": current.CSRFToken,
+		},
+	}
+	encoded, err := dumpPYValue(body)
+	if err != nil {
+		return err
+	}
+	payload, err := c.RequestJSON(JSONRequest{
+		Path:       "/3rd/drive/api/v5/files/batch/task/delete",
+		Method:     http.MethodPost,
+		Body:       encoded,
+		RetryOn401: true,
+	})
+	if err != nil {
+		return err
+	}
+	if result, present := payload["result"]; present && result != nil && result != "ok" {
+		return model.NewWpsAPIError("delete file", 0, model.WpsCategoryUpstream)
+	}
+	taskUUID, isString := payload["taskuuid"].(string)
+	if taskUUID == "" || !isString {
+		return model.NewWpsAPIError("delete file task", 0, model.WpsCategoryUpstream)
+	}
+	return c.WaitForTask(context.Background(), taskUUID, "delete file",
+		DefaultTaskPollInterval, DefaultTaskPollTimeout)
+}

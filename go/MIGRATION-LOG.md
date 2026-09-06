@@ -2736,3 +2736,50 @@ constant-opener 超时（<2 轮失败即判错）、sleep 中取消及时返回�
 contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## B903 移动（2026-09-06）
+
+提交主题：B903 Implement confirmed v5 move task endpoint with observed completion
+
+go/internal/wps/writes.go 新增 Move（client.py move 1870-1946）：
+
+- 请求面全等：POST /3rd/drive/api/v5/files/batch/task/move；body 按
+  groupid,parentid,dst_groupid,dst_parentid,fileids,option,
+  csrfmiddlewaretoken 顺序 ensure_ascii 紧凑序列化，golden 逐字节
+  比对 `{"groupid":1,"parentid":3,"dst_groupid":1,"dst_parentid":8,`
+  `"fileids":[7],"option":{},"csrfmiddlewaretoken":"csrf-secret"}`——
+  option 为空 dict 的 {}、数字 ID 列表 [7] 均与 Python 捕获一致。
+- 参数校验对齐：file_id 空抛 "file_id is required"；源或目标父 ID
+  空抛 "source and destination parent IDs are required"；随后
+  currentCredentials + 空 token ValueError；group_id 解析——任一失
+  败零请求（测试固定）。
+- 任务面：result 非 {None,"ok"} → WpsApiError("move file")；
+  taskuuid 缺席/空/非字符串（数字也算）→ WpsApiError("move file
+  task")；随后 WaitForTask（B902）以 "move file" operation 轮询，
+  默认间隔 0.5s / 超时 60s；observed task 失败（failed 状态）→
+  "move file task" 错误——task 未成功绝不返回成功（测试固定两帧
+  请求后失败路径）。
+- dst_groupid 与 option 关键字在 Go 面保持 Python 默认值（同组、空
+  dict）：storage 调用路径（storage.py move_to_parent_path）从不传
+  自定义值；csrf_token 关键字同 B900 既录处理。
+
+storage 层不变：MoveToParentPath/MovePath 的根拒绝、自身后代拒绝、
+目标非目录、同父 no-op、目标同名冲突不发 WPS 写请求、跨目录同时
+改名 unsupported、成功后清缓存均为 B503 既有实现与测试；
+wpsWriter.Move 改为一行委托，适配层拒绝测试相应收缩（剩
+Upload/Delete）。
+
+测试：writes_test.go 新增 5 项——body 逐字节 golden + 进度帧断言、
+非法参数三例零请求、task result 失败、taskuuid 三形态、observed
+task 失败传播。
+
+偏差：无新偏差；ctx 由 WaitForTask 内部以 Background 承接（Writer
+接口无 ctx 参数，REST/DAV 层 ctx 贯通留待整合阶段），行为同
+Python。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。

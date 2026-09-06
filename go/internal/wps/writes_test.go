@@ -535,3 +535,112 @@ func TestMoveWaitsForObservedTaskBeforeReturning(t *testing.T) {
 		t.Fatalf("requests = %d, want the progress poll to run", len(opener.requests))
 	}
 }
+
+func TestDeletePostsTaskAndWaitsForSuccess(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok","taskid":12,"taskuuid":"task-uuid"}`)},
+		{status: 200, body: []byte(
+			`{"estimated_time_left":-1,"failed_list":null,"finish":1,` +
+				`"result":"ok","status":"success","taskid":12,` +
+				`"taskuuid":"task-uuid","total":1}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	if err := client.Delete("7"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	if len(opener.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(opener.requests))
+	}
+	deleteRequest := opener.requests[0]
+	if deleteRequest.Method != http.MethodPost {
+		t.Fatalf("method = %s, want POST", deleteRequest.Method)
+	}
+	if deleteRequest.URL.Path != "/3rd/drive/api/v5/files/batch/task/delete" {
+		t.Fatalf("path = %q", deleteRequest.URL.Path)
+	}
+	if deleteRequest.Header.Get("Cookie") != "Cookie-secret" {
+		t.Fatalf("cookie = %q", deleteRequest.Header.Get("Cookie"))
+	}
+	wantBody := `{"fileids":[7],"groupid":1,"csrfmiddlewaretoken":"csrf-secret"}`
+	if string(opener.bodies[0]) != wantBody {
+		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
+	}
+	progressRequest := opener.requests[1]
+	if progressRequest.Method != http.MethodGet ||
+		progressRequest.URL.Path != "/3rd/drive/api/v5/files/batch/task/progress" {
+		t.Fatalf("progress request = %s %s", progressRequest.Method, progressRequest.URL.Path)
+	}
+	if query := progressRequest.URL.Query(); query.Get("taskuuid") != "task-uuid" {
+		t.Fatalf("progress query = %v", query)
+	}
+}
+
+func TestDeleteRejectsEmptyFileIDBeforeAnyRequest(t *testing.T) {
+	opener := &fakeControlOpener{}
+	client := newWriteClient(t, opener, nil)
+
+	if err := client.Delete(""); err == nil || err.Error() != "file_id is required" {
+		t.Fatalf("error = %v, want the ValueError message", err)
+	}
+	if len(opener.requests) != 0 {
+		t.Fatalf("requests = %d, want 0", len(opener.requests))
+	}
+}
+
+func TestDeleteRejectsFailedTaskResult(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"error"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	err := client.Delete("7")
+	apiErr, ok := model.AsWpsAPIError(err)
+	if !ok || apiErr.Operation != "delete file" || apiErr.Status != 0 ||
+		apiErr.Category != model.WpsCategoryUpstream {
+		t.Fatalf("error = %v, want the upstream delete failure", err)
+	}
+}
+
+func TestDeleteRejectsMalformedTaskUUID(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"missing", `{"result":"ok"}`},
+		{"empty", `{"result":"ok","taskuuid":""}`},
+		{"number", `{"result":"ok","taskuuid":12}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opener := &fakeControlOpener{script: []scriptedResponse{
+				{status: 200, body: []byte(tc.body)},
+			}}
+			client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+			err := client.Delete("7")
+			apiErr, ok := model.AsWpsAPIError(err)
+			if !ok || apiErr.Operation != "delete file task" || apiErr.Status != 0 ||
+				apiErr.Category != model.WpsCategoryUpstream {
+				t.Fatalf("error = %v, want the delete-file task failure", err)
+			}
+		})
+	}
+}
+
+func TestDeleteWaitsForObservedTaskBeforeReturning(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok","taskuuid":"task-uuid"}`)},
+		{status: 200, body: []byte(`{"finish":0,"result":"ok","status":"failed"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	err := client.Delete("7")
+	apiErr, ok := model.AsWpsAPIError(err)
+	if !ok || apiErr.Operation != "delete file task" || apiErr.Status != 0 {
+		t.Fatalf("error = %v, want the observed task failure", err)
+	}
+	if len(opener.requests) != 2 {
+		t.Fatalf("requests = %d, want the progress poll to run", len(opener.requests))
+	}
+}

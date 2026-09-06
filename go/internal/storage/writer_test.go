@@ -15,7 +15,4 @@ func TestWpsWriterRefusesUnportedMethods(t *testing.T) {
 	if _, err := writer.Upload(UploadRequest{}); err == nil || err.Error() != want {
 		t.Fatalf("upload error = %v, want %q", err, want)
 	}
-	if err := writer.Delete("x"); err == nil || err.Error() != want {
-		t.Fatalf("delete error = %v, want %q", err, want)
-	}
 }

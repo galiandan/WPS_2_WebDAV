@@ -34,7 +34,7 @@ func (w wpsWriter) Upload(request UploadRequest) (model.RemoteEntry, error) {
 }
 
 func (w wpsWriter) Delete(entryID string) error {
-	return errWriteNotImplemented
+	return w.client.Delete(entryID)
 }
 
 func (w wpsWriter) Rename(entryID string, name string) (model.RemoteEntry, error) {
