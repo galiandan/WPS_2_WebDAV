@@ -28,7 +28,7 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 from fake_upstream import FakeUpstream  # noqa: E402
-from harness import route, scenario  # noqa: E402
+from harness import record_result, route, scenario  # noqa: E402
 from wps_adapter.client import (  # noqa: E402
     FileCredentialSource,
     WpsApiError,
@@ -49,9 +49,7 @@ STORAGE_LIST_KWARGS = dict(
 
 
 def _record(name: str, payload: dict) -> None:
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    with open(os.path.join(RESULTS_DIR, f"{name}.json"), "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=True, sort_keys=True)
+    record_result(name, payload)
 
 
 class ClientFixtureTests(unittest.TestCase):

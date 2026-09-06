@@ -89,8 +89,8 @@ func TestNormalizePrefix(t *testing.T) {
 		"/wps-dav/": "/wps-dav",
 	}
 	for input, want := range cases {
-		if got := normalizePrefix(input); got != want {
-			t.Errorf("normalizePrefix(%q) = %q, want %q", input, got, want)
+		if got := NormalizePrefix(input); got != want {
+			t.Errorf("NormalizePrefix(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

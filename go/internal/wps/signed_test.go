@@ -280,14 +280,14 @@ func TestSignedTransportVerifiesTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest failed: %v", err)
 	}
-	if _, err := newSignedTransport(30).RoundTrip(request); err == nil ||
+	if _, err := NewSignedTransport(30).RoundTrip(request); err == nil ||
 		!strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("error = %v, want a certificate verification failure", err)
 	}
 }
 
 func TestSignedTransportDialsDirectlyWithBoundedPhases(t *testing.T) {
-	transport, ok := newSignedTransport(2.5).(*http.Transport)
+	transport, ok := NewSignedTransport(2.5).(*http.Transport)
 	if !ok {
 		t.Fatalf("signed transport is %T, want *http.Transport", transport)
 	}

@@ -1,0 +1,22 @@
+{
+  "301": {
+    "category": "http",
+    "exception_status": 301
+  },
+  "403": {
+    "category": "http",
+    "exception_status": 403
+  },
+  "404": {
+    "category": "http",
+    "exception_status": 404
+  },
+  "410": {
+    "category": "http",
+    "exception_status": 410
+  },
+  "500": {
+    "category": "http",
+    "exception_status": 500
+  }
+}

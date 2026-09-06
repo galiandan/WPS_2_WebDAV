@@ -101,7 +101,7 @@ func TestErrorTableRESTGoldens(t *testing.T) {
 			name:       "request body too large",
 			err:        errRequestBodyTooLarge(),
 			wantStatus: http.StatusRequestEntityTooLarge,
-			wantBody:   `{"error":""}`,
+			wantBody:   `{"error":"request body is too large"}`,
 			wantClose:  true,
 		},
 		{
@@ -224,10 +224,10 @@ func TestErrorTableDAVGoldens(t *testing.T) {
 			wantBody:   "COPY overwrite is disabled because the relay is not atomic\n",
 		},
 		{
-			name:       "request body too large keeps the empty message",
+			name:       "request body too large keeps the fixed message",
 			err:        errRequestBodyTooLarge(),
 			wantStatus: http.StatusRequestEntityTooLarge,
-			wantBody:   "\n",
+			wantBody:   "request body is too large\n",
 		},
 		{
 			name:       "upstream session expired stays text without codes",

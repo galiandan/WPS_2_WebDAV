@@ -50,11 +50,15 @@ func NewSignedObjectClient(config Config) *SignedObjectClient {
 	return &SignedObjectClient{
 		config:    config,
 		suffix:    normalizeObjectSuffix(config.ObjectStorageHostSuffix),
-		transport: newSignedTransport(config.Timeout),
+		transport: NewSignedTransport(config.Timeout),
 	}
 }
 
-func newSignedTransport(timeout float64) http.RoundTripper {
+// NewSignedTransport builds the direct signed-object transport (TLS
+// verified, no proxy environment). App wiring builds one shared instance
+// so every mounted space reuses the same connection pool, mirroring
+// Python's single shared opener.
+func NewSignedTransport(timeout float64) http.RoundTripper {
 	duration := seconds(timeout)
 	return &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: duration, KeepAlive: 30 * time.Second}).DialContext,

@@ -18,7 +18,7 @@ RESULTS_DIR = os.path.join(HERE, "results")
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from harness import Service, entry, route, scenario  # noqa: E402
+from harness import record_result, Service, entry, route, scenario  # noqa: E402
 
 USER = "bench-user"
 PASS = "bench-pass"
@@ -37,9 +37,7 @@ ENTRY_FIELDS = {"id", "name", "kind", "parent_id", "size", "modified_at", "etag"
 
 
 def _record(name: str, payload: dict) -> None:
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    with open(os.path.join(RESULTS_DIR, f"{name}.json"), "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=True, sort_keys=True)
+    record_result(name, payload)
 
 
 class RestContractTests(unittest.TestCase):

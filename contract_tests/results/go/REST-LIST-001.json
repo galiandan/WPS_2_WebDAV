@@ -1,0 +1,45 @@
+{
+  "content_type": "application/json; charset=utf-8",
+  "payload": {
+    "entries": [
+      {
+        "etag": "bench-etag-bench-file-1",
+        "id": "bench-file-1",
+        "kind": "file",
+        "modified_at": "1788268272",
+        "name": "bench-one.txt",
+        "parent_id": "0",
+        "size": 11
+      },
+      {
+        "etag": "bench-etag-bench-file-2",
+        "id": "bench-file-2",
+        "kind": "file",
+        "modified_at": "1788268272",
+        "name": "bench-two.txt",
+        "parent_id": "0",
+        "size": 11
+      },
+      {
+        "etag": "bench-etag-bench-dir-1",
+        "id": "bench-dir-1",
+        "kind": "folder",
+        "modified_at": "1788268272",
+        "name": "bench-folder",
+        "parent_id": "0",
+        "size": 11
+      },
+      {
+        "etag": null,
+        "id": "bench-null",
+        "kind": "file",
+        "modified_at": null,
+        "name": "nulls.txt",
+        "parent_id": null,
+        "size": null
+      }
+    ],
+    "path": "/"
+  },
+  "status": 200
+}

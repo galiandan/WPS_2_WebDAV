@@ -1,0 +1,5 @@
+{
+  "doctype_body": "LOCK request body must not declare XML entities\n",
+  "doctype_status": 400,
+  "invalid_status": 400
+}

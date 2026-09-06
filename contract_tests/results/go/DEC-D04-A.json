@@ -1,0 +1,14 @@
+{
+  "case_plus_a_b": {
+    "body": "{\"path\":\"/a b\",\"entry\":{\"id\":\"bench-dir-space\",\"name\":\"a b\",\"kind\":\"folder\",\"parent_id\":\"0\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":\"bench-etag-bench-dir-space\"}}",
+    "status": 200
+  },
+  "case_weird_percent_252f": {
+    "body": "{\"error\":\"entry not found: weird%252Fname.txt\"}",
+    "status": 404
+  },
+  "case_weird_percent_2f": {
+    "body": "{\"path\":\"/weird%2Fname.txt\",\"entry\":{\"id\":\"bench-file-weird\",\"name\":\"weird%2Fname.txt\",\"kind\":\"file\",\"parent_id\":\"0\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":\"bench-etag-bench-file-weird\"}}",
+    "status": 200
+  }
+}

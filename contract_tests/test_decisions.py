@@ -26,6 +26,7 @@ if HERE not in sys.path:
 
 from harness import (  # noqa: E402
     Service,
+    record_result,
     StartupFailed,
     basic_header,
     entry,
@@ -41,10 +42,7 @@ DEFAULT_LISTING = [
 
 
 def _record(name: str, payload: dict) -> None:
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    path = os.path.join(RESULTS_DIR, f"{name}.json")
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=True)
+    record_result(name, payload)
 
 
 class DecisionTests(unittest.TestCase):

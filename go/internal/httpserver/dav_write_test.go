@@ -367,9 +367,9 @@ func TestDavLockNewLockLifecycle(t *testing.T) {
 		t.Fatalf("token header = %q", recorder.Header().Get("Lock-Token"))
 	}
 	responseBody := recorder.Body.String()
-	if !strings.HasPrefix(responseBody, "<?xml version='1.0' encoding='utf-8'?>\n<prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock><D:locktype><D:write /></D:locktype><D:lockscope><D:exclusive /></D:lockscope><D:depth>Infinity</D:depth><D:owner>bench owner</D:owner><D:timeout>Second-") ||
+	if !strings.HasPrefix(responseBody, "<?xml version='1.0' encoding='utf-8'?>\n<D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock><D:locktype><D:write /></D:locktype><D:lockscope><D:exclusive /></D:lockscope><D:depth>Infinity</D:depth><D:owner>bench owner</D:owner><D:timeout>Second-") ||
 		!strings.HasSuffix(responseBody,
-			"</D:timeout><D:locktoken><D:href>"+token+"</D:href></D:locktoken><D:lockroot><D:href>/dav/bench-one.txt</D:href></D:lockroot></D:activelock></D:lockdiscovery></prop>") {
+			"</D:timeout><D:locktoken><D:href>"+token+"</D:href></D:locktoken><D:lockroot><D:href>/dav/bench-one.txt</D:href></D:lockroot></D:activelock></D:lockdiscovery></D:prop>") {
 		t.Fatalf("lock body = %q", responseBody)
 	}
 

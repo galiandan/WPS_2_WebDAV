@@ -54,6 +54,8 @@ type Config struct {
 	// WPS client connection.
 	CookieFile          string
 	CSRFTokenFile       string
+	InlineCookie        string
+	InlineCSRFToken     string
 	RefreshCommand      []string
 	RefreshTimeout      float64
 	BaseURL             string
@@ -152,6 +154,10 @@ func Load() (Config, error) {
 	}
 	cfg.CookieFile = os.Getenv("WPS_COOKIE_FILE")
 	cfg.CSRFTokenFile = os.Getenv("WPS_CSRF_TOKEN_FILE")
+	// Python's from_env also carries the inline WPS_COOKIE / WPS_CSRF_TOKEN
+	// values; client._credentials fills empty source fields from them.
+	cfg.InlineCookie = os.Getenv("WPS_COOKIE")
+	cfg.InlineCSRFToken = os.Getenv("WPS_CSRF_TOKEN")
 
 	refreshTimeout, err := envFloat("WPS_CREDENTIAL_REFRESH_TIMEOUT", 30)
 	if err != nil {

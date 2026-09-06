@@ -345,7 +345,7 @@ func TestSessionImportOversizedBody(t *testing.T) {
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d", recorder.Code)
 	}
-	if body := recorder.Body.String(); body != `{"error":""}` {
+	if body := recorder.Body.String(); body != `{"error":"request body is too large"}` {
 		t.Errorf("body = %q", body)
 	}
 }

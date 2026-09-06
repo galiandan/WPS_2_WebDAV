@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"entry already exists: bench-two.txt\"}",
+  "status": 409
+}

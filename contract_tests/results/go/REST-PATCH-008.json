@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"entry not found: missing.txt\"}",
+  "status": 404
+}

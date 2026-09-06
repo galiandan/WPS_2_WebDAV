@@ -1,9 +1,9 @@
 // Command wps-adapter serves the WPS enterprise drive as WebDAV and REST.
 //
-// Skeleton stage (task B200): only the command shapes --version,
-// check-config, and serve exist, and none of them touch WPS. The serve
-// command listens and answers /healthz; real routes arrive with the later
-// migration tasks.
+// The command shapes --version, check-config, and serve mirror Python's
+// __main__.py. check-config runs the full service assembly offline: it
+// builds every local resource but never dials WPS. serve listens behind
+// the process-wide connection budget and shuts down gracefully.
 package main
 
 import (
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/app"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/config"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/httpserver"
 )
 
 // Build-time injection points:
@@ -77,6 +77,16 @@ func runCheckConfig() int {
 	if code != 0 {
 		return code
 	}
+	// Python's check-config builds the whole AdapterApplication first: the
+	// settings file, workspace state, credential source, and client
+	// transports are all constructed locally, and only create_server is
+	// skipped. The Go assembly does the same without any network traffic.
+	application, err := app.New(cfg, version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
+		return 1
+	}
+	defer application.Close()
 	authState := "disabled"
 	if cfg.AuthEnabled() {
 		authState = "enabled"
@@ -87,7 +97,7 @@ func runCheckConfig() int {
 	}
 	fmt.Printf(
 		"config=ok group_id=%s auth=%s dav=%s rest=%s\n",
-		groupState, authState, cfg.DAVPrefix, cfg.RESTPrefix,
+		groupState, authState, application.DAVPrefix(), application.RESTPrefix(),
 	)
 	return 0
 }
@@ -104,10 +114,10 @@ func runServe(args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return 2
 	}
-	if err := cfg.CheckPublicBind(); err != nil {
-		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
-		return 1
-	}
+	// The runtime values feed the process-wide budget, so they are parsed
+	// before the assembly; Python evaluates them at create_server time and
+	// the only observable difference is which error wins when several are
+	// broken at once.
 	maxConnections, requestTimeout, err := config.ParseServerRuntime()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
@@ -115,14 +125,40 @@ func runServe(args []string) int {
 	}
 	cfg.MaxConnections = maxConnections
 	cfg.RequestTimeout = requestTimeout
+
+	application, err := app.New(cfg, version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
+		return 1
+	}
+	if err := cfg.CheckPublicBind(); err != nil {
+		application.Close()
+		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
+		return 1
+	}
 	if err := cfg.ValidateRuntime(); err != nil {
+		application.Close()
+		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
+		return 1
+	}
+	handler, err := application.Handler()
+	if err != nil {
+		application.Close()
 		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
 		return 1
 	}
 
-	application := &app.Application{Config: cfg, Version: version}
-	server := &http.Server{
-		Handler: application.Handler(),
+	listener, server, err := httpserver.Listen(httpserver.ServerConfig{
+		Bind:           cfg.Bind,
+		Port:           cfg.Port,
+		RequestTimeout: secondsDuration(requestTimeout),
+		TransferBudget: application.Budget,
+		Handler:        handler,
+	})
+	if err != nil {
+		application.Close()
+		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
+		return 1
 	}
 
 	// Handlers must be installed before anything observable (listening
@@ -132,16 +168,11 @@ func runServe(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
-		return 1
-	}
 	fmt.Printf("listening=http://%s:%d\n", cfg.Bind, cfg.Port)
 	fmt.Printf(
 		"webdav=http://%s:%d%s/ rest=http://%s:%d%s/\n",
-		cfg.Bind, cfg.Port, cfg.DAVPrefix,
-		cfg.Bind, cfg.Port, cfg.RESTPrefix,
+		cfg.Bind, cfg.Port, application.DAVPrefix(),
+		cfg.Bind, cfg.Port, application.RESTPrefix(),
 	)
 
 	serveErr := make(chan error, 1)
@@ -155,14 +186,20 @@ func runServe(args []string) int {
 		if err := shutdownServer(server, shutdownTimeout); err != nil {
 			fmt.Fprintf(os.Stderr, "adapter shutdown forced: %v\n", err)
 		}
+		application.Close()
 		return 0
 	case err := <-serveErr:
+		application.Close()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(os.Stderr, "adapter failed: %v\n", err)
 			return 1
 		}
 		return 0
 	}
+}
+
+func secondsDuration(value float64) time.Duration {
+	return time.Duration(value * float64(time.Second))
 }
 
 // shutdownTimeout bounds the graceful drain after SIGINT/SIGTERM.

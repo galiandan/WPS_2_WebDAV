@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -80,7 +81,7 @@ func (d *RESTDispatcher) doRestPut(w http.ResponseWriter, r *http.Request, route
 		}
 		return nil
 	}
-	entry, err := d.uploads.UploadPath(r.Context(), path, r.Body, storage.UploadOptions{
+	entry, err := d.uploads.UploadPath(r.Context(), path, limitedUploadBody{source: r.Body, remaining: *length}, storage.UploadOptions{
 		Size:        length,
 		ContentType: r.Header.Get("Content-Type"),
 		Overwrite:   overwrite,
@@ -118,7 +119,7 @@ func (d *DAVDispatcher) doDavPut(w http.ResponseWriter, r *http.Request, davPath
 	if !checkDeclaredUploadLength(w, r, *length, d.maxUploadBytes, false) {
 		return nil
 	}
-	entry, err := d.uploads.UploadPath(r.Context(), davPath, r.Body, storage.UploadOptions{
+	entry, err := d.uploads.UploadPath(r.Context(), davPath, limitedUploadBody{source: r.Body, remaining: *length}, storage.UploadOptions{
 		Size:        length,
 		ContentType: r.Header.Get("Content-Type"),
 		Overwrite:   true,
@@ -133,4 +134,30 @@ func (d *DAVDispatcher) doDavPut(w http.ResponseWriter, r *http.Request, davPath
 	return sendJSON(w, r, http.StatusCreated, entry.Public(), d.limits, map[string]string{
 		"Location": buildHref(parts, entry, d.davPrefix),
 	})
+}
+
+// limitedUploadBody mirrors Python's _LimitedReader: the upload sees a
+// clean end-of-stream when the connection closes before the declared
+// Content-Length, so the spool's declared-size check answers the same 400
+// instead of surfacing a transport error.
+type limitedUploadBody struct {
+	source    io.Reader
+	remaining int64
+}
+
+func (l limitedUploadBody) Read(p []byte) (int, error) {
+	if l.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > l.remaining {
+		p = p[:l.remaining]
+	}
+	read, err := l.source.Read(p)
+	l.remaining -= int64(read)
+	if err != nil && !errors.Is(err, io.EOF) && errors.Is(err, io.ErrUnexpectedEOF) {
+		// The client went away mid-body: a clean end for the upload, whose
+		// declared-size mismatch is reported by the storage layer.
+		return read, io.EOF
+	}
+	return read, err
 }

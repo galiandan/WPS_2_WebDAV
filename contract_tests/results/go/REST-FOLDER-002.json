@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"entry already exists: /bench-folder\"}",
+  "status": 409
+}

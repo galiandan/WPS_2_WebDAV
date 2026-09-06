@@ -450,7 +450,7 @@ func lockResponseBody(active ActiveLock, remainingSeconds int, lockrootHref stri
 	}
 	var builder strings.Builder
 	builder.WriteString("<?xml version='1.0' encoding='utf-8'?>\n")
-	builder.WriteString(`<prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>`)
+	builder.WriteString(`<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>`)
 	builder.WriteString(`<D:locktype><D:write /></D:locktype>`)
 	builder.WriteString(`<D:lockscope><D:exclusive /></D:lockscope>`)
 	builder.WriteString("<D:depth>" + depth + "</D:depth>")
@@ -462,7 +462,7 @@ func lockResponseBody(active ActiveLock, remainingSeconds int, lockrootHref stri
 	builder.WriteString("<D:timeout>Second-" + strconv.Itoa(remainingSeconds) + "</D:timeout>")
 	builder.WriteString(`<D:locktoken><D:href>` + xmlText(active.Token) + `</D:href></D:locktoken>`)
 	builder.WriteString(`<D:lockroot><D:href>` + xmlText(lockrootHref) + `</D:href></D:lockroot>`)
-	builder.WriteString(`</D:activelock></D:lockdiscovery></prop>`)
+	builder.WriteString(`</D:activelock></D:lockdiscovery></D:prop>`)
 	return []byte(builder.String())
 }
 

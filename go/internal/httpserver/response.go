@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,6 +69,14 @@ func sendError(w http.ResponseWriter, r *http.Request, status int, message strin
 		payload = []byte(`{"error":"internal server error"}`)
 	}
 	writeResponse(w, r, status, payload, contentTypeJSON, extra, closeConn)
+}
+
+// SendPlainError exposes the text error framing to the app assembly for the
+// web routes Python serves outside the dispatcher error table (the page
+// unavailability fallback and the unknown-asset 404): text with a trailing
+// newline and a closed connection, like close_connection = True.
+func SendPlainError(w http.ResponseWriter, r *http.Request, status int, message string) {
+	sendError(w, r, status, message, false, nil, true)
 }
 
 // marshalPythonJSON renders v the way Python's
@@ -171,11 +180,12 @@ func sendJSON(w http.ResponseWriter, r *http.Request, status int, payload any, l
 	return nil
 }
 
-// requestBodyTooLarge mirrors Python's _RequestBodyTooLarge: an empty
-// message and a closed connection on top of the 413.
+// requestBodyTooLarge mirrors Python's _RequestBodyTooLarge, whose message
+// reaches the client through _handle_exception: 413 with
+// "request body is too large".
 type requestBodyTooLarge struct{}
 
-func (requestBodyTooLarge) Error() string { return "" }
+func (requestBodyTooLarge) Error() string { return "request body is too large" }
 
 func errRequestBodyTooLarge() error { return requestBodyTooLarge{} }
 
@@ -202,9 +212,9 @@ func errBadRequestClose(message string) error {
 func mapError(w http.ResponseWriter, r *http.Request, err error, rest bool) {
 	var tooLarge requestBodyTooLarge
 	if errors.As(err, &tooLarge) {
-		// Python raises _RequestBodyTooLarge without a message, so both
-		// framings carry an empty message over a closed connection.
-		sendError(w, r, http.StatusRequestEntityTooLarge, "", rest, nil, true)
+		// Python's _handle_exception answers str(exc): the fixed message in
+		// both framings, over a closed connection.
+		sendError(w, r, http.StatusRequestEntityTooLarge, tooLarge.Error(), rest, nil, true)
 		return
 	}
 	var control *controlRequestError
@@ -236,6 +246,10 @@ func mapError(w http.ResponseWriter, r *http.Request, err error, rest bool) {
 			// filesystem or transport detail never reaches the client.
 			sendError(w, r, http.StatusBadGateway, "local or upstream I/O failed", rest, nil, false)
 		default:
+			// Python logs unexpected exceptions server-side (LOG.exception)
+			// before the fixed 500; adapter error strings are sanitized by
+			// construction.
+			log.Printf("request failed: %v", err)
 			sendError(w, r, http.StatusInternalServerError, "internal server error", rest, nil, false)
 		}
 		return
@@ -258,7 +272,9 @@ func mapError(w http.ResponseWriter, r *http.Request, err error, rest bool) {
 		sendError(w, r, http.StatusBadGateway, "local or upstream I/O failed", rest, nil, false)
 		return
 	}
-	// Python's final fallback logs and answers a fixed 500.
+	// Python's final fallback logs and answers a fixed 500 (LOG.exception);
+	// adapter error strings are sanitized by construction.
+	log.Printf("request failed: %v", err)
 	sendError(w, r, http.StatusInternalServerError, "internal server error", rest, nil, false)
 }
 

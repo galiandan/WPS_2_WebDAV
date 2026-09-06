@@ -1,0 +1,15 @@
+{
+  "conflict_body": "entry already exists: /bench-folder/\n",
+  "conflict_status": 409,
+  "location": "/dav/created-dav/",
+  "payload": {
+    "etag": null,
+    "id": "bench-folder-new",
+    "kind": "folder",
+    "modified_at": "1788268272",
+    "name": "created-dav",
+    "parent_id": "0",
+    "size": 0
+  },
+  "status": 201
+}

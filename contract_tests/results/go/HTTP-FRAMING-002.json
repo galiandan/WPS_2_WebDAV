@@ -1,0 +1,4 @@
+{
+  "body": "{\"status\":\"ok\",\"service\":\"wps-enterprise-adapter\",\"version\":\"0.9.8\",\"network_calls\":\"on-demand\"}",
+  "status_line": "HTTP/1.1 200 OK"
+}

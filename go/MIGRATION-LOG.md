@@ -3432,3 +3432,157 @@ entry/depth 上限、级联清理、清理失败吞掉、existing 目标绝不�
 删）、LOCK 并发/过期/继承/刷新 ✓（race 压测、注入时钟过期、
 infinity 继承与祖先冲突、refresh 保 token）；各写路由锁检查全
 部接入并由黑盒测试固定 ✓。
+
+## B1300 组装依赖
+
+日期：2026-09-06
+
+按 04-backend-migration-steps.md §14 B1300 执行；重写
+go/internal/app/application.go（此前为 B200 骨架）、改接
+go/cmd/wps-adapter/main.go。组装顺序：config → secure 状态
+（securefile 读取器经 ReadSecret/凭据源注入，Go 无独立 secure 状态
+对象，折叠进凭据/认证步）→ 凭据/workspace/settings → HTTP clients
+→ 全局 budget → storage → handlers → server。
+
+- 凭据：config 新增 WPS_COOKIE/WPS_CSRF_TOKEN 内联值（Python
+  from_env 同款读取）；FileCredentialSource 存在时文件快照优先、
+  内联值仅补空字段（镜像 client._credentials 的逐字段回退）；无
+  文件源时 import 拒绝、store/replace 返回 false（Python 的
+  missing replace_credentials 同义）。会话过期与轮换持久化语义与
+  Python 一致（仅 FileCredentialSource 落盘）。
+- workspace：app.New 按 Python from_env 条件重建热加载
+  WorkspaceState（group/root auto 或文件存在）；config.Load 的
+  快照仅服务 check-config 摘要。SingleSelection 返回
+  configured_root == "auto" 的 autoRoot，与
+  WpsStorage._sync_workspace_root 条件一致。
+- HTTP clients：所有 space 共享一个控制面 opener 与签名传输
+  （wps 新增导出 NewControlHTTPClient/NewSignedTransport，镜像
+  Python 的单 opener 共享）；凭据源全局唯一——刷新协调全局串行
+  （B1300「所有 child space 共用全局资源与刷新协调器」）。
+- 全局 budget 提到 client 构造之前：client 的 spool 预留经
+  SpoolLimiter 协调（D-03），顺序若按计划字面（clients→budget）
+  会让上传无协调器；以 D-03 的资源安全语义为准，偏差已记录。
+  主循环 MaxConnections 兜底 DefaultMaxConnections（check-config
+  不解析 serve 专属变量，保持 Python 语义）。
+- handlers：REST/DAV dispatcher、DavLockStore（WPS_MAX_LOCKS、
+  超时默认 86400）、RootNameController、StatusController
+  （multi 为 roots、基础 client 为 checker——镜像
+  current_wps_status 的 storage.client.check_status）、
+  SessionImporter（工作区导入面仅在 state 存在时注入，roots 同步
+  为 nil——Python 无 workspace 时不调 set_root_id）。
+- server：main.go 改用 httpserver.Listen（连接槽门 + 头部超时），
+  组装顺序 app.New → CheckPublicBind → ValidateRuntime → Listen，
+  对齐 Python（_application → _check_public_bind → create_server）；
+  serve 专属变量在组装前解析（与 Python 在 create_server 处求值
+  的差异仅影响多重故障时先报哪条错误，已记录）。构造失败经
+  fail() 关闭已建传输（CloseIdleConnections）；check-config 走
+  完整本地组装、零网络（与 Python 构造整个 AdapterApplication 一
+  致，含坏 settings 文件导致 check-config 失败的语义）。
+- app.New 增加注入 Option（WithTransports）供契约入口使用（见
+  B1302）；生产 main 不传。
+
+测试：组装齐全性与 settings→storage 根名传播、auto root 的
+workspace 选择、组装失败顺序（budget 先于 client 泄漏面、锁上限
+最后）、内联凭据回退与拒绝面、workspace 导入面成对注入、
+spaceFactory 空 group 复用基础 client/挂载自建 client、
+check-config 离线输出逐字符、坏 workspace 文件失败退出。
+
+偏差：①budget 先于 client（如上，D-03 依赖）；②serve 专属变量
+解析先于组装（仅多重故障报错顺序）；③目标平台收敛 Linux——
+负责人指示本阶段起不再产出 windows/darwin 构建（B201 曾误把
+冒烟二进制提交入库，已从 git 移除并加入 .gitignore）。
+
+## B1301 接入静态前端
+
+日期：2026-09-06
+
+依赖 05-frontend-plan.md（M2-F0..F5 已完成：三资产拆分、settings
+取根名、CSP 收紧、Python 白名单桥）。本任务完成 F6 的 Go 嵌入侧。
+
+- go/web/embed.go：//go:embed index.html style.css app.js；
+  白名单 Asset(name) 只暴露清单内两资源（含 MIME），Page() 返回
+  固定页字节；缓存策略常量 no-store（§10.10/11：文件名无内容哈
+  希）。不承载业务路由、不读配置、不做运行时替换。
+- app.serveWebApp：/、/web、/web/ 三入口（Router 既有
+  webAppPaths）200 text/html; charset=utf-8 + 固定 CSP + nosniff
+  + no-store + Content-Length；根名经 GET/PATCH /api/v1/settings
+  （M2-F3 语义），响应 HTML 不含用户名。OSError 分支以
+  SendPlainError 保留结构镜像（embed 下不可达）。
+- app.serveWebAsset：白名单命中 200 + 白名单 MIME + nosniff +
+  no-store；未命中 404 "unknown web asset\n" + Connection: close
+  （Python _handle_web_asset 逐字节）；HEAD 无 body 有长度；
+  其余方法走 Router 既有 404/501 兼容路径。httpserver 导出
+  SendPlainError/NormalizePrefix 供组装层使用（路由错误表与
+  Python 前缀归一的单一事实源）。
+- 认证/E2E：页面与资产均在 Basic Auth 后（401 挑战逐字节），
+  /healthz 豁免；E2E 覆盖未认证 401、认证后三入口字节等于嵌入
+  资产、Content-Type/CSP/no-store/nosniff/Content-Length、未知
+  资产与编码拼写/穿越形态 404、HEAD 无 body、POST 资产 404、
+  CSP 无 unsafe-inline 且页内无内联 script（嵌入字节断言）；
+  进程级 TestServeServesWebPageAndAssets 用真实二进制复核。
+
+## B1302 全量对照
+
+日期：2026-09-06
+
+按 §14 B1302 执行；harness.Service 增加 Go 模式
+（CONTRACT_SERVICE_BINARY）：fake upstream 留在 harness 进程，经
+contract_tests/fake_relay.py 的 loopback relay 暴露；测试专用
+入口 go/internal/contractsrv 把 WPS 传输全部换成 relay 客户端
+（app.WithTransports 注入），配置/安全文件/存储路由/服务生命周
+期全部走生产路径——与 python_service.py 的补丁范围一一对应。
+结果写 contract_tests/results/go/；场景归一（epoch、随机
+lock token、os.urandom 摘要、reason phrase 只比状态码）。
+tools/compare_contract.py 双端运行 + 逐场景 diff + 分类表 + 
+results/comparison-report.json，未批准差异非零即退出 1。
+
+结果：119 场景 112 项逐字节一致；3 项批准修正（D-03 进程级预算
+502×4 vs 201×4、D-04 单次解码、D-07 控制字符拒绝）；1 项细纲规
+定（DEC-D09-A：B502 冷 miss 同键合并使"两次上游到达"前置不成立，
+D-09 门等价性由 TestSlotListenerClosesThirdConnection 固定）；
+3 项偏差待负责人追认：①HTTP-FRAMING-002——Go 传输层对值相同的
+重复 Content-Length 去重放行（值不同仍 400），镜像 Python 的
+逐次拒绝需原始连接字节扫描；②DAV-DELETE-001/REST-DELETE-001——
+Python 在 204 上发显式 Content-Length: 0，Go 传输层按 RFC 7230
+§3.3.2 一律剥离。未批准差异 = 0。
+
+对照过程中修复的实现缺陷（Go 侧）：contractsrv 缺 serve 前置
+检查（ParseServerRuntime/CheckPublicBind/ValidateRuntime）、relay
+nil Body panic、relay 404 分支不排空请求体导致 keep-alive 失步；
+组装层 SpoolLimiter 未接线（budget 先于 client 的根因，D-03 语
+义）；413 响应体应为 "request body is too large"（B602 曾按"空
+消息"假设实现，Python 3.14 基线为固定消息）；LOCK 响应根元素应
+为 <D:prop xmlns:D="DAV:">（ElementTree register_namespace 对根
+同样加前缀）；上传正文按声明长度限读且提前断开视为干净 EOF
+（_LimitedReader 镜像，短读落 400 "source size mismatch"）。
+测试骨架另暴露 app 组装对 t.TempDir 权限/内联凭据的适配与
+cmd 进程测试补强（check-config 组装路径、坏 workspace 失败、
+真实二进制资产服务）。
+
+## B1303 全量静态与并发检查
+
+日期：2026-09-06
+
+- gofmt -l 无差异；go vet ./... 通过；go test ./... 全绿；
+  go test -race ./... 全绿，wps/storage/httpserver -race
+  -count=2 全绿。
+- parser fuzz：06-testing-risk-gates.md 10.1 的解析器入口新增 7
+  个 fuzz 目标——路径/查询解码（SplitRequestTarget+unquotePercent
+  +parseQueryValues）、LOCK owner XML（含 DOCTYPE/ENTITY/控制字
+  笜/深嵌套种子）、Range、Basic Auth base64、Set-Cookie 合并、
+  workspace/settings JSON、multipart checkpoint JSON。每目标
+  30s 实机 fuzz（合计 3.5 分钟、约 2,000 万次执行）无崩溃无泄
+  漏；种子语料随 go test 常规运行回归。CI 定时 10 分钟/发布候选
+  30 分钟的长跑按 06-testing-risk-gates.md 留给所有者侧流水线。
+- Linux amd64/arm64 构建通过（负责人指示：目标平台 Linux，不再
+  产出 windows/darwin 构建）。
+- 二进制 smoke：cmd 进程测试（TestMain 构建真实二进制）覆盖启
+  动两行监听、/healthz 契约、SIGTERM/SIGINT 优雅停止退出 0、强
+  制关闭期限、端口冲突退出 1、公共 bind 拒绝、认证后页面/资产
+  服务；全部通过。
+- Python 参照套件 169 项、contract_tests 119 项全绿；manifest 按
+  门禁顺序重建。
+
+完成条件：Go 服务具备全部旧能力（REST/DAV 读写、上传、multipart、
+COPY、LOCK、多空间、session import、前端资源），尚未替换生产入口
+（阶段 14 部署、灰度与发布后按 08-executor-checklist.md 签字切换）。

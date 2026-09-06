@@ -265,3 +265,89 @@ func TestShutdownTimeoutForceCloses(t *testing.T) {
 		t.Fatal("forced shutdown did not complete within 15s")
 	}
 }
+
+func TestCheckConfigAssemblesOffline(t *testing.T) {
+	dir := t.TempDir()
+	private := dir + "/secrets"
+	if err := os.Mkdir(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspaceFile := private + "/workspace.json"
+	if err := os.WriteFile(workspaceFile, []byte(`{"group_id": "group-1", "root_id": "root-1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binaryPath, "check-config")
+	cmd.Env = append(os.Environ(), "WPS_WORKSPACE_FILE="+workspaceFile)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("check-config failed: %v (%s)", err, output)
+	}
+	line := strings.TrimSpace(string(output))
+	want := "config=ok group_id=ready auth=disabled dav=/dav rest=/api/v1"
+	if line != want {
+		t.Errorf("check-config output = %q, want %q", line, want)
+	}
+}
+
+func TestCheckConfigFailsOnBrokenWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	private := dir + "/secrets"
+	if err := os.Mkdir(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspaceFile := private + "/workspace.json"
+	if err := os.WriteFile(workspaceFile, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binaryPath, "check-config")
+	cmd.Env = append(os.Environ(), "WPS_WORKSPACE_FILE="+workspaceFile)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("check-config unexpectedly succeeded: %s", output)
+	}
+	if !strings.Contains(string(output), "adapter failed") {
+		t.Errorf("stderr = %q", output)
+	}
+}
+
+func TestServeServesWebPageAndAssets(t *testing.T) {
+	port := freePort(t)
+	process := startServer(t, []string{"ADAPTER_USERNAME=u", "ADAPTER_PASSWORD=p"},
+		"serve", "--bind", "127.0.0.1", "--port", strconv.Itoa(port))
+	process.waitListening(t)
+	base := "http://127.0.0.1:" + strconv.Itoa(port)
+
+	// Unauthenticated page access gets the Basic Auth challenge.
+	response, err := http.Get(base + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unauthenticated / = %d", response.StatusCode)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, base+"/assets/app.js", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth("u", "p")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("authenticated asset = %d", response.StatusCode)
+	}
+	if ct := response.Header.Get("Content-Type"); ct != "text/javascript; charset=utf-8" {
+		t.Errorf("asset Content-Type = %q", ct)
+	}
+	if len(body) == 0 {
+		t.Error("asset body is empty")
+	}
+
+	process.signal(t, syscall.SIGTERM)
+	process.waitExit(t, 0)
+}

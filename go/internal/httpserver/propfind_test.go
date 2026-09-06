@@ -518,8 +518,8 @@ func TestPropfindDiscardsBody(t *testing.T) {
 	request = newTestRequest("PROPFIND", "/dav/")
 	request.Header.Set("Content-Length", "999999")
 	router.ServeHTTP(recorder, request)
-	// The empty message keeps the text framing: a bare newline body.
-	if recorder.Code != http.StatusRequestEntityTooLarge || recorder.Body.String() != "\n" {
+	// The fixed message keeps the text framing, like Python's str(exc).
+	if recorder.Code != http.StatusRequestEntityTooLarge || recorder.Body.String() != "request body is too large\n" {
 		t.Fatalf("oversized body: status = %d body = %q", recorder.Code, recorder.Body.String())
 	}
 }

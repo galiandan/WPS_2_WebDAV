@@ -33,22 +33,28 @@
 | 阶段 10 普通上传 | 请求正文与 spool、pre_check 与冲突语义、create_update 与对象 PUT、文件登记 | B1000–B1003 |
 | 阶段 11 multipart 上传与检查点 | 检查点格式、初始化与分片大小、单片上传、session 失效恢复、merge 与登记 | B1100–B1104 |
 | 阶段 12 COPY 与 DAV LOCK | 原生单文件 COPY、文件中继 COPY、文件夹 COPY、Lock Store、LOCK/UNLOCK 协议与全路由锁检查 | B1200–B1204 |
+| 阶段 13 完整服务整合 | 全量组装（凭据/热 workspace/共享 opener/全局 budget/storage/handlers/server）、Go 嵌入前端三资产与三入口、Python/Go 119 场景全量对照（未批准差异归零）、fuzz/构建/冒烟门禁 | B1300–B1303 |
 
-当前 Go 侧门禁基线：`gofmt`/`go vet` 无差异，`go test ./...` 全绿，
-交叉构建 linux amd64/arm64、windows amd64、darwin arm64 通过；
-Python 参照套件（169）与 contract_tests（119）保持全绿。
+当前 Go 侧门禁基线：`gofmt`/`go vet` 无差异，`go test ./...` 全绿
+（含 -race）；解析器 fuzz 目标 7 个实机通过；构建目标为 Linux
+amd64/arm64（负责人指示：目标平台 Linux，不再产出 windows/darwin
+构建）；Python 参照套件（169）与 contract_tests（119）保持全绿。
+Python/Go 契约对照：112 场景逐字节一致、3 项批准修正、1 项细纲
+规定行为、3 项偏差待负责人追认（见 MIGRATION-LOG B1302 与
+contract_tests/results/comparison-report.json）。
 
 ## 下一步（按细纲顺序）
 
-1. **阶段 13 完整服务整合**（`04-backend-migration-steps.md` §14）：
-   B1300 组装依赖 → B1301 接入静态前端（依赖 `05-frontend-plan.md`）
-   → B1302 与 Python 全量对照 → B1303 全量静态与并发检查
-2. **阶段 14 部署、灰度与发布**：按 `07-deployment-release-plan.md`
-   与 `08-executor-checklist.md` 执行，全部签字后才允许切换默认服务
+1. **阶段 14 部署、灰度与发布**：按 `07-deployment-release-plan.md`
+   与 `08-executor-checklist.md` 执行（`05-frontend-plan.md` 最终
+   浏览器验收、`06-testing-risk-gates.md` 完整门禁、Native/Docker/
+   CI 发布步骤、灰度与回滚演练），全部签字后才允许切换默认服务
 
 ## 遗留提醒
 
 - 所有者侧门禁仍未执行：真实 WPS 专用目录的人工验证、浏览器 E2E
-  （M203/M205）、前端 F0 截图与 FE-02 追认等，按细纲留到对应阶段。
+  （M203/M205）、fuzz 长跑（CI 定时 10 分钟/发布候选 30 分钟）、
+  三项契约偏差追认（重复 Content-Length、204 Content-Length、
+  见 MIGRATION-LOG B1302）等，按细纲留到对应阶段。
 - 任何任务开始前先读对应细纲小节；完成后 MIGRATION-LOG 记录证据、
   门禁全绿再提交推送；未完成前置任务不开后续任务。

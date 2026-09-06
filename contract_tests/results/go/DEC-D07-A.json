@@ -1,0 +1,6 @@
+{
+  "import_body": "{\"error\":\"space.name is invalid\"}",
+  "import_status": 400,
+  "request": "POST /api/v1/session/import with mount name 'bench-a\\nb'",
+  "root_names_after_import": null
+}

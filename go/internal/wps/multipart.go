@@ -100,29 +100,40 @@ func loadResumeCheckpoint(path string, identity string) (map[string]any, map[str
 	if err != nil || payload == nil {
 		return nil, nil
 	}
-	version, ok := pyToInt(payload["version"])
-	if !ok || version != 1 {
+	parts, ok := parseCheckpointPayload(payload, identity)
+	if !ok {
 		return nil, nil
 	}
+	return payload, parts
+}
+
+// parseCheckpointPayload validates one decoded checkpoint document and
+// extracts the accepted part etags; a nil result with false means the file
+// is stale or malformed and resume proceeds from memory.
+func parseCheckpointPayload(payload map[string]any, identity string) (map[string]string, bool) {
+	version, ok := pyToInt(payload["version"])
+	if !ok || version != 1 {
+		return nil, false
+	}
 	if candidateIdentity, isString := payload["identity"].(string); !isString || candidateIdentity != identity {
-		return nil, nil
+		return nil, false
 	}
 	rawParts, ok := payload["parts"].(map[string]any)
 	if !ok {
-		return nil, nil
+		return nil, false
 	}
 	parts := make(map[string]string, len(rawParts))
 	for name, value := range rawParts {
 		if !isASCIIDecimal(name) {
-			return nil, nil
+			return nil, false
 		}
 		etag, isString := value.(string)
 		if !isString {
-			return nil, nil
+			return nil, false
 		}
 		parts[name] = etag
 	}
-	return payload, parts
+	return parts, true
 }
 
 // saveResumeCheckpoint mirrors save_state: an atomic 0600 replace through

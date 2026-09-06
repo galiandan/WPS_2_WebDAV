@@ -114,16 +114,17 @@ func NewRouter(config RouterConfig) (*Router, error) {
 		return nil, errors.New("a DAV handler is required")
 	}
 	return &Router{
-		davPrefix:  normalizePrefix(config.DAVPrefix),
-		restPrefix: normalizePrefix(config.RESTPrefix),
+		davPrefix:  NormalizePrefix(config.DAVPrefix),
+		restPrefix: NormalizePrefix(config.RESTPrefix),
 		handlers:   handlers,
 	}, nil
 }
 
-// normalizePrefix mirrors AdapterApplication._normalise_prefix: a leading
+// NormalizePrefix mirrors AdapterApplication._normalise_prefix: a leading
 // slash is added when missing and trailing slashes are collapsed; the empty
-// value becomes the root prefix "/".
-func normalizePrefix(value string) string {
+// value becomes the root prefix "/". Exported so the application summary
+// reports the same normalized prefixes Python prints.
+func NormalizePrefix(value string) string {
 	if !strings.HasPrefix(value, "/") {
 		value = "/" + value
 	}

@@ -213,7 +213,7 @@ func NewClient(config Config, options ...Option) (*Client, error) {
 
 	client := &Client{
 		config:     config,
-		opener:     newControlHTTPClient(config.Timeout),
+		opener:     NewControlHTTPClient(config.Timeout),
 		signed:     NewSignedObjectClient(config),
 		diskFree:   budget.DiskFree,
 		warnUpload: func(message string) { log.Printf("%s", message) },
@@ -270,11 +270,13 @@ func hasControlChars(value string) bool {
 	return false
 }
 
-// newControlHTTPClient builds the real control-plane transport: TLS is
+// NewControlHTTPClient builds the real control-plane transport: TLS is
 // verified, redirects are never followed (the 3xx response surfaces so the
 // request layer maps its status), no cookie jar exists, and the configured
 // timeout bounds connection phases and the whole bounded control response.
-func newControlHTTPClient(timeout float64) *http.Client {
+// App wiring builds one shared instance so every mounted space reuses the
+// same connection pool, mirroring Python's single shared opener.
+func NewControlHTTPClient(timeout float64) *http.Client {
 	duration := seconds(timeout)
 	return &http.Client{
 		Transport: &http.Transport{

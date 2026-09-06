@@ -1,7 +1,7 @@
 {
-  "request": "POST /api/v1/session/import with mount name 'bench-a\\nb'",
-  "import_status": 200,
   "import_body": "{\"status\":\"ok\",\"cookie_count\":3,\"workspace\":\"updated\"}",
+  "import_status": 200,
+  "request": "POST /api/v1/session/import with mount name 'bench-a\\nb'",
   "root_names_after_import": [
     "bench-a\nb"
   ]

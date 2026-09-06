@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"remote paths must start with '/'\"}",
+  "status": 400
+}

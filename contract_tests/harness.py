@@ -28,8 +28,23 @@ import threading
 import time
 from http.client import HTTPConnection
 
+from fake_relay import FakeRelay, serve_relay
+from fake_upstream import FakeUpstream
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(HERE)
+
+RESULTS_SUBDIR = os.environ.get("CONTRACT_RESULTS_SUBDIR", "").strip("/")
+
+
+def record_result(name: str, payload: dict) -> None:
+    """Write one scenario observation; Go runs land under results/go/."""
+
+    directory = os.path.join(HERE, "results", RESULTS_SUBDIR) if RESULTS_SUBDIR else os.path.join(HERE, "results")
+    os.makedirs(directory, exist_ok=True)
+    with open(os.path.join(directory, f"{name}.json"), "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=True, sort_keys=True)
+
 
 COOKIE_PLACEHOLDER = "bench-session=bench-cookie-placeholder; bench-rtk=bench-rtk-placeholder"
 CSRF_PLACEHOLDER = "bench-csrf-placeholder"
@@ -155,7 +170,10 @@ class Service:
         max_connections: int = 64,
         extra_env: dict[str, str] | None = None,
         start_timeout: float = 20.0,
+        binary: str | None = None,
     ) -> None:
+        binary = binary or os.environ.get("CONTRACT_SERVICE_BINARY") or None
+        self._relay_server = None
         self._dir = tempfile.mkdtemp(prefix="wps-contract-")
         os.chmod(self._dir, 0o700)
         self._process: subprocess.Popen | None = None
@@ -208,8 +226,27 @@ class Service:
 
         child_env = os.environ.copy()
         child_env.update(env)
-        self._process = subprocess.Popen(
-            [
+        if binary is not None:
+            # Go mode: the fake upstream stays in this process behind a
+            # loopback relay; the binary replays every WPS request through
+            # it, so recordings match the Python service byte for byte.
+            fake = FakeUpstream(scenario_data or {}, self._record_path, self._stats_path)
+            self._relay_server = serve_relay(FakeRelay(fake))
+            relay_host, relay_port = self._relay_server.server_address[:2]
+            env["CONTRACT_FAKE_RELAY"] = f"http://{relay_host}:{relay_port}"
+            env.pop("PYTHONPATH", None)
+            env.pop("PYTHONDONTWRITEBYTECODE", None)
+            child_env = os.environ.copy()
+            child_env.update(env)
+            command = [
+                binary,
+                "--port",
+                str(self.port),
+                "--relay",
+                env["CONTRACT_FAKE_RELAY"],
+            ]
+        else:
+            command = [
                 sys.executable,
                 os.path.join(HERE, "python_service.py"),
                 "--port",
@@ -220,7 +257,9 @@ class Service:
                 self._record_path,
                 "--stats",
                 self._stats_path,
-            ],
+            ]
+        self._process = subprocess.Popen(
+            command,
             env=child_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -267,6 +306,10 @@ class Service:
         return path
 
     def stop(self) -> None:
+        if self._relay_server is not None:
+            self._relay_server.shutdown()
+            self._relay_server.server_close()
+            self._relay_server = None
         if self._process is None:
             return
         if self._process.poll() is None:
