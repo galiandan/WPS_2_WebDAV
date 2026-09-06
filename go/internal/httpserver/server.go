@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/budget"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/opdeadline"
 )
 
 // ServerConfig mirrors Python's create_server parameters. The connection
@@ -43,29 +44,33 @@ func Listen(config ServerConfig) (net.Listener, *http.Server, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// Python applies its socket timeout to every operation on the
-	// connection. Go cannot bound a streaming body or response write the
-	// same way without killing legitimate long transfers, so the server
-	// bounds the header phase and the idle gap between requests; body and
-	// response deadlines are the handlers' business.
+	// Python applies its socket timeout to every operation on the client
+	// connection (connection.settimeout), so a stalled request body or a
+	// client that stops draining a response fails the pending operation
+	// instead of holding a transfer slot forever. The wrapped connection
+	// re-arms the deadline per read and write: transfers that keep moving
+	// are never cut off.
 	server := &http.Server{
 		Handler:           config.Handler,
 		ReadHeaderTimeout: config.RequestTimeout,
 		IdleTimeout:       config.RequestTimeout,
 	}
-	return newSlotListener(listener, config.TransferBudget), server, nil
+	return newSlotListener(listener, config.TransferBudget, config.RequestTimeout), server, nil
 }
 
 // slotListener gates connections on the process-wide budget: over-limit
 // connections are closed at accept without holding a slot (D-09), and every
-// accepted connection releases its slot exactly once when it closes.
+// accepted connection releases its slot exactly once when it closes. Each
+// connection also carries the per-operation timeout that mirrors Python's
+// connection.settimeout.
 type slotListener struct {
 	net.Listener
-	budget *budget.Budget
+	budget  *budget.Budget
+	timeout time.Duration
 }
 
-func newSlotListener(listener net.Listener, transferBudget *budget.Budget) *slotListener {
-	return &slotListener{Listener: listener, budget: transferBudget}
+func newSlotListener(listener net.Listener, transferBudget *budget.Budget, timeout time.Duration) *slotListener {
+	return &slotListener{Listener: listener, budget: transferBudget, timeout: timeout}
 }
 
 func (l *slotListener) Accept() (net.Conn, error) {
@@ -79,7 +84,7 @@ func (l *slotListener) Accept() (net.Conn, error) {
 			_ = conn.Close()
 			continue
 		}
-		return &slotConn{Conn: conn, release: release}, nil
+		return &slotConn{Conn: opdeadline.Wrap(conn, l.timeout), release: release}, nil
 	}
 }
 

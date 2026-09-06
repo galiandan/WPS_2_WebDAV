@@ -3,6 +3,6 @@
     200,
     200
   ],
-  "probe_received": "b'HTTP/1.1 200 OK\\r\\nCache-Control: no-store\\r\\nContent-Length: 96\\r\\nContent-Type: application/json; charset=utf-8\\r\\nDate: Sun, 06 Sep 2026 13:16:02 GMT\\r\\n\\r\\n{\"status\":\"ok\",\"service\":\"wps-enterprise-adapter\",\"version\":\"0.9.8\",\"network_calls\":\"on-demand\"}'",
+  "probe_received": "b'HTTP/1.1 200 OK\\r\\nCache-Control: no-store\\r\\nContent-Length: 96\\r\\nContent-Type: application/json; charset=utf-8\\r\\nDate: Sun, 06 Sep 2026 17:19:41 GMT\\r\\n\\r\\n{\"status\":\"ok\",\"service\":\"wps-enterprise-adapter\",\"version\":\"0.9.8\",\"network_calls\":\"on-demand\"}'",
   "request": "third TCP connection while max_connections=2 requests are held"
 }

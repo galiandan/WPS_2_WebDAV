@@ -3,6 +3,7 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -289,4 +290,69 @@ type stubUploadStorage struct{}
 
 func (stubUploadStorage) UploadPath(context.Context, string, io.Reader, storage.UploadOptions) (model.RemoteEntry, error) {
 	return model.RemoteEntry{}, model.NewStorageError(model.KindUnsupportedOperation, "upload is not wired in this test")
+}
+
+func TestLimitedUploadBodyClampsToTheDeclaredLength(t *testing.T) {
+	source := &cappedReader{data: "0123456789"}
+	reader := &limitedUploadBody{source: source, remaining: 4}
+	first := make([]byte, 3)
+	if _, err := io.ReadFull(reader, first); err != nil {
+		t.Fatalf("ReadFull failed: %v", err)
+	}
+	// A read asking beyond the remaining declared length is clamped, even
+	// though the source would deliver more.
+	rest := make([]byte, 32)
+	n, err := reader.Read(rest)
+	if err != nil || string(rest[:n]) != "3" {
+		t.Fatalf("clamped read = %q, %v; want %q", rest[:n], err, "3")
+	}
+	if _, err := reader.Read(rest); !errors.Is(err, io.EOF) {
+		t.Fatalf("read past the declared length = %v, want EOF", err)
+	}
+	if source.reads != 2 {
+		t.Fatalf("source reads = %d, want the clamp to stop after the second read", source.reads)
+	}
+}
+
+func TestLimitedUploadBodyMapsUnexpectedEOFCleanly(t *testing.T) {
+	reader := &limitedUploadBody{source: &truncatedReader{}, remaining: 8}
+	buf := make([]byte, 8)
+	n, err := reader.Read(buf)
+	if err != nil || n != 3 || string(buf[:n]) != "abc" {
+		t.Fatalf("read = %q, %v; want %q", buf[:n], err, "abc")
+	}
+	if _, err := reader.Read(buf); !errors.Is(err, io.EOF) {
+		t.Fatalf("second read = %v, want the transport error mapped to EOF", err)
+	}
+}
+
+// cappedReader serves the whole buffer per read, so a read larger than the
+// remaining declared length would over-deliver without the clamp.
+type cappedReader struct {
+	data  string
+	reads int
+}
+
+func (r *cappedReader) Read(p []byte) (int, error) {
+	r.reads++
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+// truncatedReader hands out three bytes, then reports the connection as
+// gone mid-body the way net/http does.
+type truncatedReader struct {
+	done bool
+}
+
+func (r *truncatedReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.ErrUnexpectedEOF
+	}
+	r.done = true
+	return copy(p, "abc"), nil
 }

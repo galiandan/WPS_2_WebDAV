@@ -24,10 +24,11 @@ import (
 
 // Build-time injection points:
 //
-//	go build -ldflags "-X main.version=0.9.8 -X main.commit=$(git rev-parse --short HEAD)"
+//	go build -trimpath -ldflags "-X main.version=0.9.8 -X main.commit=$(git rev-parse --short HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 var (
-	version = "0.9.8"
-	commit  = "unknown"
+	version   = "0.9.8"
+	commit    = "unknown"
+	buildTime = "unknown"
 )
 
 const usage = `Usage: wps-adapter [--version] <command> [flags]
@@ -44,7 +45,10 @@ func main() {
 func run(args []string) int {
 	for _, arg := range args {
 		if arg == "--version" {
-			fmt.Println(version)
+			// The bare version stays the first token so release checks can
+			// compare it directly; the commit and build time complete the
+			// non-sensitive build summary the outline requires (07 §8.2).
+			fmt.Printf("%s commit=%s build_time=%s\n", version, commit, buildTime)
 			return 0
 		}
 	}

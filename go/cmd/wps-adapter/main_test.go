@@ -158,6 +158,21 @@ func (p *serverProcess) signal(t *testing.T, sig syscall.Signal) {
 	}
 }
 
+// TestVersionReportsTheBuildSummary pins the 07 §8.2 build summary: the
+// bare version leads the line so release checks can compare it directly,
+// and the injected commit and build time ride along without secrets.
+func TestVersionReportsTheBuildSummary(t *testing.T) {
+	cmd := exec.Command(binaryPath, "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("--version failed: %v", err)
+	}
+	line := strings.TrimSpace(string(output))
+	if !strings.HasPrefix(line, "0.9.8 commit=") || !strings.Contains(line, " build_time=") {
+		t.Fatalf("--version = %q, want a version/commit/build-time summary", line)
+	}
+}
+
 func TestServePrintsListeningLinesAndStopsOnSIGTERM(t *testing.T) {
 	port := freePort(t)
 	process := startServer(t, nil, "serve", "--bind", "127.0.0.1", "--port", strconv.Itoa(port))

@@ -37,7 +37,7 @@ go build -ldflags "-X main.version=0.9.8 -X main.commit=$(git rev-parse --short 
 
 ## 命令形状（B200 骨架）
 
-- `wps-adapter --version`：输出版本号。
+- `wps-adapter --version`：输出版本、提交号和构建时间的非敏感摘要（首个字段为裸版本号）。
 - `wps-adapter check-config`：校验环境配置并输出摘要，不访问 WPS。
 - `wps-adapter serve --bind 127.0.0.1 --port 54321`：启动 HTTP 服务；
   骨架阶段仅提供 `/healthz`，真实路由随后续任务接入。

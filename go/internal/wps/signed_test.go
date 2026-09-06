@@ -302,3 +302,84 @@ func TestSignedTransportDialsDirectlyWithBoundedPhases(t *testing.T) {
 		t.Fatal("signed transport must pin TLS 1.2 as the minimum version")
 	}
 }
+
+func TestSignedTransportCutsStalledUpstreamBody(t *testing.T) {
+	// The object host answers, sends one body byte, then goes quiet
+	// forever. Python bounds that wait with the socket timeout; the Go
+	// transport must cut the stalled body read instead of blocking the
+	// download slot indefinitely.
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("x"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(30 * time.Second):
+		}
+	}))
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
+	response, err := NewSignedTransport(0.3).RoundTrip(request)
+	if err != nil {
+		t.Fatalf("RoundTrip failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	<-started
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(response.Body, make([]byte, 2))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("the stalled body read must fail, not return bytes")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stalled body read never returned")
+	}
+}
+
+func TestSignedTransportKeepsFlowingUpstreamBodyAlive(t *testing.T) {
+	// The opposite face of the parity: a body that keeps moving may run
+	// far longer than the timeout, because only stalled operations fail.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		// The chunks keep arriving well inside the timeout window while
+		// the transfer as a whole (360ms) outlasts one window (100ms):
+		// only stalled operations may fail.
+		for index := 0; index < 12; index++ {
+			_, _ = w.Write([]byte("x"))
+			flusher.Flush()
+			time.Sleep(30 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
+	response, err := NewSignedTransport(0.1).RoundTrip(request)
+	if err != nil {
+		t.Fatalf("RoundTrip failed: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || len(body) != 12 {
+		t.Fatalf("flowing body cut after %d bytes: err = %v", len(body), err)
+	}
+}

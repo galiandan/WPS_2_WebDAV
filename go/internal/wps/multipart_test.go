@@ -660,6 +660,46 @@ func TestMultipartSessionResetRebuildsAndRestartsFromPartOne(t *testing.T) {
 	requireCheckpointGone(t, resumeDir, smallMultipartIdentity())
 }
 
+func TestMultipartSessionResetDropsPartInfosOfTheDeadSession(t *testing.T) {
+	resumeDir := newResumeDir(t)
+	control := []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok"}`)},
+		multipartInitScript("u1"),
+		multipartPartScript(md5Part1Base64, 1),
+		// Part two finds the session gone, so the rebuild restarts the
+		// whole part loop under the fresh session.
+		{status: 404, body: []byte(`{"error":"session gone"}`)},
+		multipartInitScript("u2"),
+		multipartPartScript(md5Part1Base64, 1),
+		multipartPartScript(md5Part2Base64, 2),
+		multipartMergeScript(),
+		{status: 200, body: []byte(registerEntryPayload)},
+	}
+	object := []scriptedResponse{
+		multipartPartEtagScript(`"etag-1"`),
+		multipartPartEtagScript(`"etag-1b"`),
+		multipartPartEtagScript(`"etag-2"`),
+		multipartMergedXMLScript(`"merged"`),
+	}
+	client, opener, _, _ := newMultipartClient(t, smallMultipartConfig(resumeDir), control, object)
+	entry, err := client.Upload(UploadRequest{ParentID: "3", Name: "file", Source: strings.NewReader(multipartBodyFixture)})
+	if err != nil {
+		t.Fatalf("Upload failed: %v", err)
+	}
+	if entry.ID != "9" {
+		t.Fatalf("entry = %+v", entry)
+	}
+	// The merge must carry only the rebuilt session's parts: the etag of
+	// the dead upload_id would duplicate part number one.
+	wantMerge := `{"key":"bench-multipart-key","req_by_internal":false,"store":"bench-store",` +
+		`"part_infos":[{"etag":"etag-1b","part_number":1},{"etag":"etag-2","part_number":2}],` +
+		`"upload_id":"u2","csrfmiddlewaretoken":"csrf-secret"}`
+	if string(opener.bodies[7]) != wantMerge {
+		t.Fatalf("merge body = %s, want %s", opener.bodies[7], wantMerge)
+	}
+	requireCheckpointGone(t, resumeDir, smallMultipartIdentity())
+}
+
 func TestMultipartSessionResetNeedsAResumeDir(t *testing.T) {
 	client, opener, transport, _ := newMultipartClient(t, func(c *Config) {
 		smallMultipartConfig("")(c)

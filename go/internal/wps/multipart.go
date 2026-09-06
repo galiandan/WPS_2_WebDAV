@@ -425,6 +425,11 @@ func (c *Client) multipartUpload(spool *uploadSpool, groupID string, parentID st
 			c.uploadRetrySleep(int64(attempt + 1))
 		}
 		if sessionReset {
+			// part_infos must be emptied alongside state.parts: the rebuilt
+			// session re-uploads every part, and a stale etag from the dead
+			// upload_id would corrupt the merge (client.py clears part_infos
+			// in the same breath as completed).
+			partInfos = partInfos[:0]
 			partNumber = 1
 			continue
 		}

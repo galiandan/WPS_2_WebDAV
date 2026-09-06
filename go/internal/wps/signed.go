@@ -7,6 +7,7 @@
 package wps
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/opdeadline"
 )
 
 // SignedTarget is a validated signed URL split into its dialing parts. The
@@ -57,11 +59,21 @@ func NewSignedObjectClient(config Config) *SignedObjectClient {
 // NewSignedTransport builds the direct signed-object transport (TLS
 // verified, no proxy environment). App wiring builds one shared instance
 // so every mounted space reuses the same connection pool, mirroring
-// Python's single shared opener.
+// Python's single shared opener. Dialed connections carry the configured
+// timeout as a per-operation deadline, mirroring the socket timeout of
+// Python's raw HTTPS connections: response-header waits, body reads, and
+// body writes to a stalled object host fail instead of blocking a transfer
+// slot forever, while flowing transfers are unaffected.
 func NewSignedTransport(timeout float64) http.RoundTripper {
 	duration := seconds(timeout)
 	return &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: duration, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := (&net.Dialer{Timeout: duration, KeepAlive: 30 * time.Second}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return opdeadline.Wrap(conn, duration), nil
+		},
 		TLSHandshakeTimeout:   duration,
 		ResponseHeaderTimeout: duration,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},

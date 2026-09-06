@@ -81,7 +81,7 @@ func (d *RESTDispatcher) doRestPut(w http.ResponseWriter, r *http.Request, route
 		}
 		return nil
 	}
-	entry, err := d.uploads.UploadPath(r.Context(), path, limitedUploadBody{source: r.Body, remaining: *length}, storage.UploadOptions{
+	entry, err := d.uploads.UploadPath(r.Context(), path, &limitedUploadBody{source: r.Body, remaining: *length}, storage.UploadOptions{
 		Size:        length,
 		ContentType: r.Header.Get("Content-Type"),
 		Overwrite:   overwrite,
@@ -119,7 +119,7 @@ func (d *DAVDispatcher) doDavPut(w http.ResponseWriter, r *http.Request, davPath
 	if !checkDeclaredUploadLength(w, r, *length, d.maxUploadBytes, false) {
 		return nil
 	}
-	entry, err := d.uploads.UploadPath(r.Context(), davPath, limitedUploadBody{source: r.Body, remaining: *length}, storage.UploadOptions{
+	entry, err := d.uploads.UploadPath(r.Context(), davPath, &limitedUploadBody{source: r.Body, remaining: *length}, storage.UploadOptions{
 		Size:        length,
 		ContentType: r.Header.Get("Content-Type"),
 		Overwrite:   true,
@@ -139,13 +139,15 @@ func (d *DAVDispatcher) doDavPut(w http.ResponseWriter, r *http.Request, davPath
 // limitedUploadBody mirrors Python's _LimitedReader: the upload sees a
 // clean end-of-stream when the connection closes before the declared
 // Content-Length, so the spool's declared-size check answers the same 400
-// instead of surfacing a transport error.
+// instead of surfacing a transport error. The remaining counter is live
+// state like Python's, so the clamp bounds every read to the declared
+// length even when the transport would deliver more.
 type limitedUploadBody struct {
 	source    io.Reader
 	remaining int64
 }
 
-func (l limitedUploadBody) Read(p []byte) (int, error) {
+func (l *limitedUploadBody) Read(p []byte) (int, error) {
 	if l.remaining <= 0 {
 		return 0, io.EOF
 	}
