@@ -312,6 +312,25 @@ func TestOverwritesExistingFileOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestOverwriteRequiresExactlyOneSameNameFile(t *testing.T) {
+	client := newFakeClient()
+	client.children["root"] = append(client.children["root"],
+		model.RemoteEntry{ID: "dup-1", Name: "dup.txt", Kind: model.KindFile, ParentID: model.Ptr("root"), Size: model.Ptr(int64(1))},
+		model.RemoteEntry{ID: "dup-2", Name: "dup.txt", Kind: model.KindFile, ParentID: model.Ptr("root"), Size: model.Ptr(int64(2))},
+	)
+	storage := newTestStorage(t, client, nil)
+	_, err := storage.UploadPath(context.Background(), "/dup.txt", sizedReader("new"), UploadOptions{Size: model.Ptr(int64(3)), Overwrite: true})
+	if err == nil || err.Error() != "overwrite is not enabled for: /dup.txt" {
+		t.Fatalf("duplicate overwrite error = %v", err)
+	}
+	if _, ok := model.AsStorageError(err); !ok {
+		t.Fatalf("error is not a StorageError: %v", err)
+	}
+	if len(client.uploadCalls) != 0 {
+		t.Fatalf("the ambiguous overwrite reached the writer: %v", client.uploadCalls)
+	}
+}
+
 func TestUploadSlotReleasedOnAllReturnPaths(t *testing.T) {
 	client := newFakeClient()
 	client.uploadErr = errors.New("upstream upload failed")

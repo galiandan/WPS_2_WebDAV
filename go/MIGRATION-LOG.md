@@ -2902,3 +2902,144 @@ darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺�
 重建）、contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## B1001 pre_check 与冲突语义（2026-09-06）
+
+提交主题：B1001 Implement upload pre_check with conflict semantics
+
+必读 client.py:2340-2374（pre_check 调用与结果门）与 storage.py
+upload_path 348-371、server.py _do_rest_put/_do_webdav_put 全部核对：
+
+- wps.Client.Upload 在 spool 完成后执行 preCheckUpload：GET
+  /3rd/drive/api/v5/files/upload/pre_check，query 按序恰好
+  file_name/group_id/parent_id，值走 str(_json_id(...)) 语义（新增
+  pyJSONIDString，pyJSONID 重构复用之，行为不变）；group_id 由
+  c.GroupID() 解析（失败先于任何请求，503 文案与 Python 属性一致）。
+- 冲突继续条件：仅当 overwrite 且已观察 WpsAPIError.status==403 时以
+  {"result":"ok"} 继续并直接进入 create_update——测试断言不出现任何
+  delete 类请求（不用先删后传）；其余错误（500、传输失败、非
+  WpsAPIError）原样传播。结果门：result 缺失/null/"ok" 均通过，其他
+  → WpsAPIError("upload pre-check")，与 `get("result") not in
+  {None,"ok"}` 逐字等价（True/0/"" 等一律拒绝）。
+- 冲突语义其余两半在先前任务已落地，本任务补测：
+  storage.Storage.UploadPath 的"恰好一个同名 file 才允许
+  overwrite"（新增双同名条目用例，拒绝且 writer 零调用）；
+  httpserver REST queryBool 缺省不覆盖（新增默认值用例）与 DAV PUT
+  恒覆盖（fakeUploadStorage 补记 overwrite 并断言）。
+- 每个 pre_check 失败注入点断言 spool 目录清空 + 预留释放（对齐
+  Python with 块生命周期）。
+
+偏差：无。测试中 WpsAPIError 文案断言修正为实际 Error() 格式
+（status==0 不带 "(HTTP 0)" 后缀）。
+
+测试：wps 新增 6 组（精确 query 与边界、缺失/null result、异值
+result、403×overwrite 四面、十进制 id 归一化、无 group 先拒绝）；
+storage 1 组（双同名拒绝）；httpserver 2 组（REST 默认、DAV 恒覆盖
+断言）。Python 参照逐串核对。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps/storage/httpserver
+-race -count=2 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿；contract_tests 119
+项全绿。
+
+回滚：git revert 本提交（阶段内任务同文件叠加，见 B1003 提交说明）。
+
+## B1002 create_update 与对象 PUT（2026-09-06）
+
+提交主题：B1002 Implement create_update instruction and signed object PUT
+
+必读 client.py:2375-2459（create_body、create_upload_instruction、
+重试循环）与 _put_signed_object 1679-1704、_signed_target 1620-1655、
+_retry_delay 1616-1618 全部核对：
+
+- UploadOptions 镜像 frozen dataclass：parent_path/req_by_internal/
+  client_stores/startswithfilename/successactionstatus=200/file_id=0/
+  with_rapid=True/tried_store/is_up_new_ver；overwrite 时按
+  client.upload 的重建逻辑替换（client_stores/startswithfilename/
+  tried_store 的 or 回退、successactionstatus=201），wps.UploadRequest
+  增加 Options（nil→默认；storage 层不传，与 Python upload_path 不收
+  options 关键字一致）。
+- create_update：PUT /3rd/drive/api/v5/files/upload/create_update，
+  pyObject 精确 17 字段序 + overwrite 时末尾追加 md5；compact
+  ensure_ascii 序列化复用 dumpPYValue；RetryOn401=true。
+- 指令校验：url 必须 str（否则 "create upload URL"）；response 为
+  Mapping 时取 expect_code[0]（缺省/空表/非列表 → 200），非 200 →
+  "unsupported object upload status"；整数比较含 int/float 两面
+  （Python 200.0==200 亦通过）。
+- 对象 PUT：putSignedObject 经 SignedObjectClient（无 Cookie/
+  Authorization，头仅 Content-Type: application/octet-stream，
+  Content-Length=spool 总长；size==0 时 nil body 使 Go 发送
+  Content-Length: 0 而非分块，对齐 http.client）；响应体先按
+  MAX_OBJECT_RESPONSE_BYTES=1 MiB 有界读取再查状态码（顺序与 Python
+  一致），非 200 → WpsAPIError("object upload", status)。
+- 重试循环：每次失败后 _retry_delay(attempt+1)=delay*2^attempt 指数
+  退避，重新调用 create_upload_instruction 取新签名 URL（指令失败
+  立即传播不重试）；可重试面 = WpsAPIError ∪ StorageError（后者的
+  IOFailure 对应 Python spool.seek 的 OSError）；重试前 reopen spool
+  从头读，测试断言第二次 PUT 仍是完整正文且指令体逐字节相同。
+  for-else 的 last_error 兜底为不可达死代码，Go 省略。
+- 成功后取原始 ETag 头，缺失 → "object upload response missing ETag"
+  （不重试）；x-obs-save-key 在普通上传路径未被 Python 使用，不返回。
+- 阶段边界移至对象 PUT 之后（登记前），B1003 移除。
+
+偏差：①"校验指令 method/store"：捕获形状与 Python 均不含 method
+字段、不校验 store（仅作 str 直传登记体），故无可镜像项，据实记录；
+②"规范化 ETag"：Python 普通上传路径 _put_signed_object 返回原始
+etag 头（strip 引号仅存在于 multipart 的 _put_signed_part，B1102），
+本任务保持原样直传登记体；③对象响应体读失败（截断）在 Go 归入
+WpsAPIError 而可重试，Python http.client 的 IncompleteRead 不在
+(OSError, WpsApiError) 内不重试——对象 PUT 幂等且每次新签名，多一次
+重试无语义影响；④create_update 指令体跨重试复用同一编码字节（值不
+变，Python 每次 json.dumps 结果相同）。
+
+测试：wps 新增 7 组（create_update 精确体逐字节 pinned、overwrite
+重建体逐字节 pinned、指令校验五面 + 缺省 expect_code、退避重试换新
+URL、重试耗尽传播、缺 ETag 不重试、空文件零长 PUT）；既有测试按
+B1003 完成后流程更新断言。Python 参照逐串核对。
+
+门禁：同 B1001（全绿）。
+
+回滚：git revert 本提交。
+
+## B1003 文件登记（2026-09-06）
+
+提交主题：B1003 Implement file registration with sanitized orphan warning
+
+必读 client.py:2434-2456（file_body 与 /files/file POST）全部核对：
+
+- registerUpload：POST /3rd/drive/api/v5/files/file，pyObject 精确
+  12 字段序（key=sha1、store 取 create_result.get("store","")——缺失
+  回退空串、present-null 保持 null，etag 为对象 PUT 原始值，
+  isUpNewVer/apiErrorInfo 按捕获形状，RetryOn401=true）。
+- 成功门：result ∈ {缺失,null,"ok"} 且 entryFromItem 可解析（缺 id
+  等 → "normalize file metadata"）才向客户端返回成功；两条路都失败
+  于登记，Upload 返回错误。
+- 登记失败告警：新增 warnUpload seam（默认 log.Printf 落标准错误，
+  WithUploadWarning 可注入捕获），文案 "uploaded object may be left
+  unregistered in WPS, manual cleanup may be needed: <error>"；error
+  为 operation-only 文案，测试断言不含文件名/签名 URL/Cookie/CSRF/
+  store；不尝试任何未知删除 API（测试枚举控制面路径仅 pre_check/
+  create_update/register，对象面零请求）。
+- 资源清理：defer spool.close() 覆盖登记成功/失败全部路径（预留释放
+  + 临时文件删除），测试逐点断言。Python 侧无对应日志调用，此告警
+  为细纲对本任务的明确要求（架构 §16 有界脱敏日志的首个落点）。
+- 阶段边界（B1000 引入的 501 中态）随之完全移除，上传全流程贯通。
+
+偏差：无。
+
+测试：wps 新增 5 组（登记体逐字节 pinned + 返回 entry、失败结果告警
++脱敏断言+零删除、登记请求失败告警、entry 不可解析告警、store 缺省
+回退）；B1000/B1001 既有用例随全流程贯通改为成功断言；storage
+writer 转发测试改走真实客户端全链路（自建脚本化 Opener/签名传输），
+继续证明字段转发。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps/storage/httpserver
+-race -count=2 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿；contract_tests 119
+项全绿。
+
+回滚：git revert 本提交。
+
+本阶段（B1001–B1003）因三次任务叠加于同一 upload.go 且用户将推进与
+提交节奏定义为阶段级，三个任务以单次提交落地；各任务证据仍按任务
+分立如上。

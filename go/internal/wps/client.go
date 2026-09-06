@@ -13,6 +13,7 @@ package wps
 import (
 	"crypto/tls"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -125,6 +126,12 @@ type Client struct {
 	// budget; WithDiskFree replaces it where tests monkeypatch shutil.
 	diskFree func(string) (int64, error)
 
+	// warnUpload receives the sanitized upload-flow warnings (operation and
+	// status only — never names, URLs, or credentials). The default logs to
+	// the standard logger; WithUploadWarning replaces it where tests
+	// capture the message.
+	warnUpload func(string)
+
 	// credentialRefreshLock serializes 401 refresh grants so a rotated rtk
 	// cookie cannot be overwritten by a concurrent grant response.
 	credentialRefreshLock sync.Mutex
@@ -171,6 +178,16 @@ func WithDiskFree(probe func(string) (int64, error)) Option {
 	}
 }
 
+// WithUploadWarning replaces the sanitized warning sink behind the upload
+// flow; the default writes to the standard logger.
+func WithUploadWarning(warn func(string)) Option {
+	return func(client *Client) {
+		if warn != nil {
+			client.warnUpload = warn
+		}
+	}
+}
+
 // NewClient validates the configuration and builds both transports.
 func NewClient(config Config, options ...Option) (*Client, error) {
 	if config.GroupID == "" && config.Workspace == nil {
@@ -195,10 +212,11 @@ func NewClient(config Config, options ...Option) (*Client, error) {
 	}
 
 	client := &Client{
-		config:   config,
-		opener:   newControlHTTPClient(config.Timeout),
-		signed:   NewSignedObjectClient(config),
-		diskFree: budget.DiskFree,
+		config:     config,
+		opener:     newControlHTTPClient(config.Timeout),
+		signed:     NewSignedObjectClient(config),
+		diskFree:   budget.DiskFree,
+		warnUpload: func(message string) { log.Printf("%s", message) },
 	}
 	for _, option := range options {
 		option(client)

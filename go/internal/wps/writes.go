@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
@@ -24,11 +25,26 @@ func pyJSONID(value string) any {
 	if !isASCIIDecimal(value) {
 		return value
 	}
+	return json.Number(pyJSONIDString(value))
+}
+
+// pyJSONIDString mirrors str(_json_id(value)): the same decimal
+// normalization as pyJSONID, rendered back to the string form the query
+// builder sends.
+func pyJSONIDString(value string) string {
+	if !isASCIIDecimal(value) {
+		return value
+	}
 	trimmed := strings.TrimLeft(value, "0")
 	if trimmed == "" {
-		trimmed = "0"
+		return "0"
 	}
-	return json.Number(trimmed)
+	return trimmed
+}
+
+// pyInt renders one Go integer as Python's json.dumps would.
+func pyInt(value int64) json.Number {
+	return json.Number(strconv.FormatInt(value, 10))
 }
 
 func isASCIIDecimal(value string) bool {

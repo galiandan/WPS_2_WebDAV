@@ -17,12 +17,13 @@ import (
 // fakeUploadStorage records the upload the dispatcher handed over so tests
 // can assert the exact path, options, and body stream.
 type fakeUploadStorage struct {
-	entry    model.RemoteEntry
-	err      error
-	size     *int64
-	name     string
-	body     []byte
-	contents string
+	entry     model.RemoteEntry
+	err       error
+	size      *int64
+	name      string
+	body      []byte
+	contents  string
+	overwrite bool
 }
 
 func (f *fakeUploadStorage) UploadPath(ctx context.Context, path string, source io.Reader, options storage.UploadOptions) (model.RemoteEntry, error) {
@@ -32,6 +33,7 @@ func (f *fakeUploadStorage) UploadPath(ctx context.Context, path string, source 
 	}
 	f.name = path
 	f.size = options.Size
+	f.overwrite = options.Overwrite
 	if f.contents != "" {
 		f.body = []byte(f.contents)
 	}
@@ -148,9 +150,26 @@ func TestRestPutParsesPathAndOverwriteQuery(t *testing.T) {
 	if uploads.size == nil || *uploads.size != int64(len("body")) {
 		t.Fatalf("size = %v", uploads.size)
 	}
+	if !uploads.overwrite {
+		t.Fatal("overwrite=true did not reach the upload storage")
+	}
 	want := `{"path":"/docs/a.txt","entry":{"id":"file-1","name":"uploaded.txt","kind":"file","parent_id":null,"size":4,"modified_at":null,"etag":null}}`
 	if got := recorder.Body.String(); got != want {
 		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestRestPutDefaultsToNoOverwrite(t *testing.T) {
+	uploads := &fakeUploadStorage{}
+	router := newUploadRouter(t, uploads, 0)
+	request := restUploadRequest(http.MethodPut, "/api/v1/upload?path=%2Fdocs%2Fa.txt", []byte("body"))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", recorder.Code)
+	}
+	if uploads.overwrite {
+		t.Fatal("a REST upload without the overwrite query must default to no overwrite")
 	}
 }
 
@@ -214,6 +233,9 @@ func TestDavPutUploadsWithOverwriteAndLocation(t *testing.T) {
 	}
 	if uploads.size == nil || *uploads.size != 4 {
 		t.Fatalf("size = %v", uploads.size)
+	}
+	if !uploads.overwrite {
+		t.Fatal("a DAV PUT must always upload with overwrite")
 	}
 	if got := recorder.Header().Get("Location"); got != "/dav/a.txt" {
 		t.Fatalf("Location = %q", got)
