@@ -416,3 +416,122 @@ func TestRenameMapsHTTPAndTransportErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestMovePostsTaskAndWaitsForSuccess(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok","taskid":13,"taskuuid":"move-task"}`)},
+		{status: 200, body: []byte(
+			`{"estimated_time_left":-1,"failed_list":null,"finish":1,` +
+				`"result":"ok","status":"success","taskid":13,` +
+				`"taskuuid":"move-task","total":1}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	if err := client.Move("7", "3", "8"); err != nil {
+		t.Fatalf("Move failed: %v", err)
+	}
+	if len(opener.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(opener.requests))
+	}
+	moveRequest := opener.requests[0]
+	if moveRequest.Method != http.MethodPost {
+		t.Fatalf("method = %s, want POST", moveRequest.Method)
+	}
+	if moveRequest.URL.Path != "/3rd/drive/api/v5/files/batch/task/move" {
+		t.Fatalf("path = %q", moveRequest.URL.Path)
+	}
+	if moveRequest.Header.Get("Cookie") != "Cookie-secret" {
+		t.Fatalf("cookie = %q", moveRequest.Header.Get("Cookie"))
+	}
+	// Byte-for-byte: field order, the empty option dict, the numeric id
+	// list, and the ensure_ascii CSRF token are part of the captured body.
+	wantBody := `{"groupid":1,"parentid":3,"dst_groupid":1,"dst_parentid":8,` +
+		`"fileids":[7],"option":{},"csrfmiddlewaretoken":"csrf-secret"}`
+	if string(opener.bodies[0]) != wantBody {
+		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
+	}
+	progressRequest := opener.requests[1]
+	if progressRequest.Method != http.MethodGet || progressRequest.URL.Path != "/3rd/drive/api/v5/files/batch/task/progress" {
+		t.Fatalf("progress request = %s %s", progressRequest.Method, progressRequest.URL.Path)
+	}
+	if query := progressRequest.URL.Query(); query.Get("taskuuid") != "move-task" {
+		t.Fatalf("progress query = %v", query)
+	}
+}
+
+func TestMoveRejectsBadArgumentsBeforeAnyRequest(t *testing.T) {
+	opener := &fakeControlOpener{}
+	client := newWriteClient(t, opener, nil)
+
+	if err := client.Move("", "3", "8"); err == nil || err.Error() != "file_id is required" {
+		t.Fatalf("empty file_id error = %v, want the ValueError message", err)
+	}
+	if err := client.Move("7", "", "8"); err == nil ||
+		err.Error() != "source and destination parent IDs are required" {
+		t.Fatalf("empty source error = %v, want the ValueError message", err)
+	}
+	if err := client.Move("7", "3", ""); err == nil ||
+		err.Error() != "source and destination parent IDs are required" {
+		t.Fatalf("empty destination error = %v, want the ValueError message", err)
+	}
+	if len(opener.requests) != 0 {
+		t.Fatalf("requests = %d, want 0", len(opener.requests))
+	}
+}
+
+func TestMoveRejectsFailedTaskResult(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"error"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	err := client.Move("7", "3", "8")
+	apiErr, ok := model.AsWpsAPIError(err)
+	if !ok || apiErr.Operation != "move file" || apiErr.Status != 0 ||
+		apiErr.Category != model.WpsCategoryUpstream {
+		t.Fatalf("error = %v, want the upstream move failure", err)
+	}
+}
+
+func TestMoveRejectsMalformedTaskUUID(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"missing", `{"result":"ok"}`},
+		{"empty", `{"result":"ok","taskuuid":""}`},
+		{"number", `{"result":"ok","taskuuid":12}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opener := &fakeControlOpener{script: []scriptedResponse{
+				{status: 200, body: []byte(tc.body)},
+			}}
+			client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+			err := client.Move("7", "3", "8")
+			apiErr, ok := model.AsWpsAPIError(err)
+			if !ok || apiErr.Operation != "move file task" || apiErr.Status != 0 ||
+				apiErr.Category != model.WpsCategoryUpstream {
+				t.Fatalf("error = %v, want the move-file task failure", err)
+			}
+		})
+	}
+}
+
+func TestMoveWaitsForObservedTaskBeforeReturning(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok","taskuuid":"move-task"}`)},
+		{status: 200, body: []byte(`{"finish":0,"result":"ok","status":"failed"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	err := client.Move("7", "3", "8")
+	apiErr, ok := model.AsWpsAPIError(err)
+	if !ok || apiErr.Operation != "move file task" || apiErr.Status != 0 {
+		t.Fatalf("error = %v, want the observed task failure", err)
+	}
+	if len(opener.requests) != 2 {
+		t.Fatalf("requests = %d, want the progress poll to run", len(opener.requests))
+	}
+}

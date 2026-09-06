@@ -6,6 +6,7 @@
 package wps
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -133,4 +134,62 @@ func (c *Client) Rename(fileID string, name string) (model.RemoteEntry, error) {
 		return model.RemoteEntry{}, model.NewWpsAPIError("rename file", 0, model.WpsCategoryUpstream)
 	}
 	return entryFromItem(payload)
+}
+
+// Move mirrors move: the confirmed v5 batch task endpoint, waiting for the
+// observed task to finish before returning. The destination_group_id and
+// option keywords stay at their Python defaults on this surface (same
+// group, empty option dict).
+func (c *Client) Move(fileID string, sourceParentID string, destinationParentID string) error {
+	if fileID == "" {
+		return errors.New("file_id is required")
+	}
+	if sourceParentID == "" || destinationParentID == "" {
+		return errors.New("source and destination parent IDs are required")
+	}
+	current, err := c.currentCredentials()
+	if err != nil {
+		return err
+	}
+	if current.CSRFToken == "" {
+		return errors.New("csrf_token is required for write operation")
+	}
+	groupID, err := c.GroupID()
+	if err != nil {
+		return err
+	}
+	body := &pyObject{
+		keys: []string{"groupid", "parentid", "dst_groupid", "dst_parentid", "fileids", "option", "csrfmiddlewaretoken"},
+		values: map[string]any{
+			"groupid":             pyJSONID(groupID),
+			"parentid":            pyJSONID(sourceParentID),
+			"dst_groupid":         pyJSONID(groupID),
+			"dst_parentid":        pyJSONID(destinationParentID),
+			"fileids":             []any{pyJSONID(fileID)},
+			"option":              &pyObject{},
+			"csrfmiddlewaretoken": current.CSRFToken,
+		},
+	}
+	encoded, err := dumpPYValue(body)
+	if err != nil {
+		return err
+	}
+	payload, err := c.RequestJSON(JSONRequest{
+		Path:       "/3rd/drive/api/v5/files/batch/task/move",
+		Method:     http.MethodPost,
+		Body:       encoded,
+		RetryOn401: true,
+	})
+	if err != nil {
+		return err
+	}
+	if result, present := payload["result"]; present && result != nil && result != "ok" {
+		return model.NewWpsAPIError("move file", 0, model.WpsCategoryUpstream)
+	}
+	taskUUID, isString := payload["taskuuid"].(string)
+	if taskUUID == "" || !isString {
+		return model.NewWpsAPIError("move file task", 0, model.WpsCategoryUpstream)
+	}
+	return c.WaitForTask(context.Background(), taskUUID, "move file",
+		DefaultTaskPollInterval, DefaultTaskPollTimeout)
 }

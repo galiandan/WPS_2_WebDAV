@@ -2686,3 +2686,53 @@ darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
 序重建）、contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## B902 异步任务轮询（2026-09-06）
+
+提交主题：B902 Implement shared async task progress poller with context cancellation
+
+新文件 go/internal/wps/task.go：移植 client.py _wait_for_task
+（1841-1869），独立于 move/delete 共用：
+
+- 轮询面全等：GET /3rd/drive/api/v5/files/batch/task/progress?
+  taskuuid=...（urlencode 顺序一致）；result 非 {None,"ok"} →
+  WpsApiError(f"{operation} progress")（status 0 upstream）。
+- 成功字段对齐：finish==1 或 status=="success" 即终态，随后
+  failed_list not in (None, []) → WpsApiError(operation, status=409)。
+  finish 的 Python 比较语义完整复刻：bool true 与 1.0 均视为 1
+  （True==1、1.0==1），字符串 "1" 不算；failed_list 仅 null/缺
+  席/空数组算干净，其余任何 JSON 类型（含字符串、false）都走 409。
+  status failed/error → WpsApiError(f"{operation} task")；deadline
+  （monotonic+poll_timeout，请求后判断）→
+  WpsApiError(f"{operation} task timeout")。四类错误全部 operation-
+  only 脱敏文案，测试逐一固定。
+- 参数校验对齐 move/delete：poll_interval<0 → "poll_interval must
+  not be negative"；poll_timeout<=0 → "poll_timeout must be
+  positive"。默认常量 DefaultTaskPollInterval=500ms、
+  DefaultTaskPollTimeout=60s 与 Python 关键字默认一致（测试固定），
+  供 B903/B904 公开方法使用；poll_interval=0 保持 Python 的禁眠
+  紧轮询语义。
+- context 取消（Go 增强，细纲要求）：循环顶 ctx.Err() 立即返回
+  ctx 错误（预取消零请求，测试固定）；sleep 改 select ctx.Done，
+  取消即刻返回不再等满间隔；RequestJSON 拆出 RequestJSONContext，
+  请求挂 ctx（生产 opener 为 http.Client，在途请求随取消中止），
+  仅当 Do 失败且 ctx.Err() 非空时透传 ctx 错误，其余 transport 失
+  败维持 unavailable 脱敏映射。RequestJSON 原签名不变，既有调用
+  与测试零改动。
+
+测试：task_test.go 12 项——finish golden 两轮轮询（query/path/
+method 断言）、status success 终态、failed_list 三形态 409、
+failed/error 两形态 task 错误、result 失败 progress 错误、
+constant-opener 超时（<2 轮失败即判错）、sleep 中取消及时返回、
+预取消零请求、参数校验三例零请求、默认常量对齐、finishEqualsOne
+表驱动 10 例。
+
+偏差：无行为偏差；ctx 支持为 Go 平台增强（Python 无取消语义，
+轮询错误文案与顺序完全一致）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps -race -count=4
+全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 169 项全绿（manifest 按门禁顺序重建）、
+contract_tests 119 项全绿。
+
+回滚：git revert 本提交。

@@ -42,5 +42,5 @@ func (w wpsWriter) Rename(entryID string, name string) (model.RemoteEntry, error
 }
 
 func (w wpsWriter) Move(entryID string, sourceParentID string, destinationParentID string) error {
-	return errWriteNotImplemented
+	return w.client.Move(entryID, sourceParentID, destinationParentID)
 }
