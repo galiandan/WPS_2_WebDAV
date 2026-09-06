@@ -1,5 +1,5 @@
 {
-  "body": "<?xml version='1.0' encoding='utf-8'?>\n<D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock><D:locktype><D:write /></D:locktype><D:lockscope><D:exclusive /></D:lockscope><D:depth>Infinity</D:depth><D:owner>bench owner</D:owner><D:timeout>Second-3599</D:timeout><D:locktoken><D:href>opaquelocktoken:7413b3ad-65a3-49b0-bc9f-7ed068c3e21c</D:href></D:locktoken><D:lockroot><D:href>/dav/bench-one.txt</D:href></D:lockroot></D:activelock></D:lockdiscovery></D:prop>",
-  "lock_token_header": "<opaquelocktoken:7413b3ad-65a3-49b0-bc9f-7ed068c3e21c>",
+  "body": "<?xml version='1.0' encoding='utf-8'?>\n<D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock><D:locktype><D:write /></D:locktype><D:lockscope><D:exclusive /></D:lockscope><D:depth>Infinity</D:depth><D:owner>bench owner</D:owner><D:timeout>Second-3599</D:timeout><D:locktoken><D:href>opaquelocktoken:8ba760c4-f50e-47e8-add9-92ebfe5d6178</D:href></D:locktoken><D:lockroot><D:href>/dav/bench-one.txt</D:href></D:lockroot></D:activelock></D:lockdiscovery></D:prop>",
+  "lock_token_header": "<opaquelocktoken:8ba760c4-f50e-47e8-add9-92ebfe5d6178>",
   "status": 200
 }

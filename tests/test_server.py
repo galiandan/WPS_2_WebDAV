@@ -467,7 +467,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"drop-overlay", body)
         self.assertIn(b'id="connection"', body)
         self.assertIn(b'id="settings-button"', body)
-        self.assertIn(b'id="upload-speed"', body)
+        self.assertIn(b'id="tray-speed"', body)
         self.assertIn(b'<link rel="stylesheet" href="/assets/style.css">', body)
         self.assertIn(b'<script src="/assets/app.js" defer></script>', body)
         self.assertNotIn(b"link.download", body)
