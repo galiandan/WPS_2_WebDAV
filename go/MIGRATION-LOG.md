@@ -2342,3 +2342,80 @@ entries/list/metadata）与 WebDAV OPTIONS/HEAD/PROPFIND
 Depth 0/1/infinity 语义全等，全部门禁绿灯。
 
 回滚：git revert 本提交。
+
+## B800 签名下载地址解析（2026-09-06）
+
+提交主题：B800 Implement signed download URL resolution with the observed 403 fallback
+
+新文件 go/internal/wps/download.go：完整移植 client.py open_download
+（client.py:2479-2574），签名 object 请求走独立无凭据通道：
+
+- 参数门：offset<0 / length<=0 → ValueError 等价普通 error；
+  (offset≠0 或 length!=nil) 且 EnableRange=false → WpsApiError
+  "range download is disabled until independently verified"。
+- 控制端点：GET /api/v3/office/file/{quote(file_id, safe='')}/download，
+  query 固定首参 support_checksums=md5,sha1,sha224,sha256,sha384,sha512
+  （quote_plus 全等，逗号 → %2C）；cid 链：显式参数 → config.cid → 省略。
+- 403 回退：仅当缺省请求（direct 标志省略）遇 WpsApiError status 403
+  时，追加 get_direct_external_download_url=true 重试一次；其余状态
+  （401/404/500…）不重试（401 仍走 _request_json 的既有单次刷新重试）。
+- 载荷提取：payload.get("download_url") or payload.get("url") 的 Python
+  or 短路语义（falsy 才回退，truthy 非字符串不回退）；只接受
+  startswith("https://") 的 str，否则 WpsApiError "resolve download URL"。
+- 签名校验前置：ParseSignedTarget（复用 B400 signed.go，等价
+  _signed_target）在发任何 object 请求前完成 control chars/HTTPS/
+  host 后缀/userinfo/fragment/port∈{None,443} 校验；错误文案只含
+  operation 名，绝不含 URL。
+- object GET：经 SignedObjectClient（无 Cookie/Authorization/CSRF，
+  传输层无 cookie jar），头仅 Accept: */* 与（请求 Range 时）
+  bytes={offset}-{end}；>=400 → WpsApiError("object download", status)
+  （urllib HTTPError 语义）；传输失败 → unavailable 类别。
+- Range 响应核对（client.py:1657-1674 _range_response_matches 全等移植，
+  含 Python 无界整数的溢出行为：超 int64 的 start/end 恒不匹配、超界
+  total 恒大于 end、end-start+1 溢出局判 False）：206 强制 + bytes
+  Content-Range 严格核对 start==offset、covered==Content-Length、有限
+  length 时 covered==length、total=="*" 或 total>end；不匹配 →
+  "range download was not honored" / "range response metadata was not
+  honored"，全部先关响应体。
+- DownloadStream：等价 Python dataclass（status/content_type/
+  content_length/http_status/content_range），指针访问器对应 None；
+  Close 经 sync.Once 幂等；Content-Length 解析等价
+  int(headers.get(...))（容忍空白与符号，失败降级 None）。
+
+新文件 go/internal/storage/download.go：wpsDownloader 适配器把
+*wps.Client 的 OpenDownload 接到 storage.Downloader 接口（wps 与
+storage 的接口返回类型不同，需薄适配；download_test.go 编译期断言
+方法集持续兼容）。
+
+测试（wps download_test.go，镜像 tests/test_smoke.py 的 fixture）：
+
+- 不转发 Cookie：控制请求带 Cookie-secret、object 请求零 Cookie、
+  Accept */*；payload status "finished" 透传；query 逐字节断言。
+- 403 回退：两次控制请求 query 全等
+  （support_checksums[,cid] → +get_direct_external_download_url=true），
+  恰一次重试；401/404/500 不触发回退（401 走既有刷新路径）。
+- Range：请求头 bytes=6-10 精确；206 + Content-Range 匹配 → 流内容
+  "world"/206/Content-Range 透传；错配（bytes 0-4/11）→ 502 类
+  WpsApiError 且响应体已关闭；200 应答 → "range download was not
+  honored"。
+- host 白名单/拒绝表驱动 12 例：object-host、子域、:443 显式端口、
+  裸后缀域允许；attacker.example、后缀伪装、http、userinfo、:8443、
+  fragment、CRLF 控制字符（JSON 转义后到达校验器）拒绝；拒绝路径
+  零 object 请求、错误不含 URL。
+- download_url/url 提取表驱动 9 例：空串/None 回退、数字 truthy 不
+  回退、缺失拒绝。
+- EnableRange=false 门、参数 ValueError、file_id quote 转义
+  （a/b c?d → a%2Fb%20c%3Fd）、cid 链 4 例、object 传输失败/403、
+  _range_response_matches 22 例全等表（含无界整数溢出行为）、
+  header int 解析 7 例。
+
+偏差：无。client.download_to 便捷包装延后到 B801（Go 侧流式写出
+在 HTTP 层实现）；SignedObjectClient 传输失败沿用 established 的
+unavailable 类别（Python URLError 为 upstream 默认，B400 已记录）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps 与 storage
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项（manifest 重建后全绿）、
+contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
