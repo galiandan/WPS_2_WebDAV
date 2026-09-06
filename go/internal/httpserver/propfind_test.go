@@ -47,8 +47,12 @@ type propfindStorage struct {
 	byPath     map[string]model.RemoteEntry
 	rootErr    error
 	listByPath map[string][]model.RemoteEntry
-	listErr    error
-	listCalls  []string
+	// childrenByEntry serves the B703 by-ID descent: children of deeper
+	// folders are listed by parent entry ID, never re-resolved by path.
+	childrenByEntry map[string][]model.RemoteEntry
+	onChildren      func(entryID string)
+	listErr         error
+	listCalls       []string
 }
 
 func (f *propfindStorage) Metadata(path string) (model.RemoteEntry, error) {
@@ -70,6 +74,22 @@ func (f *propfindStorage) ListPath(path string) ([]model.RemoteEntry, error) {
 	}
 	if f.listByPath != nil {
 		if children, ok := f.listByPath[path]; ok {
+			return children, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *propfindStorage) ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error) {
+	f.listCalls = append(f.listCalls, "children:"+entry.ID)
+	if f.onChildren != nil {
+		f.onChildren(entry.ID)
+	}
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if f.childrenByEntry != nil {
+		if children, ok := f.childrenByEntry[entry.ID]; ok {
 			return children, nil
 		}
 	}
@@ -333,7 +353,9 @@ func TestPropfindContractHrefs(t *testing.T) {
 				propfindFile("bench-file-2", "bench-two.txt", "bench-etag-bench-file-2"),
 				propfindFolder("bench-dir-1", "bench-folder", "bench-etag-bench-dir-1"),
 			},
-			"/bench-folder": {propfindFile("child-1", "child.txt", "bench-etag-child")},
+		},
+		childrenByEntry: map[string][]model.RemoteEntry{
+			"bench-dir-1": {propfindFile("child-1", "child.txt", "bench-etag-child")},
 		},
 	}
 	recorder = servePropfind(t, newPropfindRouter(t, storage, nil), "/dav/", "infinity")

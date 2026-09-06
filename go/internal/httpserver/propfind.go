@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"net/http"
 	"strconv"
@@ -26,7 +27,7 @@ func (d *DAVDispatcher) doPropfind(w http.ResponseWriter, r *http.Request, davPa
 	if err != nil {
 		return err
 	}
-	entries, err := d.webdavEntries(davPath, depth)
+	entries, err := d.webdavEntries(r.Context(), davPath, depth)
 	if err != nil {
 		return err
 	}
@@ -60,14 +61,24 @@ type propfindEntry struct {
 	entry model.RemoteEntry
 }
 
-// webdavEntries mirrors _webdav_entries: resolve the request path once,
-// then walk with the fixed Depth rules — Depth 0 answers only the entry,
-// Depth 1 adds its direct children (folder hrefs get a trailing slash
-// from the join), infinity keeps recursing (its B703 hardening — iterative
-// traversal and disconnect checks — is still pending). A repeated entry ID
-// is an upstream integrity failure; the entry and depth bounds raise 507
-// exactly like the Python limits.
-func (d *DAVDispatcher) webdavEntries(path string, depth string) ([]propfindEntry, error) {
+// clientDisconnectedError mirrors Python's _ClientDisconnected: the
+// client went away mid-walk, so the response is abandoned entirely and
+// the connection closes without an answer.
+type clientDisconnectedError struct{}
+
+func (clientDisconnectedError) Error() string { return "client disconnected during PROPFIND" }
+
+// webdavEntries mirrors _webdav_entries as a stack walk: resolve the
+// request path once, list the root through the request path (multi-space
+// routing), then descend by parent ID — every folder is listed exactly
+// once and no deeper node re-resolves from the root. The reversed push
+// keeps Python's depth-first pre-order observable. Depth 0 answers only
+// the entry; Depth 1 adds its direct children; infinity keeps walking
+// until the bounds or the client stop it. A repeated entry ID is an
+// upstream integrity failure; the entry and depth bounds raise 507
+// exactly like the Python limits; a canceled request context abandons
+// the response like Python's _ClientDisconnected.
+func (d *DAVDispatcher) webdavEntries(ctx context.Context, path string, depth string) ([]propfindEntry, error) {
 	parts, err := storage.SplitRemotePath(path)
 	if err != nil {
 		return nil, err
@@ -76,45 +87,69 @@ func (d *DAVDispatcher) webdavEntries(path string, depth string) ([]propfindEntr
 	if err != nil {
 		return nil, err
 	}
+	type frame struct {
+		scopePath string
+		parts     []string
+		entry     model.RemoteEntry
+		level     int
+	}
 	result := make([]propfindEntry, 0)
 	visited := make(map[string]struct{})
-	var visit func(currentPath string, parts []string, entry model.RemoteEntry, level int) error
-	visit = func(currentPath string, parts []string, entry model.RemoteEntry, level int) error {
-		if _, seen := visited[entry.ID]; seen {
-			return model.NewWpsAPIError("PROPFIND encountered a repeated entry ID", 0, model.WpsCategoryUpstream)
+	stack := []frame{{scopePath: path, parts: parts, entry: entry, level: 0}}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if ctx.Err() != nil {
+			return nil, clientDisconnectedError{}
 		}
-		visited[entry.ID] = struct{}{}
+		if _, seen := visited[current.entry.ID]; seen {
+			return nil, model.NewWpsAPIError("PROPFIND encountered a repeated entry ID", 0, model.WpsCategoryUpstream)
+		}
+		visited[current.entry.ID] = struct{}{}
 		if len(result) >= d.propfind.MaxPropfindEntries {
-			return model.NewStorageError(model.KindInsufficientStorage, "PROPFIND exceeds the configured entry limit")
+			return nil, model.NewStorageError(model.KindInsufficientStorage, "PROPFIND exceeds the configured entry limit")
 		}
-		result = append(result, propfindEntry{href: buildHref(parts, entry, d.davPrefix), entry: entry})
-		shouldRecurse := entry.Kind == model.KindFolder && (depth == "infinity" || (depth == "1" && level == 0))
+		result = append(result, propfindEntry{href: buildHref(current.parts, current.entry, d.davPrefix), entry: current.entry})
+		shouldRecurse := current.entry.Kind == model.KindFolder && (depth == "infinity" || (depth == "1" && current.level == 0))
 		if !shouldRecurse {
-			return nil
+			continue
 		}
-		if level >= d.propfind.MaxPropfindDepth {
-			return model.NewStorageError(model.KindInsufficientStorage, "PROPFIND exceeds the configured depth limit")
+		if current.level >= d.propfind.MaxPropfindDepth {
+			return nil, model.NewStorageError(model.KindInsufficientStorage, "PROPFIND exceeds the configured depth limit")
 		}
-		children, err := d.storage.ListPath(currentPath)
+		if ctx.Err() != nil {
+			return nil, clientDisconnectedError{}
+		}
+		var children []model.RemoteEntry
+		if current.level == 0 {
+			// The root listing routes through the request path so the
+			// multi-space view can answer virtually.
+			children, err = d.storage.ListPath(current.scopePath)
+		} else {
+			children, err = d.storage.ListChildren(current.scopePath, current.entry)
+		}
 		if err != nil {
-			return err
+			return nil, err
 		}
-		for _, child := range children {
-			childParts := make([]string, 0, len(parts)+1)
-			childParts = append(childParts, parts...)
+		for i := len(children) - 1; i >= 0; i-- {
+			child := children[i]
+			childParts := make([]string, 0, len(current.parts)+1)
+			childParts = append(childParts, current.parts...)
 			childParts = append(childParts, child.Name)
 			childPath, err := storage.JoinRemotePath(childParts, child.Kind == model.KindFolder)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if err := visit(childPath, childParts, child, level+1); err != nil {
-				return err
-			}
+			// The joined path doubles as the child's scope: the multi-space
+			// view routes by its first component, and building it keeps the
+			// Python join validation (invalid component names) observable.
+			stack = append(stack, frame{
+				scopePath: childPath,
+				parts:     childParts,
+				entry:     child,
+				level:     current.level + 1,
+			})
 		}
-		return nil
-	}
-	if err := visit(path, parts, entry, 0); err != nil {
-		return nil, err
 	}
 	return result, nil
 }

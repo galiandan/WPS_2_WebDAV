@@ -2281,3 +2281,64 @@ amd64、darwin arm64 通过；Python 参照套件 169 项（manifest
 序重建。
 
 回滚：git revert 本提交。
+
+## B703 PROPFIND infinity
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：`_webdav_entries` 的 visit 顺序与限制、
+`_ClientDisconnected` 处理；契约 golden DAV-PROPFIND-004
+（infinity 小树）与 006（INFINITY 大小写）。
+
+实现：
+
+- 遍历改为显式栈（webdavEntries 重写）：请求根只 resolve/list
+  一次（ListPath 走请求路径，保留 multi-space 虚拟根路由）；
+  更深层级经新增的 storage.ListChildren(scopePath, entry) 按
+  **parent ID** 列子项——每个文件夹恰好列一次，任何 deeper 节
+  点都不再从根重解析（"避免每个节点从根重复解析"）。
+  Storage.ListChildren = ListByID(&entry.ID)（缓存的按父 ID
+  listing，upstream 请求模式与 Python 的 list_path 等同）；
+  MultiSpace.ListChildren：单空间后备直接按 ID；虚拟 space 项
+  （"space:<group>" ID）降入对应 mount 的当前根（ListByID(nil)）；
+  真实项经 route(scopePath) 一次路由后按 ID（scopePath 为帧携带
+  的 join 路径，首个分片即 space 名）。
+- 可观察顺序不变：栈反向压入保持 Python 的 DFS 前序
+  （root → children 按列表顺序）；重复 entry ID 仍是上游完整性
+  错误（502 固定文案）；entry/depth/响应字节三重 507 限制不变
+  （响应体仍在写头前整体成型，"中途超限"天然正确）。
+- 取消：每帧弹出与每次 listing 前检查 r.Context()；取消 →
+  clientDisconnectedError 哨兵 → dispatchDAV 不写任何响应直接
+  返回（Python _ClientDisconnected：close_connection=True 且
+  不发送）。
+- JoinRemotePath 仍对每个子项名做校验（非法组件 → 400），与
+  Python join_remote_path 的校验副作用一致；join 结果兼作子帧
+  的 scopePath。
+
+测试（httpserver propfind_infinity_test.go + storage
+multispace_test.go）：
+
+- 1 条目：infinity 单文件 → 1 个 href。
+- 1000 条目：1001 href，前序保持（首/第二/末 href 断言）。
+- 10000 边界：root+9999 → 207 恰 10000 href；root+10000 →
+  507 "PROPFIND exceeds the configured entry limit"。
+- 深树：65 级文件夹链（depth 限制 64）→ 507 depth limit。
+- 循环：A↔B 互列 → 502 固定文案。
+- 断连：预取消的 context → 响应零字节零头；子 listing 回调中
+  取消 → 同样无响应（两例都断言 recorder 无体无头）。
+- 超限响应字节 507 由 B702 套件持续覆盖。
+- storage 层：space 项降入 mount 根（lister 恰收到 root-a 一
+  次）、scoped 按 ID 降入（root-a → doc-1 两次）、未知 space
+  → "WPS space not found: missing"、单空间后备按 ID。
+- 既有 B702 套件全部保持绿（顺序与语义未变）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver 与
+storage -race -count=4 全绿；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项
+（manifest 重建后全绿）、contract_tests 119 项全绿；manifest
+按门禁顺序重建。
+
+阶段 7（B700–B703）至此全部完成：REST 只读组（status/
+entries/list/metadata）与 WebDAV OPTIONS/HEAD/PROPFIND
+Depth 0/1/infinity 语义全等，全部门禁绿灯。
+
+回滚：git revert 本提交。

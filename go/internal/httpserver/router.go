@@ -253,9 +253,15 @@ func (rt *Router) dispatchREST(w http.ResponseWriter, r *http.Request, route RES
 
 // dispatchDAV runs a DAV handler and maps its error with the plain text
 // framing, mirroring the do_* wrappers calling _handle_exception with the
-// default rest=False.
+// default rest=False. A client disconnect aborts the response entirely
+// like Python's _ClientDisconnected: nothing is sent, the connection
+// closes.
 func (rt *Router) dispatchDAV(w http.ResponseWriter, r *http.Request, davPath string) {
 	if err := rt.handlers.DAV(w, r, davPath); err != nil {
+		var disconnected clientDisconnectedError
+		if errors.As(err, &disconnected) {
+			return
+		}
 		mapError(w, r, err, false)
 	}
 }

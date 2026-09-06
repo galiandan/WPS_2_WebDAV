@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/budget"
@@ -386,6 +387,47 @@ func singleOrFailEntry(single *Storage, path string) (model.RemoteEntry, error) 
 // ListPath lists the children of path. The root listing returns only the
 // configured mounts (or the single space's root listing) and never talks to
 // WPS for the mount entries themselves.
+// ListChildren lists the direct children of a folder entry inside the
+// space the walk scope points at. Virtual space entries (ids prefixed
+// "space:") descend into their mount's current root; real entries list by
+// parent ID inside the routed space, so deeper levels never re-resolve
+// from the root.
+func (m *MultiSpace) ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error) {
+	if err := m.syncMounts(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	hasMounts := len(m.mounts) > 0
+	single := m.single
+	m.mu.Unlock()
+	if !hasMounts {
+		if single == nil {
+			return nil, model.NewStorageError(model.KindEntryNotFound, "WPS workspace is not configured")
+		}
+		return single.ListByID(&entry.ID)
+	}
+	if groupID, ok := strings.CutPrefix(entry.ID, "space:"); ok {
+		m.mu.Lock()
+		var space *Storage
+		for _, mount := range m.mounts {
+			if mount.GroupID == groupID {
+				space = m.spaces[mount.Name]
+				break
+			}
+		}
+		m.mu.Unlock()
+		if space == nil {
+			return nil, model.NewStorageError(model.KindEntryNotFound, "WPS space not found: "+groupID)
+		}
+		return space.ListByID(nil)
+	}
+	space, _, err := m.route(scopePath)
+	if err != nil {
+		return nil, err
+	}
+	return space.ListByID(&entry.ID)
+}
+
 func (m *MultiSpace) ListPath(path string) ([]model.RemoteEntry, error) {
 	if err := m.syncMounts(); err != nil {
 		return nil, err

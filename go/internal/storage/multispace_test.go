@@ -559,3 +559,74 @@ func TestMultiSetRootDelegation(t *testing.T) {
 }
 
 var _ io.Reader = (*byteReader)(nil)
+
+// TestListChildrenDescendsByParentID covers the B703 PROPFIND walk
+// surface: virtual space entries descend into their mount root, deeper
+// entries list by parent ID inside the routed space, the single-space
+// fallback lists by ID, and unknown space ids report not found.
+func TestListChildrenDescendsByParentID(t *testing.T) {
+	multi, spy := newTestMulti(t, nil, func(c *MultiSpaceConfig) {
+		c.StaticMounts = []Mount{
+			{Name: "alpha", GroupID: "gA", RootID: "root-a"},
+			{Name: "beta", GroupID: "gB", RootID: "root-b"},
+		}
+	})
+	spy.listers["gA"].children["root-a"] = []model.RemoteEntry{
+		{ID: "doc-1", Name: "doc.txt", Kind: model.KindFile},
+	}
+	spy.listers["gA"].children["doc-1"] = []model.RemoteEntry{
+		{ID: "sub-1", Name: "sub", Kind: model.KindFolder},
+	}
+
+	// A virtual space entry descends into the mount's current root.
+	spaceEntry, err := multi.Metadata("/alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	children, err := multi.ListChildren("/", spaceEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 || children[0].ID != "doc-1" {
+		t.Fatalf("space children = %+v", children)
+	}
+	if got := spy.listers["gA"].calls; fmt.Sprint(got) != "[root-a]" {
+		t.Fatalf("space descent calls = %v", got)
+	}
+
+	// A deeper real entry lists by parent ID, scoped through any path in
+	// the same space.
+	children, err = multi.ListChildren("/alpha/deeper", model.RemoteEntry{ID: "doc-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 || children[0].ID != "sub-1" {
+		t.Fatalf("scoped children = %+v", children)
+	}
+	if got := spy.listers["gA"].calls; fmt.Sprint(got) != "[root-a doc-1]" {
+		t.Fatalf("by-ID descent calls = %v", got)
+	}
+
+	// An unknown virtual space id reports not found.
+	_, err = multi.ListChildren("/", model.RemoteEntry{ID: "space:missing"})
+	if err == nil || err.Error() != "WPS space not found: missing" {
+		t.Fatalf("unknown space error = %v", err)
+	}
+
+	// The single-space fallback lists by parent ID directly.
+	single, singleSpy := newTestMulti(t, nil, func(c *MultiSpaceConfig) {
+		c.StaticGroupID = "group-1"
+	})
+	var singleLister *groupLister
+	for _, lister := range singleSpy.listers {
+		singleLister = lister
+	}
+	singleLister.children["p-1"] = []model.RemoteEntry{{ID: "kid", Name: "kid.txt", Kind: model.KindFile}}
+	children, err = single.ListChildren("/", model.RemoteEntry{ID: "p-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 || children[0].ID != "kid" {
+		t.Fatalf("single children = %+v", children)
+	}
+}

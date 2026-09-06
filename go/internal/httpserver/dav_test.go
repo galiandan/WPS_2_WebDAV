@@ -101,6 +101,10 @@ func (f *davHeadStorage) ListPath(path string) ([]model.RemoteEntry, error) {
 	return f.children, nil
 }
 
+func (f *davHeadStorage) ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error) {
+	return nil, nil
+}
+
 func newDAVRouter(t *testing.T, storage DAVStorage) *Router {
 	t.Helper()
 	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, "/dav")

@@ -8,11 +8,14 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
 
-// DAVStorage is the storage surface the WebDAV methods share: Metadata
-// for HEAD/PROPFIND answers, ListPath for the Depth 1/infinity walks. It
-// is the same surface the REST read routes use — Python duck-types one
-// storage for both.
-type DAVStorage = RESTReadStorage
+// DAVStorage is the storage surface the WebDAV methods share. The root
+// answer uses Metadata/ListPath (multi-space routing by request path);
+// the PROPFIND walk descends by parent ID through ListChildren so deeper
+// levels never re-resolve from the root (B703).
+type DAVStorage interface {
+	RESTReadStorage
+	ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error)
+}
 
 // DAVLimits mirrors the AdapterApplication PROPFIND bounds.
 type DAVLimits struct {

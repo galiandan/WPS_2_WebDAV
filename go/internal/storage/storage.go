@@ -365,6 +365,14 @@ func (s *Storage) ListByID(parentID *string) ([]model.RemoteEntry, error) {
 	return s.children(*parentID)
 }
 
+// ListChildren lists the direct children of a folder entry by its parent
+// ID, so the WebDAV PROPFIND walk never re-resolves a deeper node's path
+// from the root. scopePath exists for the multi-space surface and is
+// ignored here.
+func (s *Storage) ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error) {
+	return s.ListByID(&entry.ID)
+}
+
 func (s *Storage) parentAndName(path string) (model.RemoteEntry, string, []string, error) {
 	parts, err := SplitRemotePath(path)
 	if err != nil {
