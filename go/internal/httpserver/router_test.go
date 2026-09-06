@@ -282,8 +282,10 @@ func TestOptionsIsNotLimitedToDavPrefix(t *testing.T) {
 			t.Errorf("OPTIONS %s: status = %d", target, recorder.Code)
 			continue
 		}
-		if got := recorder.Header().Get("DAV"); got != "1,2" {
-			t.Errorf("OPTIONS %s: DAV = %q", target, got)
+		// The handler writes the raw "DAV" key (Go would canonicalize it
+		// to "Dav" on the wire); look it up directly.
+		if dav := recorder.Header()["DAV"]; len(dav) != 1 || dav[0] != "1,2" {
+			t.Errorf("OPTIONS %s: DAV = %q", target, dav)
 		}
 		want := "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE, COPY, LOCK, UNLOCK"
 		if got := recorder.Header().Get("Allow"); got != want {

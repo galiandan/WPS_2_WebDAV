@@ -162,11 +162,15 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "OPTIONS" {
 		// Python answers OPTIONS on every path — inside or outside the DAV
 		// prefix (contract DAV-OPTIONS-001/002) — with fixed capability
-		// headers and an empty body.
-		writeResponse(w, r, http.StatusOK, nil, contentTypeText, map[string]string{
-			"DAV":   davCapabilityHeader,
-			"Allow": allowMethodsHeader,
-		}, false)
+		// headers and an empty body. "DAV" is assigned through the raw map
+		// because Go's canonicalization would emit "Dav" on the wire.
+		header := w.Header()
+		header.Set("Content-Type", contentTypeText)
+		header.Set("Content-Length", "0")
+		header.Set("Cache-Control", "no-store")
+		header["DAV"] = []string{davCapabilityHeader}
+		header.Set("Allow", allowMethodsHeader)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	switch r.Method {

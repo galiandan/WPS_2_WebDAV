@@ -348,7 +348,9 @@ func (a basicAuth) middleware() Middleware {
 // Cache-Control header.
 func sendUnauthorized(w http.ResponseWriter) {
 	header := w.Header()
-	header.Set("WWW-Authenticate", `Basic realm="wps-adapter"`)
+	// The raw map keeps Python's exact "WWW-Authenticate" spelling on the
+	// wire (Set would canonicalize it to "Www-Authenticate").
+	header["WWW-Authenticate"] = []string{`Basic realm="wps-adapter"`}
 	header.Set("Connection", "close")
 	header.Set("Content-Length", "0")
 	w.WriteHeader(http.StatusUnauthorized)

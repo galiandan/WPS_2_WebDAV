@@ -2120,3 +2120,83 @@ contract_tests 119 项全绿；manifest 按门禁顺序重建（契约记录
 的非确定值，随本提交更新）。
 
 回滚：git revert 本提交。
+
+## B701 WebDAV OPTIONS/HEAD
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：server.py `do_HEAD`（目录/文件分支）、
+`_send_download(head=True)`（792-876）、`do_OPTIONS`（1637，
+B600 已钉）、`mimetypes.guess_type`；契约 goldens
+DAV-HEAD-001/002、DAV-OPTIONS-001/002（B600 已重放）、
+DAV-GET-002 的 409 文案。
+
+实现（go/internal/httpserver/dav.go、mimetypes.go）：
+
+- DAVDispatcher（ServeDAV 适配 Handlers.DAV）：B701 只交付
+  HEAD；PROPFIND/GET/写方法在各自阶段落地前的过渡行为 =
+  未知路由 404 文本 + close。
+- HEAD 目录：metadata → kind=="folder" → 裸 send_response：
+  Content-Type "httpd/unix-directory"、Content-Length 0，
+  **无** Cache-Control/ETag/Accept-Ranges/Connection，连接
+  保持（Python 未置 close_connection）。
+- HEAD 文件：metadata → kind!="file" → 409 "the requested
+  path is not a file"（server 层固定文案）；文件走
+  _send_download head 分支的完整头集：Content-Type（MIME
+  猜测）、Accept-Ranges: bytes、Cache-Control "no-store,
+  no-transform"（区别于控制响应的 no-store）、
+  X-Content-Type-Options: nosniff、ETag（存在且非空时）、
+  Content-Length（size 非 nil 且 >= 0 时）、Connection: close
+  （Python close_connection=True，每次下载/HEAD 都关）。
+- HEAD **只用 metadata，不打开对象正文**（B801/B802 之前
+  也不解析 Range/If-Range——Range 头暂时忽略、恒 200 全量
+  头，文档化过渡；B802 按 golden 补 206/416）。
+- ETag 引号：f'"{etag.strip(chr(34))}"' —— 先剥掉全部首尾
+  双引号再包恰好一层；空串/缺失不发 ETag。
+- MIME：guessMimeType 逐行移植 CPython 3.14
+  mimetypes.guess_type(strict) 算法——posixpath.splitext 语义
+  （前导点不成扩展名）、suffix_map 复合后缀改写（.tgz →
+  .tar.gz…）、大小写敏感的 encodings_map 剥壳（x.gz → 编码
+  gzip + 无扩展名 → octet-stream 兜底）、扩展名 lower 后查
+  严格表、未命中 → application/octet-stream。Go mime 包差异
+  大（charset 参数、.ico、.wav 等）不可用；mimeTypesTable 由
+  Python 的有效严格库机械生成（CPython 3.14 内置表 + 门禁机
+  /etc/mime.types 合并结果，1419 行数据文件），算法测试含
+  大小写/复合后缀/编码剥壳/前导点/未知扩展名。
+- 头名大小写钉扎：Go 的 Set 会把 ETag→Etag、DAV→Dav、
+  WWW-Authenticate→Www-Authenticate 规范化，而 Python 原样
+  发送 ETag/DAV/WWW-Authenticate。三处改为原始 map 赋值
+  （dav.go ETag、router.go OPTIONS DAV、middleware.go 401
+  WWW-Authenticate），raw-socket 测试按 wire 字节断言
+  "ETag:"/"DAV:" 拼写。
+- 服务器自动头差异（延续 B600 既定偏差）：Python
+  send_response 自动附加 "Server: BaseHTTP/… Python/…"，Go
+  net/http 不发送；Date 两边都有（RFC1123 GMT）。无 golden
+  钉 Server。
+
+测试（dav_test.go）：
+
+- 文件 HEAD 全头集 golden（含 text/plain 无 charset、空体、
+  storage 恰好调用一次 metadata）。
+- ETag 五变体：裸值、预引号、多重引号剥到单引号、空串不发、
+  nil 不发。
+- 目录 HEAD：类型/长度正确 + 四个下载头缺席。
+- 错误表：404/409/502/503+Retry-After 60，HEAD 下错误体为
+  空（Python _send_bytes 对 HEAD 同样跳过正文——文本框架由
+  B602 DAV goldens 钉）。
+- 契约 golden 重放：DAV-HEAD-001（200、body 0、CL 11、
+  ETag 带引号）、DAV-HEAD-002（httpd/unix-directory、CL 0）。
+- live 框架（raw socket）：文件 HEAD 关连接 + wire 级 ETag
+  拼写；目录 HEAD 保活（同连接第二个请求成功后随文件 HEAD
+  关闭）；OPTIONS 能力探测 wire 级 DAV/Allow 头（curl 完成条
+  件的等价探针，WebDAV 客户端能力探测由 OPTIONS+PROPFIND 组
+  合在 B702 后完整）。
+- guessMimeType 20 例 + pythonSplitExt 7 例（含 "..dots"、
+  "...a.txt" 等 Python 源码行为探针）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 169 项（manifest
+重建后全绿）、contract_tests 119 项全绿；manifest 按门禁顺序
+重建。
+
+回滚：git revert 本提交。
