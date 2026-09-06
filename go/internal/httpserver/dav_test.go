@@ -107,7 +107,7 @@ func (f *davHeadStorage) ListChildren(scopePath string, entry model.RemoteEntry)
 
 func newDAVRouter(t *testing.T, storage DAVStorage) *Router {
 	t.Helper()
-	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, "/dav")
+	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, DownloadLimits{}, stubDownloadStorage{}, "/dav")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,10 +289,10 @@ func TestDAVHeadErrors(t *testing.T) {
 }
 
 // TestDAVUnknownDAVMethods pins the interim answer of the DAV methods
-// whose stages have not landed yet.
+// whose stages have not landed yet; GET streams downloads since B801.
 func TestDAVUnknownDAVMethods(t *testing.T) {
 	router := newDAVRouter(t, &davHeadStorage{entry: headFileEntry()})
-	for _, method := range []string{"GET", "MKCOL", "LOCK"} {
+	for _, method := range []string{"MKCOL", "LOCK"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, newTestRequest(method, "/dav/bench-one.txt"))
 		if recorder.Code != http.StatusNotFound {

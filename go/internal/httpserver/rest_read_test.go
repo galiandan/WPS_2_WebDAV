@@ -61,6 +61,11 @@ func (f *fakeStatusChecker) CheckStatus(rootID string) (model.WpsStatus, error) 
 // session importer is inert because the read routes never touch it.
 func newReadDispatcher(t *testing.T, read RESTReadStorage, status *StatusController) *RESTDispatcher {
 	t.Helper()
+	return newReadDispatcherDownloads(t, read, status, stubDownloadStorage{})
+}
+
+func newReadDispatcherDownloads(t *testing.T, read RESTReadStorage, status *StatusController, downloads DownloadStorage) *RESTDispatcher {
+	t.Helper()
 	limits := ControlLimits{MaxControlBody: 64 * 1024, MaxResponseBody: 64 * 1024}
 	session, err := NewSessionImporter(limits, "",
 		func([]any, string) (string, string, []string, error) {
@@ -74,7 +79,7 @@ func newReadDispatcher(t *testing.T, read RESTReadStorage, status *StatusControl
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := NewRESTDispatcher(limits, controller, session, read, status)
+	dispatcher, err := NewRESTDispatcher(limits, controller, session, read, status, DownloadLimits{}, downloads)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,15 +459,22 @@ func TestRESTMetadataRoute(t *testing.T) {
 }
 
 // TestRESTDeferredRoutes pins the interim behavior of suffixes that land in
-// later stages: unknown-route 404 after the shared path validation.
+// later stages: unknown-route 404 after the shared path validation. The
+// download route streams for real since B801.
 func TestRESTDeferredRoutes(t *testing.T) {
-	router := readRouter(t, newReadDispatcher(t, &fakeReadStorage{}, nil))
+	stream := newFakeStream("bench-bytes", model.Ptr(int64(11)))
+	downloads := &downloadStorageFake{entry: downloadFileEntry(), stream: stream}
+	router := readRouter(t, newReadDispatcherDownloads(t, &fakeReadStorage{}, nil, downloads))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, newTestRequest("GET", "/api/v1/download?path=%2Fbench-one.txt"))
-	if recorder.Code != http.StatusNotFound || recorder.Body.String() != `{"error":"unknown REST route"}` {
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "bench-bytes" {
 		t.Fatalf("download status = %d body = %q", recorder.Code, recorder.Body.String())
 	}
-	// The path query is validated before the unknown-route answer.
+	wantDisposition := `attachment; filename="download.txt"; filename*=UTF-8''bench-one.txt`
+	if got := recorder.Header().Get("Content-Disposition"); got != wantDisposition {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	// The path query is validated before the route answers.
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, newTestRequest("GET", "/api/v1/download?path="))
 	want := `{"error":"query parameter 'path' must contain one non-empty path"}`
@@ -492,7 +504,7 @@ func TestRESTDispatcherRequiresStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRESTDispatcher(limits, controller, session, nil, nil); err == nil {
+	if _, err := NewRESTDispatcher(limits, controller, session, nil, nil, DownloadLimits{}, stubDownloadStorage{}); err == nil {
 		t.Fatal("a nil storage must be rejected")
 	}
 }

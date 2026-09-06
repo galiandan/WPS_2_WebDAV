@@ -101,28 +101,35 @@ func (c *RootNameController) Set(value any) (string, error) {
 }
 
 // RESTDispatcher routes the /api/v1 suffixes. B603 delivers the settings
-// pair, B604 the session import, and B700 the read-only routes (status,
-// entries/list, metadata); download arrives with the download stage and the
-// remaining write routes (upload, folders, entries) with the write stages —
-// every not-yet-implemented suffix answers Python's "unknown REST route"
-// 404 in the meantime.
+// pair, B604 the session import, B700 the read-only routes (status,
+// entries/list, metadata), and B801 the download route; the remaining write
+// routes (upload, folders, entries) land with the write stages — every
+// not-yet-implemented suffix answers Python's "unknown REST route" 404 in
+// the meantime.
 type RESTDispatcher struct {
-	limits   ControlLimits
-	rootName *RootNameController
-	session  *SessionImporter
-	read     RESTReadStorage
-	status   *StatusController
+	limits    ControlLimits
+	rootName  *RootNameController
+	session   *SessionImporter
+	read      RESTReadStorage
+	status    *StatusController
+	download  DownloadLimits
+	downloads DownloadStorage
 }
 
 // NewRESTDispatcher wires the dispatcher; a zero limits value selects the
 // AdapterApplication defaults and a nil status controller keeps the
-// not_configured preflight answer.
-func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter, read RESTReadStorage, status *StatusController) (*RESTDispatcher, error) {
+// not_configured preflight answer. The download storage is the same
+// storage, but declared separately so test fakes can scope what each route
+// observes.
+func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter, read RESTReadStorage, status *StatusController, download DownloadLimits, downloads DownloadStorage) (*RESTDispatcher, error) {
 	if session == nil {
 		return nil, errChainConfig("a session importer is required")
 	}
 	if read == nil {
 		return nil, errChainConfig("a storage is required")
+	}
+	if downloads == nil {
+		return nil, errChainConfig("a download storage is required")
 	}
 	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
 		limits = DefaultControlLimits()
@@ -130,7 +137,7 @@ func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, sessi
 	if status == nil {
 		status = NewStatusController(nil, nil)
 	}
-	return &RESTDispatcher{limits: limits, rootName: rootName, session: session, read: read, status: status}, nil
+	return &RESTDispatcher{limits: limits, rootName: rootName, session: session, read: read, status: status, download: download, downloads: downloads}, nil
 }
 
 // ServeREST fits Handlers.REST in the router.
@@ -201,6 +208,8 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 		return d.doEntries(w, r, path)
 	case "metadata":
 		return d.doMetadata(w, r, path)
+	case "download":
+		return sendDownload(w, r, path, true, d.downloads, d.download.chunkSize())
 	}
 	// The download route lands with the download stage.
 	sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)

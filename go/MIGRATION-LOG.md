@@ -2419,3 +2419,84 @@ darwin arm64 通过；Python 参照套件 169 项（manifest 重建后全绿）�
 contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## B801 完整流式 GET（2026-09-06）
+
+提交主题：B801 Stream file downloads through the DAV GET and REST download routes
+
+新文件 go/internal/httpserver/download.go：完整移植 server.py
+_send_download 的非 Range GET 分支（server.py:792-924），DAV GET 与
+REST download 两条路由共享：
+
+- Dispatch：do_GET 的 DAV 分支（REST 路由之后）→ sendDownload(rest=
+  false)；_do_rest_get 的 "download" 后缀 → sendDownload(rest=true，
+  走既有 queryPath 先行校验)。路由器无需改动。
+- metadata 先确认 file：Kind != file → NotFolderError "the requested
+  path is not a file"（409，DAV 文本/REST JSON 帧）；此时不申请槽。
+- 槽与上游：storage.OpenPath(ctx, path, 0, nil) 内部申请全局下载槽并
+  包装 managedDownloadStream；defer Close 同时关上游 body 与释放槽，
+  对齐 Python finally: stream.close() 的全部退出路径。
+- 响应头（B801 范围，Range 解析与 206/416 属 B802，Range 头暂时忽
+  略，延续 B701 HEAD 的既录偏差）：Accept-Ranges、Cache-Control
+  "no-store, no-transform"、X-Content-Type-Options nosniff、ETag
+  f'"{etag.strip(chr(34))}"'（raw map 写入保 "ETag" 大小写）、REST 加
+  Content-Disposition attachment; filename="{_ascii_download_name}";
+  filename*=UTF-8''{quote(name, safe='')}。
+- 长度帧：以 object-store 的 stream.content_length 为准（元数据尺寸
+  被丢弃），已知且 >=0 时精确设置 Content-Length + 单个 Connection:
+  close；未知/负值时按契约改用关闭帧——Python 线上有两个 Connection:
+  close 头且无 Transfer-Encoding。Go net/http 需要设置
+  "Transfer-Encoding: identity" 才会放弃 chunked；该值被 Go 从线上删
+  除，行为等价（raw-socket 测试证实：无 Content-Length、无
+  Transfer-Encoding、恰两个 Connection: close、EOF 终帧）。
+- chunk 写出：按配置 stream_chunk_size（默认 1 MiB）循环
+  read+write+Flush，不缓存完整内容；已知长度时每轮
+  min(chunk, remaining+1)，多出的 1 字节用于识别"流超过声明长度"——
+  恰好写出声明的字节数后停止（Python 的 truncated 分支）；空读即
+  break（短读路径：net/http 检测到未写满声明的 Content-Length 自动关
+  连接，等价 Python close_connection=True 警告分支）；每轮循环顶端检
+  查请求 context（等价 _client_disconnected 的 MSG_PEEK），取消即静
+  默停止；读写错误静默停止（Python OSError 家族捕获）。
+- 完成后 TCP 层收尾：Python flush + shutdown(SHUT_WR)；Go 因
+  Connection: close 由 net/http 在 handler 返回后关闭连接，客户端可
+  观察行为一致（body 之后 EOF）。
+
+接线：NewDAVDispatcher 增加 download DownloadLimits 与 downloads
+DownloadStorage 参数、NewRESTDispatcher 尾追同样两个参数；nil 下载
+存储在构造期拒绝（"a download storage is required"）。两个真实现
+（Storage/MultiSpace 的 OpenPath）已满足 DownloadStorage 接口，无需
+改动。TestDAVUnknownDAVMethods 移除 GET、TestRESTDeferredRoutes 改为
+驱动真实 download 路由。
+
+测试（httpserver download_test.go）：
+
+- 精确流式：头全集 + body 字节比对 + SHA-256 固定值；chunk size 4
+  时读取尺寸 [4,4,4]（remaining+1 截顶）；OpenPath 恰一次、offset 0、
+  stream Close 恰一次；DAV 不带 Content-Disposition。
+- 关闭帧（raw socket）：未知长度 → 无 CL/无 TE、两个 Connection:
+  close、EOF 终帧；已知长度 → CL 11、单个 Connection: close。
+- 短读：声明 10 实给 5 → 客户端收 5 字节后 EOF，槽释放。
+- 超长流：声明 5 实给更多 → 客户端恰收 "01234" 后 EOF。
+- 断连：client 中途断开 + 上游 EOF → 循环退出，stream 恰关一次
+  （轮询断言无泄漏）。
+- 错误表：文件夹 409 文本帧且不开流、缺失 404、打开时 503 +
+  Retry-After 5。
+- REST 路由：Content-Disposition 全串、body/SHA-256、错误 JSON 帧；
+  缺 path 仍由 queryPath 400。
+- asciiDownloadName 表驱动 8 例（点尾、.hidden、非法字符、32 字符
+  截断、大小写保留）；DownloadLimits 默认 1 MiB/负值回退/自定义。
+- 契约 golden 回放：DAV-GET-001（头+body 全等）、DAV-GET-002（409
+  文本）、DAV-GET-003（404）、REST-DOWNLOAD-001（含 sha256）。
+
+偏差：无新增。Python 完成后的 connection.shutdown(SHUT_WR) 半关闭
+由 Connection: close 的全关闭等价（客户端观察一致）；未知长度帧的
+"identity" TE 技巧只存在于 handler→net/http 交界，线上字节与 Python
+一致。client.download_to 便捷包装仍延后（Go 流式拷贝在 HTTP 层完
+成，无 Go 调用方）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver 与 storage
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿、contract_tests 119
+项全绿（manifest 按门禁顺序重建）。
+
+回滚：git revert 本提交。
