@@ -2027,3 +2027,96 @@ contract_tests 119 项全绿；manifest 已按门禁顺序重建。
 server），credentials 26 项，全部门禁绿灯。
 
 回滚：git revert 本提交。
+
+## B700 REST status/list/metadata
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：server.py `_do_rest_get`（status/settings 先于
+`_query_path`，entries/list/metadata/download 在其后）、
+`_entry_json`（固定 7 字段）、`_query_path`、Application.
+`current_wps_status`、client.py `WpsStatus.as_dict`；契约 goldens
+REST-STATUS-001、REST-LIST-001..010、REST-META-001、
+REST-ERROR-001/002。
+
+路由语义（全部按 Python 顺序）：
+
+- GET /api/v1/status：先 `_discard_body` 再回答，**先于** path
+  query 解析——`?path=relative` 也不会 400。响应为
+  current_wps_status().as_dict() 的六键顺序（status、wps、
+  workspace、account_type、last_checked_at、retry_after），
+  model.WpsStatus 结构体 tag 顺序即 Python 插入顺序。
+- current_wps_status 映射（httpserver.StatusController）：无
+  checker → not_configured（wps/workspace=not_configured、
+  account_type=unknown、last_checked_at=int(time.time())）；
+  root 解析或 probe 的**形状错误**（Python except 列表
+  AttributeError/OSError/TypeError/ValueError 的对应物）→
+  invalid_response（wps/workspace=unknown）；WpsApiError 不在
+  except 列表 → 原样传播给错误表（502/503）。依赖注入：接口
+  StatusRootIDSource/StatusChecker，httpserver 不 import wps
+  （依赖规则：仅 storage/workspace/davlock/model/budget）。
+- GET /api/v1/entries 与 /api/v1/list（别名）：先
+  storage.metadata(path)，kind != folder → 409
+  {"error":"the requested path is not a folder"}
+  （server.py 层的 NotFolderError 固定文案，与 storage 内部
+  "not a folder: X" 不同）且不再调 list_path（测试断言调用
+  序列）；随后 list_path(path) → {"path": <原样回显>,
+  "entries": [7 字段]}。空目录序列化为 "entries":[]（非 null）。
+- GET /api/v1/metadata：无 kind 检查 → {"path":…, "entry":{…}}。
+- entries/list/metadata **不** discard 请求体（Python 仅
+  status/settings 调 _discard_body）——GET 带体属病态输入，
+  行为差异仅见于悬挂体，不读即镜像。
+- path 回显 = query 解码后的原输入（未规范化），
+  "%2Fbench-folder%2F" 回显 "/bench-folder/"，以 golden 为准。
+- entry 投影：model.PublicEntry（既有，7 字段 id/name/kind/
+  parent_id/size/modified_at/etag 按此序），nil → null；
+  LinkID/Raw 永不出现在响应中。
+- 下载路由（route=="download"）按阶段划分留给阶段 8；此前的
+  过渡行为 = 未知路由 404（路径校验已先行），文档化于此。
+- RESTDispatcher 构造签名扩展为 (limits, rootName, session,
+  read RESTReadStorage, status *StatusController)：storage 必填
+  （"a storage is required"），status 为 nil 时等价
+  NewStatusController(nil, nil)（not_configured）。
+- 错误映射复用 B602 表：InvalidPath 400、EntryNotFound 404
+  （"entry not found: <name>"）、NotFolder 409、上游 500 →
+  502 wps_unavailable + upstream_status、上游 401 → 503
+  wps_session_expired + Retry-After: 60。
+
+测试（httpserver 包新增 rest_read_test.go、
+contract_parity_test.go）：
+
+- status：connected 全键序 golden、无 checker not_configured
+  （注入时钟 1234）、probe/root/无 roots 三种形状错误 →
+  invalid_response（时钟 4321）、WpsApiError(500) → 502
+  带码、path query 被忽略、请求体被 discard。
+- entries/list：成功体逐字节（含 ensure_ascii \u62a5\u8868 转义、
+  null 位形）、空目录 []、list 别名字节相等、对文件 409 且
+  list_path 未被调用、not found 404、空/多值 path 400（含别名
+  与未知后缀）、缺 path 缺省 "/"、上游 500→502/401→503+60
+  （metadata 阶段与 list 阶段各自触发）、path 原样回显 +
+  解码一次传递给 storage。
+- metadata：文件/目录成功 golden、folder 无 kind 检查、
+  not found、相对路径由 storage 层拒绝（400 规则文案）、上游
+  401 映射。
+- 过渡钉扎：/api/v1/download?path=%2Fx → 404 unknown route、
+  /api/v1/download?path= → 400（校验先于未知路由）、/api/v1/nope
+  缺 path 仍 404；NewRESTDispatcher 拒绝 nil storage。
+- 全链路：Basic Auth 外 401 / 内 200（entries 经 NewChain），
+  Content-Length 与体一致。
+- 契约 golden 重放（contract_parity_test.go）：直接读取
+  contract_tests/results/REST-*.json（Python 观测记录）与 Go
+  响应比对——STATUS-001 逐键、LIST-001 逐项（含 null 位形与
+  folder size=11 直传）、LIST-002 别名等体、LIST-003/004/006/
+  007/008/010 原始 body 字节相等、LIST-009 三种 traversal 形状、
+  LIST-005 缺省 path、META-001 载荷 + missing 404、ERROR-001/
+  002 错误载荷与 Retry-After。LIST-008/009 的规则文案由
+  storage/path.go（SplitRemotePath，B501 已对 Python 钉扎）
+  产生；重放 fake 携带同一文案以钉 REST 框架层。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 按门禁顺序重建（契约记录
+中 lock token UUID、last_checked_at、上传 sha256 为每次运行
+的非确定值，随本提交更新）。
+
+回滚：git revert 本提交。

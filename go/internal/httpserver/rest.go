@@ -101,27 +101,36 @@ func (c *RootNameController) Set(value any) (string, error) {
 }
 
 // RESTDispatcher routes the /api/v1 suffixes. B603 delivers the settings
-// pair and B604 the session import; the read-only routes (status, entries,
-// metadata, download) arrive with the read-only stage and the remaining
-// write routes (upload, folders, entries) with the write stages — every
-// not-yet-implemented suffix answers Python's "unknown REST route" 404 in
-// the meantime.
+// pair, B604 the session import, and B700 the read-only routes (status,
+// entries/list, metadata); download arrives with the download stage and the
+// remaining write routes (upload, folders, entries) with the write stages —
+// every not-yet-implemented suffix answers Python's "unknown REST route"
+// 404 in the meantime.
 type RESTDispatcher struct {
 	limits   ControlLimits
 	rootName *RootNameController
 	session  *SessionImporter
+	read     RESTReadStorage
+	status   *StatusController
 }
 
 // NewRESTDispatcher wires the dispatcher; a zero limits value selects the
-// AdapterApplication defaults.
-func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter) (*RESTDispatcher, error) {
+// AdapterApplication defaults and a nil status controller keeps the
+// not_configured preflight answer.
+func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter, read RESTReadStorage, status *StatusController) (*RESTDispatcher, error) {
 	if session == nil {
 		return nil, errChainConfig("a session importer is required")
+	}
+	if read == nil {
+		return nil, errChainConfig("a storage is required")
 	}
 	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
 		limits = DefaultControlLimits()
 	}
-	return &RESTDispatcher{limits: limits, rootName: rootName, session: session}, nil
+	if status == nil {
+		status = NewStatusController(nil, nil)
+	}
+	return &RESTDispatcher{limits: limits, rootName: rootName, session: session, read: read, status: status}, nil
 }
 
 // ServeREST fits Handlers.REST in the router.
@@ -159,7 +168,19 @@ type settingsPayload struct {
 }
 
 func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
-	if route.Suffix == "settings" {
+	// Python answers status and settings before reading the path query, so
+	// both tolerate missing or malformed path parameters.
+	switch route.Suffix {
+	case "status":
+		if err := discardBody(w, r, d.limits); err != nil {
+			return err
+		}
+		status, err := d.status.Current()
+		if err != nil {
+			return err
+		}
+		return sendJSON(w, r, http.StatusOK, status, d.limits, nil)
+	case "settings":
 		if err := discardBody(w, r, d.limits); err != nil {
 			return err
 		}
@@ -171,9 +192,17 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	}
 	// Python parses the path query before dispatching the known routes, so
 	// a malformed path parameter errors even for unknown suffixes.
-	if _, err := queryPath(route.Query); err != nil {
+	path, err := queryPath(route.Query)
+	if err != nil {
 		return err
 	}
+	switch route.Suffix {
+	case "entries", "list":
+		return d.doEntries(w, r, path)
+	case "metadata":
+		return d.doMetadata(w, r, path)
+	}
+	// The download route lands with the download stage.
 	sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
 	return nil
 }

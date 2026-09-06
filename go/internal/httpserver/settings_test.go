@@ -80,7 +80,7 @@ func newSettingsHarness(t *testing.T) *settingsHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := NewRESTDispatcher(limits, controller, session)
+	dispatcher, err := NewRESTDispatcher(limits, controller, session, &fakeReadStorage{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
