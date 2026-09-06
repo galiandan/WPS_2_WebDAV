@@ -2,6 +2,7 @@ package wps
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 
@@ -73,6 +74,35 @@ func (s *spooledFile) reopen() (io.Reader, error) {
 		return s.file, nil
 	}
 	return bytes.NewReader(s.buffer.Bytes()), nil
+}
+
+// readPart returns up to length bytes starting at offset, mirroring
+// spool.seek(offset) + spool.read(length): a short tail part and an empty
+// read past the end both surface without error, and no more than one part
+// is ever held in memory.
+func (s *spooledFile) readPart(offset int64, length int64) ([]byte, error) {
+	if s.file != nil {
+		if _, err := s.file.Seek(offset, io.SeekStart); err != nil {
+			return nil, model.NewStorageError(model.KindIOFailure, "upload spool seek failed")
+		}
+		data := make([]byte, length)
+		read, err := io.ReadFull(s.file, data)
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, model.NewStorageError(model.KindIOFailure, "upload spool read failed")
+		}
+		return data[:read], nil
+	}
+	buffer := s.buffer.Bytes()
+	if offset >= int64(len(buffer)) {
+		return []byte{}, nil
+	}
+	end := offset + length
+	if end > int64(len(buffer)) {
+		end = int64(len(buffer))
+	}
+	part := make([]byte, end-offset)
+	copy(part, buffer[offset:end])
+	return part, nil
 }
 
 // close closes any spilled file and removes it. It is safe to defer on

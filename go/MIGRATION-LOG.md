@@ -3043,3 +3043,170 @@ darwin arm64 通过；Python 参照套件 169 项全绿；contract_tests 119
 本阶段（B1001–B1003）因三次任务叠加于同一 upload.go 且用户将推进与
 提交节奏定义为阶段级，三个任务以单次提交落地；各任务证据仍按任务
 分立如上。
+
+## B1100 检查点格式（2026-09-06）
+
+提交主题：B1100-B1104 Implement multipart upload with checkpoint resume and merge
+
+必读 client.py:1996-2075（resume_path 派生、检查点读取验证、save_state
+原子写）全部核对：
+
+- resumePathFor：绝对目录校验（"upload_resume_dir must be absolute"，
+  拒绝点在 multipart 入口、pre_check 之后，与 Python 一致）；文件名
+  只由 sha256(identity).json 决定，identity =
+  group:parent:name:total:sha1（id 取 str(_json_id) 十进制串形式），
+  上传名不落入文件名。
+- loadResumeCheckpoint：经 securefile.ReadJSONState（0600、私有父目录、
+  属主 root/本用户、Lstat 拒符号链接、有界读）；version==1、identity
+  全等、parts 为「ASCII 数字键→字符串」映射，任一不满足整体视为
+  不存在→全新 init（Python except (OSError, UnicodeError,
+  JSONDecodeError) 同语义）。形状有效但 upload_id/key/store 缺失或空
+  →全新 init；part_size 不可 int() 解析→硬错误 "invalid multipart
+  resume checkpoint"（不复用，与 Python 一致）。
+- saveResumeCheckpoint：细纲明确要求 securefile 原子写（0600 临时文件
+  + fsync + rename；Python 为 "."+name+".tmp" 写入+chmod+replace，无
+  fsync）；目录 MkdirAll 0700。检查点只含 identity/key/part_size/
+  parts/store/upload_id/version 七键，无正文无凭据（测试断言不含
+  csrf/Cookie/URL/store 之外的敏感面）。
+- removeResumeCheckpoint：登记成功且 entry 可解析后才删；仅容忍
+  ErrNotExist，其余删除失败照 Python unlink 一样在登记成功后上抛。
+- 同 identity 互斥锁：细纲 B1103 明确要求，按 checkpoint 路径
+  （即 identity hash）加包级互斥，覆盖整个 multipartUpload；Python
+  无对应保护。
+
+偏差：①检查点内容为客户端自读自写，Go 用 encoding/json 紧凑编码
+（Python json.dumps sort_keys=True 默认 ", "/": " 分隔、ensure_ascii），
+仅字节形状不同；②Python 检查点读取 stat() 跟随符号链接且不限大小，
+Go 一律拒符号链接并限 4 MiB（超限视为不存在→全新 init）；③
+version 为 true（bool）在 Python ==1 通过，Go 要求数值；④父目录
+须私有（securefile 纪律）——已存在的 0755 resume dir 下 Go 拒写、
+Python 照写（文件本身仍 0600）；⑤parts 键须 ASCII 数字（Python
+str.isdigit() 接受 unicode 数字键，但它们永不匹配，等效忽略）。
+
+测试：wps 新增（checkpoint 哈希文件名+0600+七键+无凭据泄漏+无临时
+残留、相对 resume dir 在 pre_check 后拒绝、7 面畸形/异主/越权检查点
+全部全新 init、part_size 坏检查点硬错误且零 init）。
+
+## B1101 初始化与分片大小（2026-09-06）
+
+必读 client.py:1990-2008（_multipart_part_size）、2007-2079（block
+init 请求与响应验证）全部核对：
+
+- 进入条件：total >= multipart_threshold，位于 pre_check 之后、
+  create_update 之前；overwrite 在此处拒绝
+  "multipart overwrite is disabled until independently verified"
+  （测试断言此时仅发出 pre_check、零 block 请求；更早拒绝需契约
+  决定，按细纲暂不优化）。
+- init 体 pyObject 精确 8 字段序（with_rapid/hash=sha1/size/
+  group_id/name/parent_id 均为字符串形式/tried_store/csrf），
+  逐字节 pinned；响应门 result ∈ {缺失,null,"ok"}，upload_id/key/
+  store 为非空串、limit 为映射，否则 "multipart initialization
+  response is incomplete"；RetryOn401=true。
+- multipartPartSize 镜像 int() 语义（json.Number/int/float/十进制
+  串/bool）→ "parse multipart limits"；min<=0 / max<min /
+  max_parts<=0 → "invalid multipart limits"；part_size =
+  max(配置, min, ceil(total/max_parts))；> max → "file exceeds
+  multipart size limits"；> 64 MiB 常量 → InsufficientStorage
+  "multipart part exceeds the memory safety limit"。
+
+偏差：无（配置 part_size<=0 守卫镜像 Python ValueError，实际不可达，
+因 upload() 前置校验先行）。
+
+测试：wps 新增（init 体逐字节 pinned、min_part_size 抬升、max_parts
+抬升、超限拒绝、内存上限拒绝、invalid/parse limits 四面、overwrite
+拒绝点）。
+
+## B1102 单片上传（2026-09-06）
+
+必读 client.py:2081-2160（分片循环与指令校验）、1707-1741
+（_put_signed_part）全部核对：
+
+- readPart：spool.seek(offset)+read(part_size) 等价实现，短尾片与
+  越界空读均无错返回；单片至多 64 MiB 入内存，不整文件驻留。
+- 同片同时生成 hex MD5（block 体）与 Base64 Content-MD5（校验与
+  签名 PUT 头）。
+- block PUT 体 pyObject 精确 8 字段序逐字节 pinned（part_size 取
+  实际片长）；指令校验按 Python 顺序：result 门 → method/url →
+  body_type=file → response 映射 → expect_code 首元素==200（缺失
+  缺省 200、present-null/空表/非 200 拒）→ headers 映射 →
+  Content-MD5（大小写两个键位、Python `or` 真值链）与
+  Content-Type==application/octet-stream 一致性。
+- putSignedPart：Content-MD5 + Content-Type 两头、无 Cookie/
+  Authorization，有界响应读（1 MiB）先于状态门，200 后取 ETag，
+  缺失/空 → "multipart part response missing ETag"；ETag 在此路径
+  归一化（strip 空白+引号，_normalise_etag，仅 multipart 用）。
+- 每片确认后原子更新检查点；重试仅重发同一片（测试断言重试前后
+  block 体逐字节相同、merge 无重复项）；本地 IO 错误（spool）在
+  重试环外直接上抛，与 Python seek/read 的 OSError 一致。
+
+偏差：片响应体读失败（截断）在 Go 归入 WpsAPIError 而可重试，
+Python http.client 的 IncompleteRead 不在 (OSError, WpsApiError)
+内不重试——与 B1002 对象 PUT 的既录偏差③同源同结论。
+
+测试：wps 新增（两片体+merge 体+登记体逐字节 pinned、签名 PUT
+头与 Content-Length、零凭据面、指令校验 12 面、小写头接受、
+ETag 引号剥离/缺失、重试同片、单片 500 耗尽后检查点仅含已确认
+片、断连重试不跳片）。
+
+## B1103 session 失效恢复（2026-09-06）
+
+必读 client.py:2160-2205（400/404/410 重建分支）全部核对：
+
+- 触发条件：仅 WpsAPIError 且 status ∈ {400,404,410}、配置了
+  resume dir、本片未重建过；未配置 resume dir 时不重建、按普通
+  重试耗尽上抛（测试断言 init 只发一次）。
+- 重建体与首次 init 逐字节相同（测试断言）；失败门
+  "reinitialize multipart upload" / "reinitialize multipart
+  response is incomplete"；part_size 重新计算可上抛 parse/
+  invalid/exceeds/memory 四类错误；completed 与 part_infos 清空，
+  新 upload_id/key/store/part_size 立即落检查点；片号回 1，
+  绝不混用旧 upload_id（测试断言重建后片体与 merge 均用新 id）。
+- 重建期间 reinit 自身的错误立即上抛，不被重试环吞掉。
+- 细纲强化的两点（Python 无）：①重建次数上限
+  maxMultipartSessionResets=3——Python 每片重置一次且可无限循环，
+  达到上限后让触发错误原样上抛（测试断言 init 恰好 4 次后返回
+  404 错误）；②同 identity 并发互斥（见 B1100），测试用门控签名
+  传输证明第二个上传在对方持锁期间只能发出 pre_check。
+
+偏差：上限 3 为细纲要求的 Go 侧加固，Python 行为是无界重试。
+
+测试：wps 新增（重建全链、无 resume dir 不重建、上限恰好 3 次、
+并发同 identity 互斥）。
+
+## B1104 merge 与登记（2026-09-06）
+
+必读 client.py:2207-2297（merge 体/指令校验/_post_signed_data/
+_multipart_etag/file_body 登记）全部核对：
+
+- merge 体 pyObject 精确 6 字段序（key 为块会话 key、part_infos
+  为 {etag,part_number} 有序对）逐字节 pinned；指令校验按 Python
+  顺序：result 门 "prepare multipart merge" → method==POST/url →
+  body_type=data → body_data 串+headers 映射 → Content-Type==
+  application/xml（大小写两个键位）→ response 映射 → expect_code
+  首元素==200。
+- postSignedData：签名 POST 无凭据，XML 有界读 4 MiB 先于状态门；
+  multipartEtag 拒 <!doctype/<!entity（字节级、大小写不敏感），
+  再以 encoding/xml 复刻 ElementTree 严格性（未闭合元素、双根、
+  根外垃圾、空文档、非法 XML 全部 "parse multipart merge
+  response"），取首个局部名为 ETag 的元素的前导文本并归一化；
+  纯空白文本归一为空串与 Python 真值语义一致。
+- 登记体 12 字段序逐字节 pinned——注意此处 groupid/parentid 为
+  字符串（group_text/parent_text），与普通上传的 JSON 数字不同，
+  是 Python 原样；etag 为归一化后的合并 ETag；key 为块会话 key。
+- 只有 result 门通过且 entryFromItem 可解析才成功，随后才删
+  检查点；merge 失败/登记失败/entry 不可解析均保留检查点
+  （测试逐一断言 parts 完整、无临时残留）。
+
+偏差：multipart 登记失败未接 B1003 的孤儿告警——细纲 §12 无此
+要求（保留的检查点即恢复面），与阶段 10 的显式清单项不同。
+
+测试：wps 新增（merge/登记体 pinned、merge 指令校验 10 面+小写
+content-type、ETag 解析 11 面、merge/登记失败保留检查点、
+100 MiB/10 MiB fixture：10 片 framing+片体重组 sha256==源+真实
+下载 hash 一致+检查点清理）。
+
+本阶段（B1100–B1104）沿用阶段 10 的节奏：五个任务叠加于同一
+multipart.go 且用户将推进与提交节奏定义为阶段级，以单次提交落地；
+各任务证据仍按任务分立如上。阶段完成条件逐项覆盖：100 MiB 的
+10 MiB 分片 fixture ✓、重启续点 ✓、单片失败 ✓、session 失效 ✓、
+merge 失败 ✓、登记失败 ✓、断连 ✓、上传下载 hash 一致 ✓。

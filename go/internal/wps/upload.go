@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -152,6 +153,18 @@ func (c *Client) Upload(request UploadRequest) (model.RemoteEntry, error) {
 	}
 	if err := c.preCheckUpload(groupID, request.ParentID, request.Name, request.Overwrite); err != nil {
 		return model.RemoteEntry{}, err
+	}
+	if spool.total >= c.config.MultipartThreshold {
+		// The refusal point mirrors client.upload exactly: after the spool
+		// and the pre_check, before any block request. An earlier rejection
+		// would change the observable request order and needs a contract
+		// decision first.
+		if request.Overwrite {
+			return model.RemoteEntry{}, model.NewStorageError(model.KindUnsupportedOperation, "multipart overwrite is disabled until independently verified")
+		}
+		identity := pyJSONIDString(groupID) + ":" + pyJSONIDString(request.ParentID) + ":" +
+			request.Name + ":" + strconv.FormatInt(spool.total, 10) + ":" + spool.sha1
+		return c.multipartUpload(spool, groupID, request.ParentID, request.Name, options, identity)
 	}
 	createResult, etag, err := c.objectUpload(groupID, request.ParentID, request.Name, spool, options, request.Overwrite)
 	if err != nil {
