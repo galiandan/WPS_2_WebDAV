@@ -2642,3 +2642,47 @@ darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
 序重建）、contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## B901 重命名（2026-09-06）
+
+提交主题：B901 Implement confirmed v3 rename endpoint and wire the writer
+
+go/internal/wps/writes.go 新增 Rename（client.py rename 1813-1839）：
+
+- 请求面全等：PUT /3rd/drive/api/v3/groups/{quote(group_id,
+  safe='')}/files/{quote(str(file_id), safe='')}——复用 B400 的
+  quotePathSegment（safe=''，大写百分号转义，%2F 等以 EscapedPath
+  断言）；body 按 fname,csrfmiddlewaretoken 顺序 ensure_ascii 紧凑
+  序列化，测试逐字节比对 `{"fname":...,"csrfmiddlewaretoken":...}`。
+- 校验顺序对齐：file_id 空抛 "file_id is required"；name 空或含
+  / \ 抛 "name must be one remote entry name"；随后 currentCredentials
+  + 空 token 抛 "csrf_token is required for write operation"；最后
+  group_id 解析——与 Python 的 ValueError/求值顺序逐条对应，任一
+  失败零请求（测试固定）。
+- 响应面：result 存在且非 nil 非 "ok" → WpsApiError("rename file")
+  （status 0 upstream，operation-only 文案固定）；result 缺席容忍
+  （Python golden 的响应即无 result）；成功走 entryFromItem。
+  403/transport 沿用 RequestJSON 既有映射；401 一次重试 + csrf 字段
+  重写由 RequestJSON/refreshJSONBody 承接。
+
+storage 层不变：Rename/RenamePath 的根拒绝、同名 no-op 返回原
+entry、目标冲突不发 WPS 写请求（"entry already exists: N"）、
+validateEntryName（./..//\\/\x00/控制字符/4096B）、成功清缓存均为
+B503 既有实现与既有测试（TestRenamesPathAndRejectsCollision、
+TestRenamesByID）。REST/DAV 源与目标的 LOCK 接入按细纲留到
+COPY/LOCK 阶段验证。wpsWriter.Rename 改为一行委托并更新适配层
+拒绝测试（Upload/Delete/Move）。
+
+测试：writes_test.go 新增 5 项——PUT v3 body 逐字节 golden（含
+mtime 归一）、group/file ID 路径转义、空 file_id/非法名零请求、
+result 失败 operation-only、403 与 transport 映射表。
+
+偏差：与 B900 相同的两条既录偏差（pyJSONID 不涉本任务；无显式
+csrf_token 关键字；构造期 group 校验）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。

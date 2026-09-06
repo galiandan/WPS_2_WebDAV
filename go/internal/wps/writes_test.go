@@ -298,3 +298,121 @@ func TestPyJSONID(t *testing.T) {
 		}
 	}
 }
+
+func TestRenameSendsConfirmedV3Body(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(
+			`{"id":9,"fname":"renamed-folder","ftype":"folder","groupid":1,"parentid":3,"fsize":0,"mtime":123}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	entry, err := client.Rename("9", "renamed-folder")
+	if err != nil {
+		t.Fatalf("Rename failed: %v", err)
+	}
+	if entry.ID != "9" || entry.Name != "renamed-folder" || entry.Kind != model.KindFolder {
+		t.Fatalf("entry = %+v", entry)
+	}
+	if entry.ModifiedAt == nil || *entry.ModifiedAt != "123" {
+		t.Fatalf("mtime = %v, want 123", entry.ModifiedAt)
+	}
+	request := opener.requests[0]
+	if request.Method != http.MethodPut {
+		t.Fatalf("method = %s, want PUT", request.Method)
+	}
+	if request.URL.Path != "/3rd/drive/api/v3/groups/1/files/9" {
+		t.Fatalf("path = %q", request.URL.Path)
+	}
+	if request.Header.Get("Cookie") != "Cookie-secret" {
+		t.Fatalf("cookie = %q", request.Header.Get("Cookie"))
+	}
+	wantBody := `{"fname":"renamed-folder","csrfmiddlewaretoken":"csrf-secret"}`
+	if string(opener.bodies[0]) != wantBody {
+		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
+	}
+}
+
+func TestRenameQuotesGroupAndFileID(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"id":"f 9","fname":"renamed","ftype":"folder"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "g/1" })
+
+	if _, err := client.Rename("f 9", "renamed"); err != nil {
+		t.Fatalf("Rename failed: %v", err)
+	}
+	want := "/3rd/drive/api/v3/groups/g%2F1/files/f%209"
+	if escaped := opener.requests[0].URL.EscapedPath(); escaped != want {
+		t.Fatalf("path = %q, want %q", escaped, want)
+	}
+}
+
+func TestRenameRejectsBadArgumentsBeforeAnyRequest(t *testing.T) {
+	opener := &fakeControlOpener{}
+	client := newWriteClient(t, opener, nil)
+
+	if _, err := client.Rename("", "renamed"); err == nil || err.Error() != "file_id is required" {
+		t.Fatalf("empty file_id error = %v, want the ValueError message", err)
+	}
+	for _, name := range []string{"", "a/b", "a\\b", "/"} {
+		if _, err := client.Rename("9", name); err == nil ||
+			err.Error() != "name must be one remote entry name" {
+			t.Fatalf("Rename name %q error = %v, want the ValueError message", name, err)
+		}
+	}
+	if len(opener.requests) != 0 {
+		t.Fatalf("requests = %d, want 0", len(opener.requests))
+	}
+}
+
+func TestRenameRejectsFailedResult(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"error"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	_, err := client.Rename("9", "renamed")
+	apiErr, ok := model.AsWpsAPIError(err)
+	if !ok || apiErr.Operation != "rename file" || apiErr.Status != 0 ||
+		apiErr.Category != model.WpsCategoryUpstream {
+		t.Fatalf("error = %v, want the upstream rename failure", err)
+	}
+	if err.Error() != "WPS operation failed: rename file" {
+		t.Fatalf("message = %q, want the operation-only text", err.Error())
+	}
+}
+
+func TestRenameMapsHTTPAndTransportErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		script   []scriptedResponse
+		failures []error
+		status   int
+		category string
+	}{
+		{
+			name:     "permission-failure",
+			script:   []scriptedResponse{{status: 403}},
+			status:   403,
+			category: model.WpsCategoryHTTP,
+		},
+		{
+			name:     "transport-failure",
+			failures: []error{errors.New("connection refused")},
+			status:   0,
+			category: model.WpsCategoryUnavailable,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opener := &fakeControlOpener{script: tc.script, failures: tc.failures}
+			client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+			_, err := client.Rename("9", "renamed")
+			apiErr, ok := model.AsWpsAPIError(err)
+			if !ok || apiErr.Status != tc.status || apiErr.Category != tc.category {
+				t.Fatalf("error = %v, want status %d category %s", err, tc.status, tc.category)
+			}
+		})
+	}
+}

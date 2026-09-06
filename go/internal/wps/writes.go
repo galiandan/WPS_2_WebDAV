@@ -89,3 +89,48 @@ func (c *Client) CreateFolder(parentID string, name string) (model.RemoteEntry, 
 	}
 	return entryFromItem(payload)
 }
+
+// Rename mirrors rename: the confirmed v3 endpoint with the fname body. The
+// argument and CSRF checks are plain errors, matching the Python ValueError
+// surface before any request is built.
+func (c *Client) Rename(fileID string, name string) (model.RemoteEntry, error) {
+	if fileID == "" {
+		return model.RemoteEntry{}, errors.New("file_id is required")
+	}
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return model.RemoteEntry{}, errors.New("name must be one remote entry name")
+	}
+	current, err := c.currentCredentials()
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	if current.CSRFToken == "" {
+		return model.RemoteEntry{}, errors.New("csrf_token is required for write operation")
+	}
+	groupID, err := c.GroupID()
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	body := &pyObject{
+		keys:   []string{"fname", "csrfmiddlewaretoken"},
+		values: map[string]any{"fname": name, "csrfmiddlewaretoken": current.CSRFToken},
+	}
+	encoded, err := dumpPYValue(body)
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	payload, err := c.RequestJSON(JSONRequest{
+		Path: "/3rd/drive/api/v3/groups/" + quotePathSegment(groupID) +
+			"/files/" + quotePathSegment(fileID),
+		Method:     http.MethodPut,
+		Body:       encoded,
+		RetryOn401: true,
+	})
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	if result, present := payload["result"]; present && result != nil && result != "ok" {
+		return model.RemoteEntry{}, model.NewWpsAPIError("rename file", 0, model.WpsCategoryUpstream)
+	}
+	return entryFromItem(payload)
+}

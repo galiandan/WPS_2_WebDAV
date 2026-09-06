@@ -1,6 +1,6 @@
-// The B900 writer adapter is a one-line delegation to wps.Client.CreateFolder
-// (covered end to end in the wps package) plus fixed refusals for the write
-// methods whose migration stages have not landed yet.
+// The writer adapter delegates the ported methods to wps.Client (covered end
+// to end in the wps package) and refuses the write methods whose migration
+// stages have not landed yet with a fixed unsupported error.
 
 package storage
 
@@ -17,9 +17,6 @@ func TestWpsWriterRefusesUnportedMethods(t *testing.T) {
 	}
 	if err := writer.Delete("x"); err == nil || err.Error() != want {
 		t.Fatalf("delete error = %v, want %q", err, want)
-	}
-	if _, err := writer.Rename("x", "y"); err == nil || err.Error() != want {
-		t.Fatalf("rename error = %v, want %q", err, want)
 	}
 	if err := writer.Move("x", "a", "b"); err == nil || err.Error() != want {
 		t.Fatalf("move error = %v, want %q", err, want)

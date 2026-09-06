@@ -38,7 +38,7 @@ func (w wpsWriter) Delete(entryID string) error {
 }
 
 func (w wpsWriter) Rename(entryID string, name string) (model.RemoteEntry, error) {
-	return model.RemoteEntry{}, errWriteNotImplemented
+	return w.client.Rename(entryID, name)
 }
 
 func (w wpsWriter) Move(entryID string, sourceParentID string, destinationParentID string) error {
