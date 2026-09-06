@@ -2581,3 +2581,64 @@ darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
 序重建）、contract_tests 119 项全绿。
 
 回滚：git revert 本提交。
+
+## B900 创建文件夹（2026-09-06）
+
+提交主题：B900 Implement confirmed create-folder endpoint and writer adapter
+
+新文件 go/internal/wps/writes.go：移植 client.py create_folder
+（1784-1811）与 _json_id（1382-1384）：
+
+- 请求面全等：POST /3rd/drive/api/v5/files/folder；body 按
+  groupid,parentid,name,owner,parsed,csrfmiddlewaretoken 顺序
+  json.dumps(ensure_ascii=True, separators=(",",":"))——Go 以
+  pyObject+dumpPYValue 逐字节复刻（测试比对完整 body 字符串）。
+  非 ASCII 名称经 pyQuote 以 \uXXXX 转义（中文用例固定）。
+- pyJSONID：全 ASCII 十进制 → JSON number 且前导零归一（Python
+  int("007")=7；"0"/"000"→0；超长数字按 json.Number 原样保留精度，
+  与 Python 无界 int 同帧）；其余一律字符串。
+- 校验顺序对齐 Python 求值顺序：name 非法（空/含 / 或 \）先抛
+  ValueError 等价 "name must be one remote folder name"（零请求）；
+  随后 _csrf —— currentCredentials() 快照 + 空 token 抛
+  "csrf_token is required for write operation"；最后 group_id 解析。
+  任一失败都不发请求（测试断言 opener 零调用）。
+- 响应面：payload["result"] 存在且非 nil 非 "ok"（任意 JSON 类型均
+  视为失败，含 bool/number——与 Python not in {None,"ok"} 同构）→
+  WpsApiError("create folder")（status None→0，upstream，正文脱敏）；
+  result 缺席容忍；成功走 entryFromItem（"normalize file metadata"
+  拒畸形）。HTTP 4xx/5xx、transport 失败沿用 RequestJSON 的既有
+  映射（403 http / unavailable）。
+- 401 一次重试：RequestJSON 以 refreshJSONBody 只重写 body 中的
+  csrfmiddlewaretoken 字段，其余字节不变；轮换 Cookie + csrf 文件
+  fixture 复刻 smoke 测试（重试帧断言 cookie=sid=second、
+  csrf-second、groupid 仍为数字）。
+
+新文件 go/internal/storage/writer.go：wpsWriter 适配器 +
+NewWriter(client *wps.Client) Writer，CreateFolder 一行委托；
+Upload/Delete/Rename/Move 尚未移植，固定拒绝
+"write operation is not implemented in this stage"（独立于
+errWritesNotWired——那是完全未接 Writer 的 Storage）。storage 层
+的父目录解析、同名冲突拒绝（"entry already exists: N"）、非法名
+拒绝、成功后 invalidate 与返回 entry 均为 B503 既有实现与既有测试。
+
+测试：wps writes_test.go 12 项——逐字节 body golden（数字 ID）、
+非十进制 ID 保持字符串、前导零归一、非 ASCII 名转义、非法名零请
+求、缺 csrf 零请求、result 失败/缺席、403 与 transport 映射、401
+轮换重试重写 csrf、畸形 entry、pyJSONID 表驱动 8 例。storage
+writer_test.go：Writer 接口编译断言 + 未移植方法固定拒绝。
+
+偏差：一、pyJSONID 仅识别 ASCII 十进制；Python isdecimal() 另接
+受全角等 Unicode Nd 数字并转 int——WPS ID 实际取值不可能出现，
+偏差影响面为零。二、Go CreateFolder 不带 Python 的显式
+csrf_token 关键字：storage 调用从不传，token 一律来自凭据源快照
+（与 Python storage→client 路径一致）；上传阶段需要显式 token 时
+经 UploadRequest.CSRFToken。三、Python client 构造不校验 group、
+写时才 503；Go NewClient 在构造期即拒绝（B300 既有校验），故
+"workspace 未配置"路径在 Go 端由构造期覆盖。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
