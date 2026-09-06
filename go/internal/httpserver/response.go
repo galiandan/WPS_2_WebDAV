@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
 
 const (
@@ -230,6 +231,20 @@ func mapError(w http.ResponseWriter, r *http.Request, err error, rest bool) {
 	}
 	if wpsErr, ok := model.AsWpsAPIError(err); ok {
 		mapWpsError(w, r, wpsErr, rest)
+		return
+	}
+	var settingsErr *workspace.SettingsError
+	if errors.As(err, &settingsErr) {
+		// WebSettingsError extends ValueError in Python: 400 with the
+		// validation message.
+		sendError(w, r, http.StatusBadRequest, settingsErr.Msg, rest, nil, false)
+		return
+	}
+	var settingsFileErr *workspace.SettingsFileError
+	if errors.As(err, &settingsFileErr) {
+		// WebSettingsFileError extends OSError: a fixed message, never the
+		// underlying detail.
+		sendError(w, r, http.StatusBadGateway, "local or upstream I/O failed", rest, nil, false)
 		return
 	}
 	// Python's final fallback logs and answers a fixed 500.

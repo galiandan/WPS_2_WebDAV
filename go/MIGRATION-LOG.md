@@ -1852,3 +1852,82 @@ darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
 全绿；manifest 已按门禁顺序重建。
 
 回滚：git revert 本提交。
+
+## B603 settings 接口
+
+日期：2026-09-05
+参照：`server.py`（_do_rest_get settings 分支、_do_rest_patch、
+_json_body、_content_length、_discard_body、_query_path、
+AdapterApplication.current_web_root_name/set_web_root_name）、
+`settings.py`（WebSettings 已在 B303 落地为 workspace.WebSettings）、
+tests/test_settings.py。
+
+新增 `rest.go`（REST 路由分发骨架）：
+
+- RootNameController 镜像 AdapterApplication 的 web root 名字胶水层：
+  settings 存储为热源（每次 GET 都经 WebSettings.Name() 触发 mtime
+  热载），名字实际变化时向注入的 RootNameSetter（storage）传播
+  SetRootName——虚拟 root 更新无需重启、不访问 WPS；storage 可为 nil
+  （Python 的 getattr(set_root_name, None) 容忍）。构造时以 settings
+  当前值播种并传播一次（__post_init__ 顺序）。current 字段全部在
+  mutex 内读写——并发读写测试曾在 -race 下抓到 Current 锁外读的
+  真实数据竞争，已修复；WebSettings 自身锁独立，无锁序交叉。
+- RESTDispatcher 按 method 分发 REST suffix：B603 交付 settings 对
+  （GET/PATCH）；status/entries/metadata/download（只读阶段）与
+  upload/folders/entries/session import（写阶段）未落地期间一律按
+  Python 未知路由分支应答——GET 直接 404 JSON "unknown REST route"
+  （但 _query_path 先于路由分发执行，畸形 path 参数 400 优先），
+  PUT/POST/DELETE/PATCH 未知路由先 _discard_body 再 404（超大体
+  413 优先）。
+- GET settings：_discard_body → current_web_root_name → 200
+  {"status":"ok","name":...}（key 顺序 status,name 与 Python 一致，
+  ensure_ascii 由 marshalPythonJSON 保证）。名字热读失败（文件安全
+  检查类）→ SettingsFileError → 502 固定文案。
+- PATCH settings：readJSONBody → 恰好 {"name"} 一个键
+  （"JSON field 'name' is required"）→ validate_root_name
+  （SettingsError → 400，四种文案逐字对齐）→ WebSettings.SetName
+  （原子 0600 持久化；文件错误 → 502 "local or upstream I/O
+  failed"，Python 的 OSError 分支固定文案，不回显底层细节）→
+  storage 传播 → 200 {"status":"ok","name":...}。
+- 读体辅助函数（后续阶段复用）：contentLength 镜像 _content_length
+  （TE/重复 CL 检查保留（边界已拒、保持自洽）、int() 空白容忍、
+  缺失时 411 "Content-Length is required" 直接以文本应答并返回
+  None——镜像 Python 直接 _send_error 的混合风格）；discardBody
+  镜像 _discard_body（超限先 413 再读，64KiB 分块，EOF 即止）；
+  readJSONBody 镜像 _json_body（411 None 语义、512KiB/1MiB 上限、
+  io.ReadFull 短体 → close + "request body is shorter than
+  Content-Length"、合法 JSON 但非对象 → "request body must be a
+  JSON object"）；queryPath 镜像 _query_path（缺省 "/"、多值或空值
+  → InvalidPathError 400）。
+- mapError 增补两个分支：workspace.SettingsError → 400 带消息
+  （Python ValueError 子类）；workspace.SettingsFileError → 502
+  固定 "local or upstream I/O failed"（Python OSError 子类）。
+
+已知微偏差（无测试覆盖）：Python json.loads 接受 NaN/Infinity 字面
+量，Go encoding/json 拒绝——两者都以 400 结束，错误文案不同
+（"must be a JSON object" vs "must be valid JSON"）。
+
+测试（settings_test.go 6 组）：
+- GET 热名：初始默认名 → 外部改写 fixture 后下一次 GET 热载新名且
+  storage 收到传播（两次 SetRootName 记录）；响应头
+  application/json + no-store。
+- GET 体容忍/拒绝：小体被 discard 后正常 200；超控制体上限 → 413
+  {"error":""}。
+- PATCH 生命周期：改名 → 200、fixture 落盘为 Python 的 ensure_ascii
+  紧凑格式 {"name":"\uXXXX"}\n、storage 传播、随后 GET 报新名。
+- PATCH 校验 10 例：多键/缺键/空对象/非字符串/空白名/超长/控制字符
+  （\u0001 转义载体）/非法 JSON/JSON 数组/短体（close）。
+- PATCH 无 Content-Length → 411 文本 + close（非 JSON）。
+- 完成条件测试 TestSettingsNameInteroperatesWithPython：python3 子
+  进程（PYTHONPATH=src）与 Go 轮流读写同一 fixture——Python 写 → Go
+  热读"来自 Python"；Go 写 → Python 读"来自 Go"；fixture 保持
+  Python 持久化格式逐字节一致（python3 缺席或源树缺失时 skip）。
+- 并发 8 goroutine × 20 轮 GET/PATCH 混合（-race -count=4 全绿），
+  结束后 fixture 仍为合法 JSON 对象。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver -race
+-count=4 全绿（修复一处真实数据竞争后）；交叉构建 linux amd64/
+arm64、windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。
