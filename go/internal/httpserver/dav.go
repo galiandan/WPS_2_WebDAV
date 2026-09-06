@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -86,10 +87,11 @@ func (d *DAVDispatcher) ServeDAV(w http.ResponseWriter, r *http.Request, davPath
 }
 
 // doHead mirrors do_HEAD: directories answer with the fixed directory
-// content type and length zero; files answer through _send_download's
-// head branch — metadata only, the object body is never opened. Range and
-// If-Range handling (206/416) arrives with B802; until then a Range
-// header is ignored and the full entry is reported.
+// content type and length zero; files answer through _send_download's head
+// branch — metadata only, the object body is never opened. Range and
+// If-Range share the GET prelude (B802): a matching ETag yields 206 with
+// Content-Range, otherwise the full entry is reported and unsatisfiable
+// ranges answer 416.
 func (d *DAVDispatcher) doHead(w http.ResponseWriter, r *http.Request, davPath string) error {
 	entry, err := d.storage.Metadata(davPath)
 	if err != nil {
@@ -108,6 +110,10 @@ func (d *DAVDispatcher) doHead(w http.ResponseWriter, r *http.Request, davPath s
 	if entry.Kind != model.KindFile {
 		return model.NewStorageError(model.KindNotFolder, "the requested path is not a file")
 	}
+	offset, length, rangeRequested, ok := resolveRange(w, r, entry, false)
+	if !ok {
+		return nil
+	}
 	header.Set("Content-Type", guessMimeType(entry.Name))
 	header.Set("Accept-Ranges", "bytes")
 	header.Set("Cache-Control", "no-store, no-transform")
@@ -119,13 +125,20 @@ func (d *DAVDispatcher) doHead(w http.ResponseWriter, r *http.Request, davPath s
 		// rename it to "Etag" on the wire while Python sends "ETag".
 		header["ETag"] = []string{`"` + strings.Trim(*entry.Etag, `"`) + `"`}
 	}
-	// Python adds Content-Length when the size is known and non-negative;
-	// an unknown size relies on the close framing below.
-	if entry.Size != nil && *entry.Size >= 0 {
+	if rangeRequested {
+		header["Content-Range"] = []string{fmt.Sprintf("bytes %d-%d/%d", offset, offset+*length-1, *entry.Size)}
+		header["Content-Length"] = []string{strconv.FormatInt(*length, 10)}
+	} else if entry.Size != nil && *entry.Size >= 0 {
+		// Python adds Content-Length when the size is known and non-negative;
+		// an unknown size relies on the close framing below.
 		header.Set("Content-Length", strconv.FormatInt(*entry.Size, 10))
 	}
 	// Python marks every download response for closing, HEAD included.
 	header.Set("Connection", "close")
-	w.WriteHeader(http.StatusOK)
+	status := http.StatusOK
+	if rangeRequested {
+		status = http.StatusPartialContent
+	}
+	w.WriteHeader(status)
 	return nil
 }

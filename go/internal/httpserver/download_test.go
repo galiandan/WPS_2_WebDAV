@@ -51,6 +51,7 @@ type fakeDownloadStream struct {
 	readSizes  []int
 	closeCount int
 	readErrs   []error
+	closeOnce  sync.Once
 }
 
 func newFakeStream(data string, contentLength *int64) *fakeDownloadStream {
@@ -69,9 +70,11 @@ func (s *fakeDownloadStream) Read(p []byte) (int, error) {
 }
 
 func (s *fakeDownloadStream) Close() error {
-	s.mu.Lock()
-	s.closeCount++
-	s.mu.Unlock()
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closeCount++
+		s.mu.Unlock()
+	})
 	return nil
 }
 
@@ -103,6 +106,10 @@ type downloadStorageFake struct {
 	streams []DownloadStream
 	opened  []string
 	offsets []int64
+	// payload turns OpenPath into a range-aware object store: the data is
+	// sliced by the requested offset/length and the stream length follows
+	// the slice, mirroring tests/test_server.py's RangeStorage.
+	payload string
 }
 
 func (f *downloadStorageFake) Metadata(path string) (model.RemoteEntry, error) {
@@ -117,11 +124,18 @@ func (f *downloadStorageFake) Metadata(path string) (model.RemoteEntry, error) {
 	return f.entry, nil
 }
 
-func (f *downloadStorageFake) OpenPath(_ context.Context, path string, offset int64, _ *int64) (DownloadStream, error) {
+func (f *downloadStorageFake) OpenPath(_ context.Context, path string, offset int64, length *int64) (DownloadStream, error) {
 	f.opened = append(f.opened, path)
 	f.offsets = append(f.offsets, offset)
 	if f.openErr != nil {
 		return nil, f.openErr
+	}
+	if f.payload != "" {
+		data := f.payload[offset:]
+		if length != nil {
+			data = data[:*length]
+		}
+		return newFakeStream(data, model.Ptr(int64(len(data)))), nil
 	}
 	if len(f.streams) > 0 {
 		next := f.streams[0]
@@ -151,7 +165,11 @@ func downloadStorage(t *testing.T, stream DownloadStream) *downloadStorageFake {
 
 func newDownloadRouter(t *testing.T, downloads DownloadStorage, limits DownloadLimits) *Router {
 	t.Helper()
-	storage := &davHeadStorage{entry: downloadFileEntry()}
+	return newDownloadRouterWithDAV(t, &davHeadStorage{entry: downloadFileEntry()}, downloads, limits)
+}
+
+func newDownloadRouterWithDAV(t *testing.T, storage DAVStorage, downloads DownloadStorage, limits DownloadLimits) *Router {
+	t.Helper()
 	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, limits, downloads, "/dav")
 	if err != nil {
 		t.Fatal(err)

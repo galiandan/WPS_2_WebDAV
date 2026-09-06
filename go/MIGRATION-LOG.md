@@ -2500,3 +2500,84 @@ darwin arm64 通过；Python 参照套件 169 项全绿、contract_tests 119
 项全绿（manifest 按门禁顺序重建）。
 
 回滚：git revert 本提交。
+
+## B802 Range 与 If-Range（2026-09-06）
+
+提交主题：B802 Implement Range and If-Range download semantics with 416 framing
+
+新文件 go/internal/httpserver/range.go：完整移植 server.py 的
+_parse_range（948-973）、_if_range_matches（938-945）与
+_send_download 的 Range 前奏（798-823），按细纲先写 parser 表驱动测
+试再接线：
+
+- _parse_range 全等：bytes= 单位（大小写/空白容忍）、逗号多范围拒
+  绝、缺 = / 缺 - 拒绝、closed/open/suffix 三形态、end 钳制到
+  size-1、suffix 钳制 start=max(size-suffix,0)、start>=size 拒绝、
+  end<start 拒绝、suffix<=0 拒绝。Python 无界 int 的大数字行为对齐：
+  ParseInt ErrRange 按符号钳到 ±MaxInt64——巨大 start>=size 拒绝、
+  巨大 end 钳制、巨大 suffix 钳到全范围、负向溢出（end_text 以
+  "-" 开头，如 bytes=5--999…）拒绝；注意 bytes=-999… 的前导减号是
+  分隔符，Python 与 Go 同样解析为巨大正 suffix → 全范围（测试固定）。
+- 零尺寸文件：closed/open → 416（start>=0>=size）；suffix →
+  Python 的 (0,0) 解析继续走 206，产生 "bytes 0--1/0" + Content-
+  Length: 0 的帧（实测 golden 固定）；未知尺寸（None）→ 416
+  "bytes */*"，负尺寸同拒。
+- _if_range_matches 全等：头缺席恒匹配；entry 无 ETag 恒不匹配；
+  仅当前 ETag（带引号/裸值，strip('"') 两侧）匹配；日期形态不自行
+  扩展（实测 200 全量）；值先 strip 再比较，头 "   "（truthy）不匹
+  配。
+- If-Range 不匹配 → Range 整体忽略 → 200 全量；匹配但解析失败 →
+  416（_send_error：rest 帧 JSON/文本帧 "requested byte range cannot
+  be satisfied\n"，Content-Range "bytes */N" 或 "bytes */*"，无
+  ETag，无 Connection: close——close_connection 未置位，实测固定）。
+  416 不申请下载槽、不开流。
+- 接线：sendDownload 与 doHead 共用 resolveRange 前奏。GET：
+  range_requested 时头加 Content-Range f"bytes {offset}-{offset+
+  length-1}/{size}" 与 Content-Length=length，open_path 传
+  offset/length；206/200 按请求选择。上游核对（_send_download
+  851-857）：stream.content_length != length → 关流、释放槽、
+  WpsApiError "range download length was not honored"（502 帧上游
+  映射）；非 Range 路径维持 B801 的 object-store 长度优先。HEAD：
+  206 + Content-Range + Content-Length + Connection: close，零 body，
+  不开流（实测 golden 固定）；If-Range 不匹配 → 200 全量头。
+- 下载循环的 expected_length：range 时为请求 length，否则流长度
+  （B801 逻辑不变）。
+
+B800 已完成的 client 层（_range_response_matches、206 强制）不变，
+Server 层新增的上游长度复核与其互补。
+
+测试（httpserver range_test.go + download_test.go fakes 扩展）：
+
+- parseRangeHeader 表驱动 36 例：三形态/钳制/空白/大小写/单位/多范
+  围/缺分隔/超界/逆序/suffix<=0/字母/空 spec/零文件/未知尺寸/负尺
+  寸/±MaxInt64 溢出/前导减号分隔符语义。
+- ifRangeMatches 表驱动 12 例：引号/裸值/trim/日期/弱 ETag/空值/
+  无 ETag。
+- 实测 golden 回放：本任务以 tests/test_server.py 的 FakeStorage 模
+  式驱动真实 Python 参考服务器，捕获 18 个场景的线上行为（closed/
+  open/suffix/clamp、If-Range 引号/裸值/失配/日期、416 文本帧、
+  HEAD+Range 206、空文件 suffix 的 "bytes 0--1/0"、未知尺寸的
+  "bytes */*"、未知尺寸全量 200 走流长度），Go 测试逐项对齐（状态、
+  Content-Range、Content-Length、ETag、body、Cache-Control、无
+  Connection 的 416、Content-Disposition 存续）。
+- 上游长度失配：502 + "upstream WPS request failed"，流恰关一次
+  （fake Close 幂等化对齐 DownloadStream.close 语义）、槽释放。
+- REST download 路由：Range 206 保留 Content-Disposition；416 JSON
+  帧 + Content-Range。
+
+fakes 变更：downloadStorageFake 增加 payload 字段（OpenPath 按
+offset/length 切片并报告切片长度，等价 Python RangeStorage）；
+newDownloadRouter 拆出 newDownloadRouterWithDAV 允许测试接线独立
+的 DAV 元数据面；fakeDownloadStream.Close 经 sync.Once 幂等（对齐
+DownloadStream._closed 守卫）。
+
+偏差：无。Python 完成后 connection.shutdown(SHUT_WR) 由 Connection:
+close 全关闭等价（B801 已记录）；416 不带 Connection: close 的
+keep-alive 语义在 Go 端以 closeConn=false 保持一致。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。

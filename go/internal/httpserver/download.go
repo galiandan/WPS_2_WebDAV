@@ -8,6 +8,7 @@ package httpserver
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -50,9 +51,10 @@ func (l DownloadLimits) chunkSize() int64 {
 	return l.StreamChunkSize
 }
 
-// sendDownload mirrors _send_download's non-Range GET branch. Both the DAV
-// GET route and the REST download route share it, with rest selecting the
-// JSON error framing and the Content-Disposition header.
+// sendDownload mirrors _send_download's GET branch. Both the DAV GET route
+// and the REST download route share it, with rest selecting the JSON error
+// framing and the Content-Disposition header. Range and If-Range handling
+// (206/416, shared with the HEAD branch) lives in resolveRange.
 func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool, downloads DownloadStorage, chunkSize int64) error {
 	entry, err := downloads.Metadata(path)
 	if err != nil {
@@ -76,20 +78,38 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 		headers["Content-Disposition"] = `attachment; filename="` +
 			asciiDownloadName(entry.Name) + `"; filename*=UTF-8''` + pythonQuote(entry.Name)
 	}
+	offset, length, rangeRequested, ok := resolveRange(w, r, entry, rest)
+	if !ok {
+		return nil
+	}
+	if rangeRequested {
+		// entry.Size is non-nil here: the parser rejected unknown sizes.
+		headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", offset, offset+*length-1, *entry.Size)
+		headers["Content-Length"] = strconv.FormatInt(*length, 10)
+	}
 	// The download slot is acquired inside OpenPath; every exit path below
 	// releases it together with the upstream body through the deferred
 	// Close, mirroring Python's finally: stream.close().
-	stream, err := downloads.OpenPath(r.Context(), path, 0, nil)
+	stream, err := downloads.OpenPath(r.Context(), path, offset, length)
 	if err != nil {
 		return err
 	}
 	defer stream.Close()
 
-	// WPS metadata can lag behind the object the signed URL serves, so the
-	// header reflects the object-store length; an unknown or negative one
-	// falls back to close framing instead of advertising a stale length.
 	streamLength := stream.ContentLength()
-	if streamLength != nil && *streamLength >= 0 {
+	if rangeRequested {
+		// A range response must have a known, exact length before its
+		// headers go out; the object store already validated the
+		// Content-Range, so only the declared length is checked here.
+		if streamLength == nil || *streamLength != *length {
+			stream.Close()
+			return model.NewWpsAPIError("range download length was not honored", 0, model.WpsCategoryUpstream)
+		}
+	} else if streamLength != nil && *streamLength >= 0 {
+		// WPS metadata can lag behind the object the signed URL serves, so
+		// the header reflects the object-store length; an unknown or
+		// negative one falls back to close framing instead of advertising
+		// a stale length.
 		headers["Content-Length"] = strconv.FormatInt(*streamLength, 10)
 	}
 	header := w.Header()
@@ -108,7 +128,11 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 		header["Connection"] = []string{"close", "close"}
 		header["Transfer-Encoding"] = []string{"identity"}
 	}
-	w.WriteHeader(http.StatusOK)
+	status := http.StatusOK
+	if rangeRequested {
+		status = http.StatusPartialContent
+	}
+	w.WriteHeader(status)
 
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, chunkSize)
@@ -120,8 +144,12 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 			return nil
 		}
 		size := len(buf)
-		if streamLength != nil {
-			remaining := *streamLength - written
+		expected := streamLength
+		if rangeRequested {
+			expected = length
+		}
+		if expected != nil {
+			remaining := *expected - written
 			if remaining <= 0 {
 				break
 			}
@@ -138,8 +166,8 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 			// connection, which is the close_connection=True warning path.
 			break
 		}
-		if streamLength != nil {
-			if remaining := *streamLength - written; int64(count) > remaining {
+		if expected != nil {
+			if remaining := *expected - written; int64(count) > remaining {
 				// The stream exceeded its declared length: deliver exactly
 				// the promised bytes, then stop.
 				w.Write(buf[:remaining])
