@@ -28,7 +28,11 @@ type fakeClient struct {
 
 	uploadErr   error
 	downloadErr error
+	deleteErr   error
 	stream      DownloadStream
+
+	// uploadStarted is an optional test hook fired when Upload begins.
+	uploadStarted func()
 }
 
 type fakeUpload struct {
@@ -65,10 +69,16 @@ func (f *fakeClient) IterEntries(parentID string, _ wps.IterOptions) ([]model.Re
 }
 
 func (f *fakeClient) Upload(request UploadRequest) (model.RemoteEntry, error) {
+	if f.uploadStarted != nil {
+		f.uploadStarted()
+	}
 	if f.uploadErr != nil {
 		return model.RemoteEntry{}, f.uploadErr
 	}
-	body, _ := io.ReadAll(request.Source)
+	body, err := io.ReadAll(request.Source)
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
 	f.uploadCalls = append(f.uploadCalls, fakeUpload{parentID: request.ParentID, name: request.Name, body: body, request: request})
 	return model.RemoteEntry{ID: "new", Name: request.Name, Kind: model.KindFile, ParentID: model.Ptr(request.ParentID), Size: model.Ptr(int64(len(body)))}, nil
 }
@@ -80,6 +90,9 @@ func (f *fakeClient) CreateFolder(parentID string, name string) (model.RemoteEnt
 
 func (f *fakeClient) Delete(entryID string) error {
 	f.deleteCalls = append(f.deleteCalls, entryID)
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	return nil
 }
 

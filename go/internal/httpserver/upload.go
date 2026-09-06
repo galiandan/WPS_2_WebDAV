@@ -70,6 +70,16 @@ func (d *RESTDispatcher) doRestPut(w http.ResponseWriter, r *http.Request, route
 	if err != nil {
 		return err
 	}
+	allowed, err := checkLocks(w, r, d.locks, true, path)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		if err := discardBody(w, r, d.limits); err != nil {
+			return err
+		}
+		return nil
+	}
 	entry, err := d.uploads.UploadPath(r.Context(), path, r.Body, storage.UploadOptions{
 		Size:        length,
 		ContentType: r.Header.Get("Content-Type"),
@@ -91,6 +101,16 @@ type uploadPayload struct {
 // overwrite is always on, and success answers 201 with the entry JSON and
 // the quoted Location href.
 func (d *DAVDispatcher) doDavPut(w http.ResponseWriter, r *http.Request, davPath string) error {
+	allowed, err := checkLocks(w, r, d.locks, false, davPath)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		if err := discardBody(w, r, d.limits); err != nil {
+			return err
+		}
+		return nil
+	}
 	length, err := contentLength(w, r, true)
 	if err != nil || length == nil {
 		return err

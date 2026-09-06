@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/mimetypes"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
 )
@@ -248,7 +249,7 @@ func propfindResponseChunk(item propfindEntry) []byte {
 	if entry.Kind == model.KindFolder {
 		b.WriteString("httpd/unix-directory")
 	} else {
-		b.WriteString(guessMimeType(entry.Name))
+		b.WriteString(mimetypes.GuessMimeType(entry.Name))
 	}
 	b.WriteString(`</D:getcontenttype>`)
 	if entry.Etag != nil && *entry.Etag != "" {

@@ -3210,3 +3210,225 @@ multipart.go 且用户将推进与提交节奏定义为阶段级，以单次提�
 各任务证据仍按任务分立如上。阶段完成条件逐项覆盖：100 MiB 的
 10 MiB 分片 fixture ✓、重启续点 ✓、单片失败 ✓、session 失效 ✓、
 merge 失败 ✓、登记失败 ✓、断连 ✓、上传下载 hash 一致 ✓。
+
+## B1200 原生单文件 COPY（2026-09-06）
+
+提交主题：B1200-B1204 Implement COPY relay and DAV LOCK protocol with route lock checks
+
+go/internal/wps/writes.go 新增 Copy（client.py copy 1919-1948）：
+
+- 请求面全等：POST /3rd/drive/api/v3/groups/{quote(group_id,
+  safe='')}/files/batch/copy（复用 B400 的 quotePathSegment）；
+  body 按 fileids,groupid,target_groupid,target_parentid,
+  duplicated_name_model,csrfmiddlewaretoken 顺序 ensure_ascii 紧凑
+  序列化，golden 逐字节比对 `{"fileids":[7],"groupid":1,`
+  `"target_groupid":1,"target_parentid":3,"duplicated_name_model":1,`
+  `"csrfmiddlewaretoken":"csrf-secret"}`（数字 ID 列表与常量 1 与
+  Python json.dumps 同帧）。
+- 参数校验对齐：file_id 或 target_parent_id 空抛 "file and target
+  parent IDs are required"；随后 currentCredentials + 空 token
+  ValueError、group_id 解析——任一失败零请求（测试固定）。
+- 响应面：result 非 {None,"ok"} → WpsAPIError("copy file")；
+  fileids 非 list 或 len≠1 → "copy response missing file ID"；
+  fileids[0] 逐型复刻 isinstance 门（bool 先排除；str 原样；
+  Python int 即 JSON 整数字面量经 str(int()) 归一，"-0"→"0"，巨数
+  按字面保留；float(1.5/1e3)/null/容器 → "copy response contains
+  invalid file ID"），pyJSONIntLiteral 逐字实现 JSON int 文法。
+- 401 一次重试与 csrf 字段重写由 RequestJSON 承接。
+
+## B1201+B1202 COPY 中继与文件夹复制（2026-09-06）
+
+新文件 go/internal/storage/copy.go：移植 storage.py copy_path
+（512-663）全部验证顺序与递归结构：
+
+- 验证顺序对齐：depth strip+lower ∈ {0,1,infinity} → "COPY Depth
+  must be 0, 1 or infinity"；源/目标 split → 根拒绝 "the root
+  cannot be copied"；同路径 → "an entry cannot be copied onto
+  itself"；文件夹进入自身（目标前缀==源 parts）→ "a folder cannot
+  be copied into itself"；目标父解析非目录 → NotFolderError 等价
+  "the COPY destination parent is not a folder"；目标名再过
+  validateEntryName；目标已存在：!overwrite → AlreadyExistsError
+  "entry already exists: <path>"，overwrite → UnsupportedOperation
+  "COPY overwrite is disabled because the relay is not atomic"——
+  两分支均零 WPS 调用，绝不先删目标（测试固定 deleteCalls 为空）。
+- native 分支：writer 经可选接口 Copier（对应 Python
+  getattr(self.client,"copy",None)，无 Copy 的 Writer 自动落到中
+  继）；仅源为 file 且目标 basename==源名时触发；成功
+  invalidate 后以 copied id + 源 size/modified/etag/link + 目标父
+  合成 entry（与 Python RemoteEntry 构造同形）。
+- 中继文件分支（B1201）：OpenPath 持下载槽 → uploadStream 镜像
+  _upload_stream（AcquireUpload→writer.Upload→释放，slot 释放与
+  defer 语义同 Python try/finally），再 invalidate。两槽池不相交
+  且等待受 transfer_wait 约束，先下载后上传的获取顺序无环可死锁
+  （与 Python open_path→_upload_stream 同序）。取消面：ctx 观察者
+  强制关闭源流（managed close 幂等），读失败即时中断上传并经
+  defer 释放两侧槽位（测试用阻塞流验证 cancel 后返回且流已关）。
+  源流不整体入内存：字节经 spool/hash 流程（B1000 全链路）；
+  content_type 用 mimetypes guess_type(name)[0] or octet-stream
+  ——将 httpserver/mimetypes.go 原样上移为 internal/mimetypes 包
+  （GuessMimeType），storage/httpserver 共享同一 Python 表，
+  httpserver 三处调用点与测试迁移（无行为差异，原表逐字节保留）。
+- 文件夹分支（B1202）：writer.CreateFolder 直连（无碰撞检查——
+  Python 此处即 client.create_folder，顶层已拒绝既有目标）；depth
+  ==0 或 (1 且 level≥1) 停止；子列表用缓存 children；每级
+  copied 计数超 max_copy_entries / level 超 max_copy_depth →
+  InsufficientStorageError 两条固定文案。任一子步骤失败对本级
+  新建文件夹 best-effort delete（失败吞掉）+ invalidate 后向上抛
+  ——级联清理与 Python except 块同构；"目标根是本请求新建"由顶
+  层 existing 门保证，不会误删旧目标；非事务性：成功已创建的
+  兄弟子项不回滚（与 Python 一致，不承诺完全回滚）。
+- Python copy_entry 的 existing_item 删除分支为不可达死代码
+  （顶层 existing 非 None 必然提前抛错，递归调用从不传
+  existing_item），Go 未移植该分支；行为面完全一致。
+- MultiSpace.CopyPath：syncMounts → 无挂载走 single → 双端路由，
+  跨空间 → "cross-space copy is not supported"（指针同体比较，
+  Python `is not` 同构）。
+
+测试：storage copy_test.go 9 项——native（ID/parent/size 保留、
+零 upload/download）、relay（改名、body 流转、guess content-type、
+声明 size、cid 传递、overwrite=false）、existing 拒绝两分支零调
+用、验证 6 面、Depth 0/1/infinity 三档（folder/upload 次序）、
+entry/depth 上限、失败级联清理（含 delete 失败吞掉）、取消关闭
+两侧、MultiSpace 委托与跨空间拒绝。wps writes_test.go 新增 5 项
+（B1200）。
+
+## B1203 Lock Store（2026-09-06）
+
+新文件 go/internal/httpserver/locks.go：移植 server.py DavLockStore
+（104-225）：
+
+- ActiveLock 六字段齐备（token/path/depth/owner/timeout_seconds/
+  expires_at）；expires 以注入时钟（生产 time.Now，Go 时序含单调
+  读数）驱动，purge 在 Allows/Acquire/Unlock 每次操作前执行，
+  `expires_at <= now` 即过期（Go !After 同判）。
+- applies 规则一致：精确路径恒适用；仅 depth==infinity 覆盖
+  `lock.path.rstrip("/") + "/"` 后代（含 "/" 根锁）。
+- tokens_from_headers 全等：正则 `<((?:opaquelocktoken:)[^>]+)>`
+  (?i) 全部匹配 + 整头 strip() 后 strip("<>") 再小写前缀判
+  opaquelocktoken:（保大小写入集）。表驱动测试以 Python 原实现
+  逐例对拍（含 "if list" 的三 token 形态与裸文本头）。
+- acquire：timeout 夹取 [1,max]；refresh 仅续同 token 同路径
+  （保 depth/owner，换 timeout/expires），无 token/路径不匹配 →
+  KeyError 等价 errLockTokenInvalid；新锁双向冲突检查（现有锁
+  applies(new.path) 或新 infinity 锁以合成锁 applies(现有.path)）
+  → RuntimeError 等价 errLockConflict；registry 满 →
+  ServiceBusy "too many active WebDAV locks"（映射既有
+  KindServiceBusy→503+Retry-After）；token = "opaquelocktoken:"
+  + crypto/rand UUIDv4。
+- unlock：token 存在且路径精确相等才删；过期先清理（过期 token
+  刷新/解锁均按不存在处理）。
+- 进程内、重启即空；map+sync.Mutex 全部并发面 race 安全（-race
+  16 goroutine×50 轮 acquire/unlock/allows/tokens 测试）。
+- max_timeout/max_locks 构造期校验与 Python 一致（正值），默认
+  86400/4096。
+
+测试：locks_test.go 6 项——token 提取表（与 Python 对拍）、
+exact/infinity 适用规则、双向冲突+夹取+refresh+过期 refresh、
+unlock 精确路径、registry 上限与过期释放、race 压测。
+
+## B1204 LOCK/UNLOCK 协议与全路由锁检查（2026-09-06）
+
+新文件 go/internal/httpserver/dav_write.go；rest.go/upload.go/
+dav.go 相应接线：
+
+- Destination 解析（_destination_dav_path 全等）：缺失 →
+  "Destination header is required"；凭据/query/fragment 拒绝；
+  绝对形式 host casefold 比较 + 端口精确比较（Go Port() 空串对
+  Python port None 同帧；解析失败 → "Destination host or port is
+  invalid"）；netloc 为空跳过 host 检查（urlsplit 空网络位置同
+  构）；前缀判断在原始（未解码）路径上做，摘出余部后经
+  unquotePercent 解码恰好一次——Python 由 split_remote_path 内
+  unquote 承接，Go 侧业务路径进 handler 前只此一处解码。
+- COPY（_do_webdav_copy 全等）：Depth 校验→400 固定文案；body
+  丢弃时机逐分支对齐（depth 失败先丢弃，overwrite 失败不丢弃，
+  锁失败丢弃，正常流程丢弃）；目标存在→412/501 双门；CopyPath
+  的 AlreadyExists 竞态在 !overwrite 时再答 412；Location 用
+  buildHref（quote safe=''）；handler 末段 204 分支与 Python 一样
+  为结构保留（存在即提前返回，实际恒 201）。
+- MOVE（_do_webdav_move 全等）：锁检查先于 body 丢弃；overwrite
+  解析后于丢弃；same_path 以 canonical(join(split)) 比较；存在→
+  412/501（"MOVE overwrite is disabled because WPS move is not
+  atomic"）；新目标 201+Location。
+- MKCOL/DELETE：MKCOL 锁检查先于丢弃；DELETE 丢弃先于锁检查
+  （两分支顺序与 Python 不同，逐一对齐）；成功 201+Location /
+  204。
+- LOCK（_do_lock 全等）：canonical 路径；If/Lock-Token 提取 >
+  1 → "LOCK request contains multiple lock tokens"（400）；Depth
+  默认 infinity ∈ {0,infinity}；Timeout 默认 Second-3600、
+  Infinite→max、second-(\d+) (?i) 搜索、溢出按 Python 无界 int
+  语义夹到 max；owner：64 KiB 上限（超 → 413 + 关连接，与
+  _RequestBodyTooLarge 同帧）、short body → 400、字节级拒
+  <!doctype/<!entity、ElementTree 严格性（firstXMLElementText：
+  单根、未闭合、双根、根外非空白、unbound prefix、控制字符均
+  拒绝——encoding/xml 宽松面逐条补严）、首个局部名 owner 元素
+  的 itertext 全文（含后代文本，注释/PI 不计入）、空白折叠
+  （str.split/join 语义）+ 512 rune 截断；refresh 分支：allows
+  失败 423、KeyError 409 "lock token is invalid"、成功 200；
+  新锁分支：allows 423、metadata 缺席 → 201 否则 200、
+  RuntimeError 423。响应体手工复刻 ElementTree 序列化（D: 前缀、
+  空元素 "<tag />"、<?xml version='1.0' encoding='utf-8'?>\n 声
+  明行、timeout 为剩余秒 max(1,int(expires-now))、lockroot 为
+  _href_path 无尾斜杠），DAV: 1,2 与 Lock-Token 头经裸 map 赋值
+  保持线上大小写。
+- UNLOCK（_do_unlock 全等）：先丢弃 body；Lock-Token 恰一 token
+  否则 "Lock-Token header is required"（400）；KeyError → 409；
+  成功 204。
+- 全路由锁检查（B901 既录「REST 源/目标锁检查留到 LOCK 接入阶
+  段验证」在本任务落地）：checkLocks 镜像 _check_locks（canonical
+  化失败按域错误传播；423 文案 "resource is locked"，REST JSON/
+  DAV 文本帧）。接入面：DAV PUT（锁检查先于 Content-Length 门，
+  与 Python _do_webdav_put 同序）、REST PUT（path+overwrite 解析
+  后、读 body 前）、REST folders POST/DELETE（丢弃后、变更前）、
+  REST PATCH（name→join 精确子路径；destination 原串（canonical
+  在 checkLocks 内做）；parent_path→父+按源 entry 元数据 join 的
+  精确子路径，且 metadata 在锁检查前完成——与 Python 注释所述
+  「A destination can be protected by a lock independently of the
+  source」一致）。
+- 同时落地此前未接线的 HTTP 写路由（Python server.py 1205-1278,
+  1520-1545, 1602-1640 的 Go 对应物）：REST folders POST、entries/
+  files/delete DELETE、entries/files PATCH（name/fname 重命名、
+  destination 移动、parent_path 移动，含全部 JSON 形状错误文案：
+  "choose either a new name or a move destination"、"request
+  contains multiple mutation targets"、"JSON field 'name' is
+  required" 等）与 DAV MKCOL/MOVE/DELETE handler。缺路由不可能
+  完成 B1204 的「所有 REST/DAV mutation 对源和精确目标检查锁」
+  验证，故归入本任务（阶段 9 完成条件中 REST/DAV 黑盒在 HTTP 层
+  的余项就此闭合）。payload 形状与 Python 一致：folders
+  {"path","entry"}、PATCH {"path","entry"}（new_path 由 entry.name
+  join，文件夹带尾斜杠）、DELETE 204。
+- dispatcher 构造签名新增 mutations/locks 必填参数（缺失
+  errChainConfig），与 B1000 uploads 接线同一模式；DAVMutations/
+  RESTMutations 窄接口由 *storage.Storage 与 *storage.MultiSpace
+  同时满足；测试以 stub（意外调用即失败）与 recording fake 分层。
+
+测试：httpserver dav_write_test.go 13 项——MKCOL/DELETE/COPY/
+MOVE 全 golden（含 Destination 7 面 400、%20 解码恰好一次且
+Location 按 pythonQuote 重编码、Overwrite 三态、Depth 2 → 400、
+存在目标 412/501 且零存储调用、竞态 412）、LOCK 生命周期（200/
+201/refresh 保 token、响应体逐字节前缀+后缀）、请求校验 7 面+
+多 token+超时夹取+64 KiB 413、owner 提取 8 面（跨 namespace、
+嵌套 itertext、首元素胜出、空白折叠、rune 截断）、继承与冲突
+（兄弟共存、祖先冲突、文件夹锁覆盖后代 PUT、token 放行）、
+UNLOCK 4 态、REST 写路由四方法 423+JSON 帧+成功形状、PATCH
+parent_path/rename 的精确目标锁、JSON 形状错误 6 面。
+
+偏差：①COPY/MOVE 的 Lock-Token 顺序、头默认值等已逐条对齐；唯
+Go url.Parse 对 URL 控制字符的拒绝早于 Python（Python 会放到
+split 阶段报 "forbidden character"，两者同为 400，文案不同——
+契约测试未固定该形态）。②LOCK owner 的 Unicode 空白折叠用
+strings.Fields（Go unicode.IsSpace），与 Python str.split() 在
+极少数 C0 控制符（\x1c-\x1f）上不同——XML 文本节点实际不可见，
+影响面为零。③测试基调：contract_tests 证据 JSON 含随机 lock
+token（B103 既录），Go 测试只断言 token 形状前缀。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage+
+httpserver -race -count=2 全绿；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项全绿
+（manifest 按门禁顺序重建）、contract_tests 119 项全绿。
+
+本阶段（B1200–B1204）按用户节奏以单次阶段提交落地；各任务证据
+分立如上。阶段完成条件：COPY 深度/失败残留 ✓（Depth 三档、
+entry/depth 上限、级联清理、清理失败吞掉、existing 目标绝不先
+删）、LOCK 并发/过期/继承/刷新 ✓（race 压测、注入时钟过期、
+infinity 继承与祖先冲突、refresh 保 token）；各写路由锁检查全
+部接入并由黑盒测试固定 ✓。

@@ -139,7 +139,7 @@ func newImportHarness(t *testing.T, withWorkspace bool) *importHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := NewRESTDispatcher(limits, controller, session, &fakeReadStorage{}, nil, DownloadLimits{}, stubDownloadStorage{}, stubUploadStorage{}, 0)
+	dispatcher, err := NewRESTDispatcher(limits, controller, session, &fakeReadStorage{}, nil, DownloadLimits{}, stubDownloadStorage{}, stubUploadStorage{}, stubMutations{}, newTestLockStore(t), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

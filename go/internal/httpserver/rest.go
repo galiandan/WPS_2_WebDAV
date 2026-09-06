@@ -5,11 +5,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
 
@@ -100,12 +102,22 @@ func (c *RootNameController) Set(value any) (string, error) {
 	return name, nil
 }
 
+// RESTMutations is the write storage surface the REST write routes share.
+// The single-space Storage and the MultiSpace view both satisfy it; test
+// fakes scope exactly what each route observes.
+type RESTMutations interface {
+	CreateFolderPath(path string) (model.RemoteEntry, error)
+	DeletePath(path string) error
+	RenamePath(path string, name string) (model.RemoteEntry, error)
+	MovePath(path string, destination string) (model.RemoteEntry, error)
+	MoveToParentPath(path string, parentPath string) (model.RemoteEntry, error)
+}
+
 // RESTDispatcher routes the /api/v1 suffixes. B603 delivers the settings
 // pair, B604 the session import, B700 the read-only routes (status,
-// entries/list, metadata), and B801 the download route; the remaining write
-// routes (upload, folders, entries) land with the write stages — every
-// not-yet-implemented suffix answers Python's "unknown REST route" 404 in
-// the meantime.
+// entries/list, metadata), B801 the download route, B1001 the upload pair,
+// and stage 12 the folders/delete/rename-move routes together with the
+// process-local lock store every mutation consults.
 type RESTDispatcher struct {
 	limits    ControlLimits
 	rootName  *RootNameController
@@ -115,6 +127,8 @@ type RESTDispatcher struct {
 	download  DownloadLimits
 	downloads DownloadStorage
 	uploads   UploadStorage
+	mutations RESTMutations
+	locks     *DavLockStore
 	// maxUploadBytes mirrors the declared-upload gate reading
 	// client.config.max_upload_bytes; zero disables the check like the
 	// Python getattr fallback.
@@ -123,10 +137,10 @@ type RESTDispatcher struct {
 
 // NewRESTDispatcher wires the dispatcher; a zero limits value selects the
 // AdapterApplication defaults and a nil status controller keeps the
-// not_configured preflight answer. The download and upload surfaces are the
-// same storage, but they are declared separately so test fakes can scope
-// what each route observes.
-func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter, read RESTReadStorage, status *StatusController, download DownloadLimits, downloads DownloadStorage, uploads UploadStorage, maxUploadBytes int64) (*RESTDispatcher, error) {
+// not_configured preflight answer. The download, upload, and mutation
+// surfaces are the same storage, but they are declared separately so test
+// fakes can scope what each route observes.
+func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter, read RESTReadStorage, status *StatusController, download DownloadLimits, downloads DownloadStorage, uploads UploadStorage, mutations RESTMutations, locks *DavLockStore, maxUploadBytes int64) (*RESTDispatcher, error) {
 	if session == nil {
 		return nil, errChainConfig("a session importer is required")
 	}
@@ -139,13 +153,19 @@ func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, sessi
 	if uploads == nil {
 		return nil, errChainConfig("an upload storage is required")
 	}
+	if mutations == nil {
+		return nil, errChainConfig("a mutation storage is required")
+	}
+	if locks == nil {
+		return nil, errChainConfig("a lock store is required")
+	}
 	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
 		limits = DefaultControlLimits()
 	}
 	if status == nil {
 		status = NewStatusController(nil, nil)
 	}
-	return &RESTDispatcher{limits: limits, rootName: rootName, session: session, read: read, status: status, download: download, downloads: downloads, uploads: uploads, maxUploadBytes: maxUploadBytes}, nil
+	return &RESTDispatcher{limits: limits, rootName: rootName, session: session, read: read, status: status, download: download, downloads: downloads, uploads: uploads, mutations: mutations, locks: locks, maxUploadBytes: maxUploadBytes}, nil
 }
 
 // ServeREST fits Handlers.REST in the router.
@@ -159,7 +179,11 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 		if route.Suffix == "session/import" {
 			return d.session.Import(w, r)
 		}
-		// The folders creation route lands with the write stages.
+		if route.Suffix == "folders" || route.Suffix == "folder" {
+			return d.doRestFolders(w, r, route)
+		}
+		// Every other suffix discards the body and answers the unknown
+		// route exactly like Python.
 		if err := discardBody(w, r, d.limits); err != nil {
 			return err
 		}
@@ -176,15 +200,73 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 		}
 		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
 		return nil
+	case "DELETE":
+		if route.Suffix == "entries" || route.Suffix == "files" || route.Suffix == "delete" {
+			return d.doRestDelete(w, r, route)
+		}
+		if err := discardBody(w, r, d.limits); err != nil {
+			return err
+		}
+		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
+		return nil
 	default:
-		// DELETE route suffixes land with the write stages; unknown routes
-		// discard the body first, exactly like Python.
+		// Any other mutation method is unreachable through the router's
+		// REST dispatch; keep Python's unknown-route answer as the floor.
 		if err := discardBody(w, r, d.limits); err != nil {
 			return err
 		}
 		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
 		return nil
 	}
+}
+
+// doRestFolders mirrors _do_rest_post's folder branch: the body is
+// discarded first, then the lock check, then the create answers 201 with
+// the {"path", "entry"} payload.
+func (d *RESTDispatcher) doRestFolders(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
+	if err := discardBody(w, r, d.limits); err != nil {
+		return err
+	}
+	path, err := queryPath(route.Query)
+	if err != nil {
+		return err
+	}
+	allowed, err := checkLocks(w, r, d.locks, true, path)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return nil
+	}
+	entry, err := d.mutations.CreateFolderPath(path)
+	if err != nil {
+		return err
+	}
+	return sendJSON(w, r, http.StatusCreated, uploadPayload{Path: path, Entry: entry.Public()}, d.limits, nil)
+}
+
+// doRestDelete mirrors _do_rest_delete: the body is discarded first, then
+// the lock check, then the delete answers 204.
+func (d *RESTDispatcher) doRestDelete(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
+	if err := discardBody(w, r, d.limits); err != nil {
+		return err
+	}
+	path, err := queryPath(route.Query)
+	if err != nil {
+		return err
+	}
+	allowed, err := checkLocks(w, r, d.locks, true, path)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return nil
+	}
+	if err := d.mutations.DeletePath(path); err != nil {
+		return err
+	}
+	writeResponse(w, r, http.StatusNoContent, nil, contentTypeText, nil, false)
+	return nil
 }
 
 // settingsPayload keeps the Python response key order (status, name).
@@ -237,7 +319,11 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 
 func (d *RESTDispatcher) doPatch(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
 	if route.Suffix != "settings" {
-		// The entries/files rename-move routes land with the write stages.
+		// The entries/files rename-move routes; every other suffix discards
+		// the body and answers the unknown-route 404 like Python.
+		if route.Suffix == "entries" || route.Suffix == "files" {
+			return d.doRestEntriesPatch(w, r, route)
+		}
 		if err := discardBody(w, r, d.limits); err != nil {
 			return err
 		}
@@ -256,6 +342,154 @@ func (d *RESTDispatcher) doPatch(w http.ResponseWriter, r *http.Request, route R
 		return err
 	}
 	return sendJSON(w, r, http.StatusOK, settingsPayload{Status: "ok", Name: name}, d.limits, nil)
+}
+
+// doRestEntriesPatch mirrors _do_rest_patch's entries/files branch. A
+// destination can be protected by a lock independently of the source, so
+// the exact child path (rename), the raw destination, or both the parent
+// and the moved child path are all lock-checked — with the source entry's
+// metadata resolved first for the parent_path branch — before any WPS
+// mutation runs.
+func (d *RESTDispatcher) doRestEntriesPatch(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
+	path, err := queryPath(route.Query)
+	if err != nil {
+		return err
+	}
+	payload, err := readJSONBody(w, r, d.limits)
+	if err != nil || payload == nil {
+		return err
+	}
+	var nameKeys []string
+	for _, key := range []string{"name", "fname"} {
+		if _, ok := payload[key]; ok {
+			nameKeys = append(nameKeys, key)
+		}
+	}
+	var moveKeys []string
+	for _, key := range []string{"destination", "parent_path"} {
+		if _, ok := payload[key]; ok {
+			moveKeys = append(moveKeys, key)
+		}
+	}
+	if len(nameKeys) > 0 && len(moveKeys) > 0 {
+		return errBadRequest("choose either a new name or a move destination")
+	}
+	if len(nameKeys) > 1 || len(moveKeys) > 1 {
+		return errBadRequest("request contains multiple mutation targets")
+	}
+
+	sourceParts, err := storage.SplitRemotePath(path)
+	if err != nil {
+		return err
+	}
+	lockPaths := []string{path}
+	hasName := false
+	var name string
+	hasDestination := false
+	var destination string
+	var parentPath string
+	switch {
+	case len(nameKeys) == 1:
+		value, isString := payload[nameKeys[0]].(string)
+		if !isString {
+			return errBadRequest("JSON field 'name' is required")
+		}
+		hasName = true
+		name = value
+		renamed, err := storage.JoinRemotePath(slices.Concat(sourceParts[:len(sourceParts)-1], []string{name}), false)
+		if err != nil {
+			return err
+		}
+		lockPaths = append(lockPaths, renamed)
+	default:
+		if _, ok := payload["destination"]; ok {
+			value, isString := payload["destination"].(string)
+			if !isString {
+				return errBadRequest("JSON field 'destination' must be a path")
+			}
+			hasDestination = true
+			destination = value
+			if _, err := storage.SplitRemotePath(destination); err != nil {
+				return err
+			}
+			lockPaths = append(lockPaths, destination)
+			break
+		}
+		if _, ok := payload["parent_path"]; ok {
+			value, isString := payload["parent_path"].(string)
+			if !isString {
+				return errBadRequest("JSON field 'parent_path' must be a path")
+			}
+			parentPath = value
+			parentParts, err := storage.SplitRemotePath(parentPath)
+			if err != nil {
+				return err
+			}
+			sourceEntry, err := d.read.Metadata(path)
+			if err != nil {
+				return err
+			}
+			child, err := storage.JoinRemotePath(slices.Concat(parentParts, []string{sourceEntry.Name}), false)
+			if err != nil {
+				return err
+			}
+			lockPaths = append(lockPaths, parentPath, child)
+			break
+		}
+		return errBadRequest("JSON field 'name', 'destination' or 'parent_path' is required")
+	}
+	allowed, err := checkLocks(w, r, d.locks, true, lockPaths...)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return nil
+	}
+
+	var entry model.RemoteEntry
+	var newPath string
+	switch {
+	case hasName:
+		entry, err = d.mutations.RenamePath(path, name)
+		if err != nil {
+			return err
+		}
+		parts, err := storage.SplitRemotePath(path)
+		if err != nil {
+			return err
+		}
+		newPath, err = storage.JoinRemotePath(slices.Concat(parts[:len(parts)-1], []string{entry.Name}), entry.Kind == model.KindFolder)
+		if err != nil {
+			return err
+		}
+	case hasDestination:
+		entry, err = d.mutations.MovePath(path, destination)
+		if err != nil {
+			return err
+		}
+		parts, err := storage.SplitRemotePath(destination)
+		if err != nil {
+			return err
+		}
+		newPath, err = storage.JoinRemotePath(parts, entry.Kind == model.KindFolder)
+		if err != nil {
+			return err
+		}
+	default:
+		entry, err = d.mutations.MoveToParentPath(path, parentPath)
+		if err != nil {
+			return err
+		}
+		parts, err := storage.SplitRemotePath(parentPath)
+		if err != nil {
+			return err
+		}
+		newPath, err = storage.JoinRemotePath(slices.Concat(parts, []string{entry.Name}), entry.Kind == model.KindFolder)
+		if err != nil {
+			return err
+		}
+	}
+	return sendJSON(w, r, http.StatusOK, uploadPayload{Path: newPath, Entry: entry.Public()}, d.limits, nil)
 }
 
 // contentLength mirrors _content_length: transfer coding and duplicate

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/mimetypes"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
 
@@ -116,7 +117,7 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 	for name, value := range headers {
 		header[name] = []string{value}
 	}
-	header.Set("Content-Type", guessMimeType(entry.Name))
+	header.Set("Content-Type", mimetypes.GuessMimeType(entry.Name))
 	if _, known := headers["Content-Length"]; known {
 		header.Set("Connection", "close")
 	} else {

@@ -170,7 +170,7 @@ func newDownloadRouter(t *testing.T, downloads DownloadStorage, limits DownloadL
 
 func newDownloadRouterWithDAV(t *testing.T, storage DAVStorage, downloads DownloadStorage, limits DownloadLimits) *Router {
 	t.Helper()
-	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, limits, downloads, stubUploadStorage{}, 0, "/dav")
+	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, limits, downloads, stubUploadStorage{}, stubMutations{}, newTestLockStore(t), 0, "/dav")
 	if err != nil {
 		t.Fatal(err)
 	}

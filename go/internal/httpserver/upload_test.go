@@ -58,11 +58,11 @@ func newUploadRouter(t *testing.T, uploads UploadStorage, maxUploadBytes int64) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := NewRESTDispatcher(limits, controller, session, &fakeReadStorage{}, nil, DownloadLimits{}, stubDownloadStorage{}, uploads, maxUploadBytes)
+	dispatcher, err := NewRESTDispatcher(limits, controller, session, &fakeReadStorage{}, nil, DownloadLimits{}, stubDownloadStorage{}, uploads, stubMutations{}, newTestLockStore(t), maxUploadBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dav, err := NewDAVDispatcher(&davHeadStorage{}, ControlLimits{}, DAVLimits{}, DownloadLimits{}, stubDownloadStorage{}, uploads, maxUploadBytes, "/dav")
+	dav, err := NewDAVDispatcher(&davHeadStorage{}, ControlLimits{}, DAVLimits{}, DownloadLimits{}, stubDownloadStorage{}, uploads, stubMutations{}, newTestLockStore(t), maxUploadBytes, "/dav")
 	if err != nil {
 		t.Fatal(err)
 	}

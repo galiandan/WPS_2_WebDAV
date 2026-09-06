@@ -32,6 +32,7 @@
 | 阶段 9 低风险写操作 | 创建文件夹、重命名、异步任务轮询、移动、删除 | B900–B904 |
 | 阶段 10 普通上传 | 请求正文与 spool、pre_check 与冲突语义、create_update 与对象 PUT、文件登记 | B1000–B1003 |
 | 阶段 11 multipart 上传与检查点 | 检查点格式、初始化与分片大小、单片上传、session 失效恢复、merge 与登记 | B1100–B1104 |
+| 阶段 12 COPY 与 DAV LOCK | 原生单文件 COPY、文件中继 COPY、文件夹 COPY、Lock Store、LOCK/UNLOCK 协议与全路由锁检查 | B1200–B1204 |
 
 当前 Go 侧门禁基线：`gofmt`/`go vet` 无差异，`go test ./...` 全绿，
 交叉构建 linux amd64/arm64、windows amd64、darwin arm64 通过；
@@ -39,13 +40,10 @@ Python 参照套件（169）与 contract_tests（119）保持全绿。
 
 ## 下一步（按细纲顺序）
 
-1. **阶段 12 COPY 与 DAV LOCK**（`04-backend-migration-steps.md` §13）：
-   - B1200 原生单文件 COPY → B1201 文件中继 COPY → B1202 文件夹
-     COPY → B1203 Lock Store → B1204 LOCK/UNLOCK 协议
-   - 此阶段补验各写路由的锁检查
-2. **阶段 13 完整服务整合**：B1300 组装依赖 → B1301 接入静态前端 →
-   B1302 与 Python 全量对照 → B1303 全量静态与并发检查
-3. **阶段 14 部署、灰度与发布**：按 `07-deployment-release-plan.md`
+1. **阶段 13 完整服务整合**（`04-backend-migration-steps.md` §14）：
+   B1300 组装依赖 → B1301 接入静态前端（依赖 `05-frontend-plan.md`）
+   → B1302 与 Python 全量对照 → B1303 全量静态与并发检查
+2. **阶段 14 部署、灰度与发布**：按 `07-deployment-release-plan.md`
    与 `08-executor-checklist.md` 执行，全部签字后才允许切换默认服务
 
 ## 遗留提醒

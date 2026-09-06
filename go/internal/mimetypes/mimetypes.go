@@ -1,8 +1,8 @@
-package httpserver
+package mimetypes
 
 import "strings"
 
-// guessMimeType mirrors mimetypes.guess_type(name)[0] (strict=True) for a
+// GuessMimeType mirrors mimetypes.guess_type(name)[0] (strict=True) for a
 // bare entry name, with the server's "application/octet-stream" fallback
 // for the (None, encoding) case. Python's algorithm: split the extension
 // with os.path.splitext semantics, rewrite compound suffixes (.tgz and
@@ -10,7 +10,7 @@ import "strings"
 // then look the lowercased extension up in the strict table. Go's mime
 // package differs (charset parameters, .ico, .wav, ...), so it cannot be
 // used; the table below was generated from Python's effective strict db.
-func guessMimeType(name string) string {
+func GuessMimeType(name string) string {
 	base, ext := pythonSplitExt(name)
 	for {
 		rewritten, ok := mimeSuffixTable[strings.ToLower(ext)]

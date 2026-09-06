@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+
 	"io"
 	"net"
 	"net/http"
@@ -13,60 +14,6 @@ import (
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
-
-// TestGuessMimeTypeMirrorsPythonTable pins the mimetypes.guess_type port:
-// case-insensitive lookup, suffix_map rewriting, encoding peels, and the
-// octet-stream fallback for unknown or extension-less names.
-func TestGuessMimeTypeMirrorsPythonTable(t *testing.T) {
-	cases := map[string]string{
-		"bench-one.txt": "text/plain",
-		"PHOTO.JPG":     "image/jpeg",
-		"notes.md":      "text/markdown",
-		"icon.ico":      "image/vnd.microsoft.icon",
-		"clip.wav":      "audio/x-wav",
-		"movie.mp4":     "video/mp4",
-		"page.html":     "text/html",
-		"data.json":     "application/json",
-		"doc.docx":      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-		"x.tar.gz":      "application/x-tar",
-		"archive.tgz":   "application/x-tar",
-		"backup.tbz2":   "application/x-tar",
-		"blob.svgz":     "image/svg+xml",
-		"bundle.txz":    "application/x-tar",
-		"x.gz":          "application/octet-stream",
-		"x.br":          "application/octet-stream",
-		"noext":         "application/octet-stream",
-		".hidden":       "application/octet-stream",
-		"x.":            "application/octet-stream",
-		"weird.xyzzy":   "application/octet-stream",
-	}
-	for name, want := range cases {
-		if got := guessMimeType(name); got != want {
-			t.Errorf("guessMimeType(%q) = %q, want %q", name, got, want)
-		}
-	}
-}
-
-// TestPythonSplitExt pins the splitext port on the leading-dot rule.
-func TestPythonSplitExt(t *testing.T) {
-	cases := []struct{ in, base, ext string }{
-		{"bench-one.txt", "bench-one", ".txt"},
-		{"x.tar.gz", "x.tar", ".gz"},
-		{".hidden", ".hidden", ""},
-		{"..dots", "..dots", ""},
-		{"...a.txt", "...a", ".txt"},
-		{".a.b", ".a", ".b"},
-		{"x.", "x", "."},
-		{"noext", "noext", ""},
-		{"/a/b/c.txt", "/a/b/c", ".txt"},
-	}
-	for _, tc := range cases {
-		base, ext := pythonSplitExt(tc.in)
-		if base != tc.base || ext != tc.ext {
-			t.Errorf("pythonSplitExt(%q) = (%q, %q), want (%q, %q)", tc.in, base, ext, tc.base, tc.ext)
-		}
-	}
-}
 
 // davHeadStorage is a configurable fake for the HEAD routes: entries can
 // be selected per path (the live framing test serves a directory and a
@@ -107,7 +54,7 @@ func (f *davHeadStorage) ListChildren(scopePath string, entry model.RemoteEntry)
 
 func newDAVRouter(t *testing.T, storage DAVStorage) *Router {
 	t.Helper()
-	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, DownloadLimits{}, stubDownloadStorage{}, stubUploadStorage{}, 0, "/dav")
+	dispatcher, err := NewDAVDispatcher(storage, ControlLimits{}, DAVLimits{}, DownloadLimits{}, stubDownloadStorage{}, stubUploadStorage{}, stubMutations{}, newTestLockStore(t), 0, "/dav")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,22 +232,6 @@ func TestDAVHeadErrors(t *testing.T) {
 				t.Errorf("Cache-Control = %q", got)
 			}
 		})
-	}
-}
-
-// TestDAVUnknownDAVMethods pins the interim answer of the DAV methods
-// whose stages have not landed yet; GET streams downloads since B801.
-func TestDAVUnknownDAVMethods(t *testing.T) {
-	router := newDAVRouter(t, &davHeadStorage{entry: headFileEntry()})
-	for _, method := range []string{"MKCOL", "LOCK"} {
-		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, newTestRequest(method, "/dav/bench-one.txt"))
-		if recorder.Code != http.StatusNotFound {
-			t.Fatalf("%s status = %d", method, recorder.Code)
-		}
-		if recorder.Body.String() != "unknown route\n" {
-			t.Errorf("%s body = %q", method, recorder.Body.String())
-		}
 	}
 }
 

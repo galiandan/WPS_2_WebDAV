@@ -636,3 +636,32 @@ func (m *MultiSpace) MoveToParentPath(path string, parentPath string) (model.Rem
 	}
 	return sourceSpace.MoveToParentPath(sourceChild, destinationChild)
 }
+
+// CopyPath copies inside one space; a cross-space copy is unsupported.
+func (m *MultiSpace) CopyPath(ctx context.Context, source string, destination string, options CopyOptions) (model.RemoteEntry, error) {
+	if err := m.syncMounts(); err != nil {
+		return model.RemoteEntry{}, err
+	}
+	m.mu.Lock()
+	hasMounts := len(m.mounts) > 0
+	m.mu.Unlock()
+	if !hasMounts {
+		single, err := m.singleOrFail()
+		if err != nil {
+			return model.RemoteEntry{}, err
+		}
+		return single.CopyPath(ctx, source, destination, options)
+	}
+	sourceSpace, sourceChild, err := m.route(source)
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	destinationSpace, destinationChild, err := m.route(destination)
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	if sourceSpace != destinationSpace {
+		return model.RemoteEntry{}, model.NewStorageError(model.KindUnsupportedOperation, "cross-space copy is not supported")
+	}
+	return sourceSpace.CopyPath(ctx, sourceChild, destinationChild, options)
+}

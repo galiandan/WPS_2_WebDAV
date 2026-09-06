@@ -1,12 +1,15 @@
 package httpserver
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/mimetypes"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
 )
 
 // DAVStorage is the storage surface the WebDAV methods share. The root
@@ -18,6 +21,16 @@ type DAVStorage interface {
 	ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error)
 }
 
+// DAVMutations is the write storage surface the WebDAV write methods share.
+// The single-space Storage and the MultiSpace view both satisfy it; test
+// fakes scope exactly what each route observes.
+type DAVMutations interface {
+	CreateFolderPath(path string) (model.RemoteEntry, error)
+	DeletePath(path string) error
+	MovePath(path string, destination string) (model.RemoteEntry, error)
+	CopyPath(ctx context.Context, source string, destination string, options storage.CopyOptions) (model.RemoteEntry, error)
+}
+
 // DAVLimits mirrors the AdapterApplication PROPFIND bounds.
 type DAVLimits struct {
 	MaxPropfindEntries int
@@ -25,10 +38,9 @@ type DAVLimits struct {
 }
 
 // DAVDispatcher routes the WebDAV methods under the DAV prefix. B701
-// delivers HEAD, B702/B703 PROPFIND, and B801 the streaming GET; the write
-// methods land with their stages — until then every unimplemented method
-// answers the router's unknown-route fallback exactly like an
-// unimplemented do_* would.
+// delivers HEAD, B702/B703 PROPFIND, and B801 the streaming GET; B1002 the
+// PUT, and stage 12 the write methods plus the LOCK/UNLOCK protocol with
+// the process-local lock store they share with the REST routes.
 type DAVDispatcher struct {
 	storage   DAVStorage
 	limits    ControlLimits
@@ -36,6 +48,8 @@ type DAVDispatcher struct {
 	download  DownloadLimits
 	downloads DownloadStorage
 	uploads   UploadStorage
+	mutations DAVMutations
+	locks     *DavLockStore
 	// maxUploadBytes mirrors the declared-upload gate reading
 	// client.config.max_upload_bytes; zero disables the check like the
 	// Python getattr fallback.
@@ -47,9 +61,9 @@ type DAVDispatcher struct {
 // AdapterApplication defaults (1 MiB / 16 MiB control bounds, 10000
 // PROPFIND entries, depth 64, 1 MiB download chunks); the prefix is
 // trimmed like Python's dav_prefix.rstrip("/") before href building. The
-// download and upload surfaces are the same storage, but they are declared
-// separately so test fakes can scope what each route observes.
-func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimits, download DownloadLimits, downloads DownloadStorage, uploads UploadStorage, maxUploadBytes int64, davPrefix string) (*DAVDispatcher, error) {
+// download, upload, and mutation surfaces are the same storage, but they
+// are declared separately so test fakes can scope what each route observes.
+func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimits, download DownloadLimits, downloads DownloadStorage, uploads UploadStorage, mutations DAVMutations, locks *DavLockStore, maxUploadBytes int64, davPrefix string) (*DAVDispatcher, error) {
 	if storage == nil {
 		return nil, errChainConfig("a storage is required")
 	}
@@ -58,6 +72,12 @@ func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimi
 	}
 	if uploads == nil {
 		return nil, errChainConfig("an upload storage is required")
+	}
+	if mutations == nil {
+		return nil, errChainConfig("a mutation storage is required")
+	}
+	if locks == nil {
+		return nil, errChainConfig("a lock store is required")
 	}
 	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
 		limits = DefaultControlLimits()
@@ -75,6 +95,8 @@ func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimi
 		download:       download,
 		downloads:      downloads,
 		uploads:        uploads,
+		mutations:      mutations,
+		locks:          locks,
 		maxUploadBytes: maxUploadBytes,
 		davPrefix:      strings.TrimRight(davPrefix, "/"),
 	}, nil
@@ -92,6 +114,18 @@ func (d *DAVDispatcher) ServeDAV(w http.ResponseWriter, r *http.Request, davPath
 		return d.doPropfind(w, r, davPath)
 	case "PUT":
 		return d.doDavPut(w, r, davPath)
+	case "MKCOL":
+		return d.doDavMkcol(w, r, davPath)
+	case "DELETE":
+		return d.doDavDelete(w, r, davPath)
+	case "MOVE":
+		return d.doDavMove(w, r, davPath)
+	case "COPY":
+		return d.doDavCopy(w, r, davPath)
+	case "LOCK":
+		return d.doDavLock(w, r, davPath)
+	case "UNLOCK":
+		return d.doDavUnlock(w, r, davPath)
 	default:
 		sendUnknownRoute(w, r)
 		return nil
@@ -126,7 +160,7 @@ func (d *DAVDispatcher) doHead(w http.ResponseWriter, r *http.Request, davPath s
 	if !ok {
 		return nil
 	}
-	header.Set("Content-Type", guessMimeType(entry.Name))
+	header.Set("Content-Type", mimetypes.GuessMimeType(entry.Name))
 	header.Set("Accept-Ranges", "bytes")
 	header.Set("Cache-Control", "no-store, no-transform")
 	header.Set("X-Content-Type-Options", "nosniff")

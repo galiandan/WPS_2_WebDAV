@@ -210,6 +210,108 @@ func (c *Client) Move(fileID string, sourceParentID string, destinationParentID 
 		DefaultTaskPollInterval, DefaultTaskPollTimeout)
 }
 
+// Copy mirrors copy: the confirmed same-group v3 batch copy endpoint. The
+// captured response carries exactly one copied file ID; strings and JSON
+// integers both pass Python's isinstance gate, everything else is invalid.
+func (c *Client) Copy(fileID string, targetParentID string) (string, error) {
+	if fileID == "" || targetParentID == "" {
+		return "", errors.New("file and target parent IDs are required")
+	}
+	current, err := c.currentCredentials()
+	if err != nil {
+		return "", err
+	}
+	if current.CSRFToken == "" {
+		return "", errors.New("csrf_token is required for write operation")
+	}
+	groupID, err := c.GroupID()
+	if err != nil {
+		return "", err
+	}
+	body := &pyObject{
+		keys: []string{"fileids", "groupid", "target_groupid", "target_parentid", "duplicated_name_model", "csrfmiddlewaretoken"},
+		values: map[string]any{
+			"fileids":               []any{pyJSONID(fileID)},
+			"groupid":               pyJSONID(groupID),
+			"target_groupid":        pyJSONID(groupID),
+			"target_parentid":       pyJSONID(targetParentID),
+			"duplicated_name_model": pyInt(1),
+			"csrfmiddlewaretoken":   current.CSRFToken,
+		},
+	}
+	encoded, err := dumpPYValue(body)
+	if err != nil {
+		return "", err
+	}
+	payload, err := c.RequestJSON(JSONRequest{
+		Path:       "/3rd/drive/api/v3/groups/" + quotePathSegment(groupID) + "/files/batch/copy",
+		Method:     http.MethodPost,
+		Body:       encoded,
+		RetryOn401: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	if result, present := payload["result"]; present && result != nil && result != "ok" {
+		return "", model.NewWpsAPIError("copy file", 0, model.WpsCategoryUpstream)
+	}
+	fileids, isList := payload["fileids"].([]any)
+	if !isList || len(fileids) != 1 {
+		return "", model.NewWpsAPIError("copy response missing file ID", 0, model.WpsCategoryUpstream)
+	}
+	copiedID, valid := pyCopiedFileID(fileids[0])
+	if !valid {
+		return "", model.NewWpsAPIError("copy response contains invalid file ID", 0, model.WpsCategoryUpstream)
+	}
+	return copiedID, nil
+}
+
+// pyCopiedFileID mirrors str(fileids[0]) behind Python's isinstance gate:
+// strings pass through unchanged, JSON integer literals normalize through
+// str(int(...)) ("−0" becomes "0"), and bool/float/null/containers are
+// rejected exactly like the reference (bool first, then str|int).
+func pyCopiedFileID(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case json.Number:
+		text := string(typed)
+		if !pyJSONIntLiteral(text) {
+			return "", false
+		}
+		if text == "-0" {
+			return "0", true
+		}
+		return text, true
+	}
+	return "", false
+}
+
+// pyJSONIntLiteral reports whether the JSON number is an integer literal
+// (-?(0|[1-9][0-9]*)). Python's json module yields int for exactly these;
+// floats and exponent forms never pass the isinstance(int) gate.
+func pyJSONIntLiteral(text string) bool {
+	if text == "" {
+		return false
+	}
+	index := 0
+	if text[0] == '-' {
+		index = 1
+	}
+	if index >= len(text) {
+		return false
+	}
+	if text[index] == '0' {
+		return index+1 == len(text)
+	}
+	for position := index; position < len(text); position++ {
+		if text[position] < '0' || text[position] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // Delete mirrors delete: the confirmed v5 batch task endpoint, waiting for
 // the observed task to finish before returning.
 func (c *Client) Delete(fileID string) error {

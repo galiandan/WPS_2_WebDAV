@@ -47,3 +47,10 @@ func (w wpsWriter) Rename(entryID string, name string) (model.RemoteEntry, error
 func (w wpsWriter) Move(entryID string, sourceParentID string, destinationParentID string) error {
 	return w.client.Move(entryID, sourceParentID, destinationParentID)
 }
+
+// Copy delegates the optional native copy surface; *wpsWriter therefore
+// satisfies storage.Copier and native single-file copies take the captured
+// v3 batch endpoint.
+func (w wpsWriter) Copy(fileID string, targetParentID string) (string, error) {
+	return w.client.Copy(fileID, targetParentID)
+}

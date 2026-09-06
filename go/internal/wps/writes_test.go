@@ -644,3 +644,117 @@ func TestDeleteWaitsForObservedTaskBeforeReturning(t *testing.T) {
 		t.Fatalf("requests = %d, want the progress poll to run", len(opener.requests))
 	}
 }
+
+func TestCopySendsConfirmedV3BatchBody(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok","fileids":["bench-file-copied"]}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	copied, err := client.Copy("7", "3")
+	if err != nil {
+		t.Fatalf("Copy failed: %v", err)
+	}
+	if copied != "bench-file-copied" {
+		t.Fatalf("copied id = %q", copied)
+	}
+	if len(opener.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(opener.requests))
+	}
+	request := opener.requests[0]
+	if request.Method != http.MethodPost {
+		t.Fatalf("method = %s, want POST", request.Method)
+	}
+	if request.URL.String() != "https://365.kdocs.cn/3rd/drive/api/v3/groups/1/files/batch/copy" {
+		t.Fatalf("url = %q", request.URL.String())
+	}
+	// Byte-for-byte: field order, duplicated_name_model as a JSON number,
+	// and the numeric id list are part of the captured request shape.
+	wantBody := `{"fileids":[7],"groupid":1,"target_groupid":1,"target_parentid":3,"duplicated_name_model":1,"csrfmiddlewaretoken":"csrf-secret"}`
+	if string(opener.bodies[0]) != wantBody {
+		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
+	}
+}
+
+func TestCopyQuotesGroupInURLAndKeepsNonDecimalIDsAsStrings(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok","fileids":["copied-abc"]}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "g/1" })
+
+	if _, err := client.Copy("file/7", "3"); err != nil {
+		t.Fatalf("Copy failed: %v", err)
+	}
+	wantURL := "https://365.kdocs.cn/3rd/drive/api/v3/groups/g%2F1/files/batch/copy"
+	if opener.requests[0].URL.String() != wantURL {
+		t.Fatalf("url = %q, want %q", opener.requests[0].URL.String(), wantURL)
+	}
+	wantBody := `{"fileids":["file/7"],"groupid":"g/1","target_groupid":"g/1","target_parentid":3,"duplicated_name_model":1,"csrfmiddlewaretoken":"csrf-secret"}`
+	if string(opener.bodies[0]) != wantBody {
+		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
+	}
+}
+
+func TestCopyRejectsMissingIDsWithoutRequests(t *testing.T) {
+	client := newWriteClient(t, &fakeControlOpener{}, nil)
+	if _, err := client.Copy("", "3"); err == nil || err.Error() != "file and target parent IDs are required" {
+		t.Fatalf("empty file id error = %v", err)
+	}
+	if _, err := client.Copy("7", ""); err == nil || err.Error() != "file and target parent IDs are required" {
+		t.Fatalf("empty parent error = %v", err)
+	}
+}
+
+func TestCopyResultFailureAndMissingFileID(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"failed"}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[]}`)},
+		{status: 200, body: []byte(`{"result":"ok"}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[1,2]}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":"bench"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	for index := 0; index < 5; index++ {
+		if _, err := client.Copy("7", "3"); err == nil {
+			t.Fatalf("case %d: expected an error", index)
+		} else if index == 0 {
+			if _, ok := model.AsWpsAPIError(err); !ok {
+				t.Fatalf("case 0 error type = %T", err)
+			}
+		}
+	}
+	if len(opener.requests) != 5 {
+		t.Fatalf("requests = %d, want 5", len(opener.requests))
+	}
+}
+
+func TestCopyRejectsInvalidFileIDShapes(t *testing.T) {
+	// Python's gate is isinstance(copied, (str, int)) after excluding bool:
+	// floats, nulls, and containers are invalid; a JSON integer normalizes
+	// through str(int(...)).
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok","fileids":[true]}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[1.5]}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[1e3]}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[null]}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[[7]]}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[7]}`)},
+		{status: 200, body: []byte(`{"result":"ok","fileids":[-0]}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) { c.GroupID = "1" })
+
+	for index := 0; index < 5; index++ {
+		if _, err := client.Copy("7", "3"); err == nil || err.Error() != "WPS operation failed: copy response contains invalid file ID" {
+			t.Fatalf("case %d error = %v", index, err)
+		}
+	}
+	copied, err := client.Copy("7", "3")
+	if err != nil || copied != "7" {
+		t.Fatalf("integer id = (%q, %v)", copied, err)
+	}
+	copied, err = client.Copy("7", "3")
+	if err != nil || copied != "0" {
+		t.Fatalf("-0 id = (%q, %v)", copied, err)
+	}
+}
