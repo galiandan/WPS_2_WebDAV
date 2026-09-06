@@ -101,22 +101,27 @@ func (c *RootNameController) Set(value any) (string, error) {
 }
 
 // RESTDispatcher routes the /api/v1 suffixes. B603 delivers the settings
-// pair; the read-only routes (status, entries, metadata, download) arrive
-// with the read-only stage and the write routes (upload, folders, entries,
-// session import) with the write stages — every not-yet-implemented suffix
-// answers Python's "unknown REST route" 404 in the meantime.
+// pair and B604 the session import; the read-only routes (status, entries,
+// metadata, download) arrive with the read-only stage and the remaining
+// write routes (upload, folders, entries) with the write stages — every
+// not-yet-implemented suffix answers Python's "unknown REST route" 404 in
+// the meantime.
 type RESTDispatcher struct {
 	limits   ControlLimits
 	rootName *RootNameController
+	session  *SessionImporter
 }
 
 // NewRESTDispatcher wires the dispatcher; a zero limits value selects the
 // AdapterApplication defaults.
-func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController) *RESTDispatcher {
+func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, session *SessionImporter) (*RESTDispatcher, error) {
+	if session == nil {
+		return nil, errChainConfig("a session importer is required")
+	}
 	if limits.MaxControlBody <= 0 || limits.MaxResponseBody <= 0 {
 		limits = DefaultControlLimits()
 	}
-	return &RESTDispatcher{limits: limits, rootName: rootName}
+	return &RESTDispatcher{limits: limits, rootName: rootName, session: session}, nil
 }
 
 // ServeREST fits Handlers.REST in the router.
@@ -126,6 +131,16 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 		return d.doGet(w, r, route)
 	case "PATCH":
 		return d.doPatch(w, r, route)
+	case "POST":
+		if route.Suffix == "session/import" {
+			return d.session.Import(w, r)
+		}
+		// The folders creation route lands with the write stages.
+		if err := discardBody(w, r, d.limits); err != nil {
+			return err
+		}
+		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
+		return nil
 	default:
 		// PUT/POST/DELETE route suffixes land with the write stages;
 		// unknown routes discard the body first, exactly like Python.
@@ -243,11 +258,17 @@ func discardBody(w http.ResponseWriter, r *http.Request, limits ControlLimits) e
 // stops, like Python's None return), the control-body cap, an exact body
 // read, and JSON-object validation.
 func readJSONBody(w http.ResponseWriter, r *http.Request, limits ControlLimits) (map[string]any, error) {
+	return readJSONBodyLimit(w, r, limits.MaxControlBody)
+}
+
+// readJSONBodyLimit is readJSONBody with an explicit body cap; session
+// import passes its own 512 KiB bound.
+func readJSONBodyLimit(w http.ResponseWriter, r *http.Request, maxLength int64) (map[string]any, error) {
 	length, err := contentLength(w, r, true)
 	if err != nil || length == nil {
 		return nil, err
 	}
-	if *length > limits.MaxControlBody {
+	if *length > maxLength {
 		return nil, errRequestBodyTooLarge()
 	}
 	body := make([]byte, *length)

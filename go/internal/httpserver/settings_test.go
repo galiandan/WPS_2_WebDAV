@@ -15,6 +15,14 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
 
+// recordingCredentialReplacer refuses every import; the settings tests
+// never reach it.
+type recordingCredentialReplacer struct{}
+
+func (r *recordingCredentialReplacer) ReplaceCredentials(string, string) (bool, error) {
+	return false, nil
+}
+
 // settingsRouter builds a router with the REST dispatcher wired for the
 // settings routes and a recording storage.
 type recordingRootNameStorage struct {
@@ -63,7 +71,19 @@ func newSettingsHarness(t *testing.T) *settingsHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher := NewRESTDispatcher(ControlLimits{MaxControlBody: 1024, MaxResponseBody: 4096}, controller)
+	limits := ControlLimits{MaxControlBody: 1024, MaxResponseBody: 4096}
+	session, err := NewSessionImporter(limits, "",
+		func([]any, string) (string, string, []string, error) {
+			return "", "", nil, errBadRequest("unused in settings tests")
+		},
+		&recordingCredentialReplacer{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := NewRESTDispatcher(limits, controller, session)
+	if err != nil {
+		t.Fatal(err)
+	}
 	router, err := NewRouter(RouterConfig{
 		DAVPrefix:  "/dav",
 		RESTPrefix: "/api/v1",

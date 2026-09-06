@@ -1931,3 +1931,99 @@ arm64、windows amd64、darwin arm64 通过；Python 参照套件 169 项、
 contract_tests 119 项全绿；manifest 已按门禁顺序重建。
 
 回滚：git revert 本提交。
+
+## B604 session import
+
+日期：2026-09-05
+参照：`server.py`（_do_rest_session_import，位于 1414-1490）、
+`login.py:181-286`（_select_cookies/credentials_from_cookies/
+_safe_cookie_part/_host_from_url）、`workspace.py`
+（validate_workspace_identifier/WorkspaceMount）、
+tests/test_server.py 824-905、contract_tests/test_decisions.py
+TestD06SessionImportAuto。
+
+新增 `credentials/login_cookies.go`（Cookie 重验证与选择，httpserver
+按依赖规则不直接导入 credentials，由装配层注入）与
+`httpserver/session_import.go`（POST /api/v1/session/import）：
+
+- CredentialsFromCookies 镜像 credentials_from_cookies：
+  _host_from_url（HTTPS + 无 userinfo + kdocs.cn 或子域 + 端口仅
+  443/缺省 + 去尾点 casefold；坏端口单独文案）→ _select_cookies
+  （逐 cookie 重验：非对象丢弃、domain 必须匹配 host 且属于
+  kdocs.cn 后缀、name/value 安装 _safe_cookie_part 检查——非空、
+  ≤64KiB、无控制字符、无 ";"、name 额外禁分隔符与空格/制表；按
+  casefold 名去重，_cookie_rank 元组序（精确 host > 长 domain >
+  长 path）取最优；按 casefold 名排序输出）→ csrf 必须存在、rtk
+  必须存在（require_refresh_cookie=True 默认）→ 拼对
+  "name=value; ..." ≤4MiB。LoginError 保留 Python 的中文文案，
+  但 HTTP 层只回答固定 500（Python 的 RuntimeError 落入兜底分支，
+  消息不回显——防枚举）。value/name 的 str() 强转仅对字符串忠实，
+  其余 JSON 类型按 fmt.Sprint 降级后照常过安全检查（与 Python 的
+  str() 结果在 bool/null 上不同，无测试覆盖、记录偏差）。
+- 路由流程（镜像 _do_rest_session_import 的"先验证后写"次序）：
+  1) readJSONBodyLimit 512KiB（独立于 1MiB 控制体上限）；
+  2) cookies 必须为非空数组（"JSON field 'cookies' must be a
+     non-empty array"）、≤256（"too many cookies"）；
+  3) workspace 字段（可空 = 缺席）：非对象 → 400；无 workspace
+     状态面（D-06：仅 auto 配置或已有 workspace 文件的装配提供
+     WorkspaceImporter）→ 400 "workspace import requires
+     WPS_GROUP_ID=auto or WPS_ROOT_ID=auto"；group_id/root_id 经
+     validate_workspace_identifier 语义（"workspace.group_id is
+     invalid"，root_id 缺省 "0"）；spaces 可选：非数组/空/超 128 →
+     "JSON field 'workspace.spaces' is invalid"；逐项
+     WorkspaceMount 语义（group_id 必需、root_id 缺省 "0"、name
+     缺省取 group_id、非字符串名 → "space.name is invalid"）、
+     重复名 → "workspace spaces contain duplicate names"——全部
+     在任何写盘前完成；
+  4) CookieSelector 选择 + 校验（LoginError → 固定 500）；
+  5) ReplaceCredentials(cookie, csrf)——false 或 error →
+     WpsApiError("store imported credentials") → 502 JSON
+     {"error":"upstream WPS request failed","code":
+     "wps_unavailable"}（Python 侧 replace_credentials 吞异常仅
+     返回 bool，Go 以同一 WpsApiError 归并）；
+  6) WorkspaceImporter.Update（WorkspaceConfigError →
+     WpsApiError("store imported workspace")）→ RootIDSetter.
+     SetRootID（Python 的 storage.set_root_id，虚拟 root 即时
+     切换）→ 200 {"status":"ok","cookie_count":N[,"workspace":
+     "updated"}，key 顺序与 Python 一致（struct 保序 +
+     omitempty）。凭据先写、workspace 后写、无回滚——精确镜像
+     Python 次序（workspace 失败时新凭据保留，测试钉死）。
+- RESTDispatcher：POST session/import 接入；其余 POST 路由保持
+  discard + 404。NewRESTDispatcher 增加必填的 SessionImporter
+  （"a session importer is required"），SessionImporter 构造校验
+  CookieSelector/CredentialReplacer 必填、workspace 面必须成对
+  提供、baseURL 缺省 "https://365.kdocs.cn"。
+- readJSONBodyLimit 拆分：readJSONBody 走控制体上限，import 用
+  512KiB 显式上限。
+
+测试（session_import_test.go 10 组 + credentials 侧）：
+- 凭据对替换：rtk 保留 /passport/secure 路径、cookie_count=2、
+  cookie 头含 "rtk=refresh"、csrf 正确（复刻
+  test_session_import_uses_basic_auth_and_replaces_credentials）。
+- workspace 持久化 + root 切换（复刻
+  test_session_import_persists_workspace_and_switches_root）：状态
+  文件落盘 group-2/root-3、storage root 收到 root-3、响应带
+  "workspace":"updated"。
+- spaces：缺省名 = group_id、缺省 root "0"、显式名；重复名 400 且
+  凭据零写出（验证先验证后写）。
+- 校验表 13 例 + 257 cookie 越界 + 512KiB 体上限（413 空 message）。
+- 固定错误：LoginError（无 WPS cookie/缺 csrf）→ 500 固定体；
+  凭据存储失败 → 502 wps_unavailable；workspace 写失败 → 凭据已
+  替换 + 502（顺序钉死）。
+- Cookie 选择直测：跨域丢弃、分隔符名丢弃、";" 值丢弃、控制字符
+  丢弃、非对象项跳过、精确 host 胜过宽 domain、casefold 去重保留
+  最优、rtk 深路径保留、缺 rtk 报 LoginError、非 https/非 kdocs
+  base URL 拒绝。
+- 全链路：认证外 401、认证内 200（复刻 Basic Auth 组合）。
+- 未知 POST 路由 discard + 404、超大 discard → 413。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver/
+credentials -race -count=4 全绿；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已按门禁顺序重建。
+
+阶段 6（B600–B604）至此全部完成：httpserver 包 46 项测试
+（router/target/response/errors/settings/session_import/middleware/
+server），credentials 26 项，全部门禁绿灯。
+
+回滚：git revert 本提交。
