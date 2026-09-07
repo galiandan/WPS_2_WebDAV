@@ -9,11 +9,11 @@
 
 ## 分支布局
 
-- `rewrite`：Go 重写和当前发布候选线。长期运行服务、Native/Docker
+- `rewrite`：Go 重写的开发和发布候选线。长期运行服务、Native/Docker
   安装器、部署模板和嵌入式前端都以 Go 为准；Python 只作为参照实现和
   本地登录助手保留。
-- `main`：迁移完成前的旧 Python 发布线。安装说明不会指向它，待本线的
-  发布清单和灰度门禁完成后再合并替换。
+- `main`：已由 `rewrite` 的经过校验的 Go 文件树替换，作为默认安装入口。
+  旧 Python 历史仍保留在合并提交的父历史中，不再作为生产启动入口。
 
 ## 已完成
 
@@ -45,9 +45,9 @@ contract_tests/results/comparison-report.json）。
 
 ## 下一步（按细纲顺序）
 
-1. **发布收尾与主分支替换**：完成一次 Linux amd64/arm64 构建、安装器
-   固定提交校验、Native/Docker 冒烟和回滚检查后，将 `rewrite` 合并为新的
-   默认 `main`。旧 Python 代码继续作为参照源，不能被服务启动入口调用。
+1. **发布后的灰度和维护**：由发布者执行真实 WPS 专用目录、浏览器、
+   Native/Docker VPS 冒烟和旧版本回滚演练；后续 Go 变更先进入 `rewrite`，
+   通过门禁后再提升到 `main`。
 
 ## 遗留提醒
 

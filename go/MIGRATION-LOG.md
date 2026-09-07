@@ -3607,8 +3607,8 @@ COPY、LOCK、多空间、session import、前端资源），尚未替换生产�
   作为新的生产入口，便携模式仍能识别旧进程以便平滑升级。
 - Go 侧同步修复非法 Destination 端口、超长 LOCK Timeout、重复 workspace
   group 写入以及 IPv6 方括号监听地址；这些修改不引入新的 WPS 接口。
-- README、部署说明和 Go 模块说明改为 Go 服务优先；安装命令暂时指向
-  `rewrite`，避免在 `main` 完成替换前下载旧 Python 安装器。
+- README、部署说明和 Go 模块说明改为 Go 服务优先；`main` 已提升为同一
+  份经过清单校验的 Go 文件树，安装命令统一指向默认分支。
 
 必要门禁（本次工作树）：
 
