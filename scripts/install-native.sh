@@ -6,7 +6,6 @@ set -Eeuo pipefail
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
 SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-2026d8faaae5b70c86028534813ecef001c78e7b}"
-SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-d9b267678ccc7510f13c8771b033887d57d60a2cf14d9de85406403ddea5e40a}"
 # The service is built with a fixed toolchain only when the host does not
 # already provide a compatible Go compiler. The toolchain stays in the
 # installer's private temporary directory and is never installed system-wide.
@@ -160,19 +159,6 @@ linux_go_target() {
         s390x) GOARCH="s390x"; GO_ARCHIVE="s390x" ;;
         *) die "不支持的 Linux CPU 架构：$(uname -m)；请提供 Go >= 1.25 或使用 amd64/arm64 VPS" ;;
     esac
-    # Go publishes one 32-bit ARM Linux archive (armv6l); GOARM controls
-    # the target emitted by that toolchain.  Select the checksum by archive
-    # name rather than GOARCH, which is simply "arm" in that case.
-    case "$GO_ARCHIVE" in
-        amd64) GO_SHA256="2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613" ;;
-        arm64) GO_SHA256="05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae" ;;
-        armv6l) GO_SHA256="a5a8f8198fcf00e1e485b8ecef9ee020778bf32a408a4e8873371bfce458cd09" ;;
-        386) GO_SHA256="8c602dd9d99bc9453b3995d20ce4baf382cc50855900a0ece5de9929df4a993a" ;;
-        ppc64le) GO_SHA256="0f18a89e7576cf2c5fa0b487a1635d9bcbf843df5f110e9982c64df52a983ad0" ;;
-        riscv64) GO_SHA256="c018ff74a2c48d55c8ca9b07c8e24163558ffec8bea08b326d6336905d956b67" ;;
-        s390x) GO_SHA256="34e5a2e19f2292fbaf8783e3a241e6e49689276aef6510a8060ea5ef54eee408" ;;
-        *) die "没有 Go ${GO_VERSION} 的 Linux 架构校验值：$GO_ARCHIVE" ;;
-    esac
 }
 
 download_file() {
@@ -189,14 +175,14 @@ download_file() {
     if has_command curl; then
         curl --fail --show-error --progress-bar --location --max-filesize "$max_filesize" \
             --connect-timeout "$DOWNLOAD_CONNECT_TIMEOUT" --max-time "$DOWNLOAD_MAX_TIME" \
-            --retry 2 --retry-delay 1 --proto-redir '=https' --proto '=https' --tlsv1.2 \
+            --proto-redir '=https' --proto '=https' --tlsv1.2 \
             "$url" -o "$target"
     elif has_command wget; then
         if has_command timeout; then
             timeout "$DOWNLOAD_MAX_TIME" \
-                wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 3 -O "$target" "$url"
+                wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 1 -O "$target" "$url"
         else
-            wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 3 -O "$target" "$url"
+            wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 1 -O "$target" "$url"
         fi
     else
         die "缺少 curl 或 wget，无法下载项目归档"
@@ -207,51 +193,24 @@ download_go_toolchain() {
     linux_go_target
     local filename="go${GO_VERSION}.linux-${GO_ARCHIVE}.tar.gz"
     local archive="$TMP_DIR/$filename"
-    local candidates=(
-        "https://mirrors.aliyun.com/golang/$filename"
-        "https://golang.google.cn/dl/$filename"
-        "https://go.dev/dl/$filename"
-    )
-    local candidate
-    for candidate in "${candidates[@]}"; do
-        printf '下载 Go 工具链：%s\n' "$candidate"
-        rm -f -- "$archive"
-        if download_file "$candidate" "$archive" 157286400 \
-            && printf '%s  %s\n' "$GO_SHA256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
-            GO_BIN="$TMP_DIR/go/bin/go"
-            tar -xzf "$archive" -C "$TMP_DIR"
-            [[ -x "$GO_BIN" ]] || die "Go 工具链解压后不可用"
-            return 0
-        fi
-        printf '该 Go 下载地址不可用，准备尝试下一个地址。\n' >&2
-    done
-    die "Go ${GO_VERSION} 工具链下载或校验失败；可先在主机安装 Go >= 1.25 后重试"
+    local url="${WPS_ADAPTER_GO_URL:-https://mirrors.aliyun.com/golang/$filename}"
+    printf '下载 Go 工具链：%s\n' "$url"
+    download_file "$url" "$archive" 157286400 \
+        || die "Go ${GO_VERSION} 工具链下载失败；可先在主机安装 Go >= 1.25 后重试"
+    GO_BIN="$TMP_DIR/go/bin/go"
+    tar -xzf "$archive" -C "$TMP_DIR" \
+        || die "Go ${GO_VERSION} 工具链解压失败"
+    [[ -x "$GO_BIN" ]] || die "Go 工具链解压后不可用"
 }
 
 download_archive() {
     local direct_url="$REPOSITORY/archive/$SOURCE_REF.tar.gz"
-    local candidate index=0 total
-    local candidates=()
-    [[ -n "${WPS_ADAPTER_ARCHIVE_URL:-}" ]] && candidates+=("$WPS_ADAPTER_ARCHIVE_URL")
-    candidates+=(
-        "https://ghfast.top/$direct_url"
-        "https://gh-proxy.com/$direct_url"
-        "$direct_url"
-    )
-    total="${#candidates[@]}"
-    for candidate in "${candidates[@]}"; do
-        ((index += 1))
-        printf '尝试下载源代码（地址 %d/%d）\n' "$index" "$total"
-        rm -f -- "$ARCHIVE"
-        if download_file "$candidate" "$ARCHIVE" \
-            && tar -tzf "$ARCHIVE" >/dev/null 2>&1 \
-            && tar -xOf "$ARCHIVE" "WPS_2_WebDAV-$SOURCE_REF/release-manifest.txt" \
-                | sha256sum -c <(printf '%s  -\n' "$SOURCE_MANIFEST_SHA256") >/dev/null 2>&1; then
-            return 0
-        fi
-        printf '该下载地址不可用，准备尝试下一个地址。\n' >&2
-    done
-    die "项目归档下载失败；可设置 WPS_ADAPTER_ARCHIVE_URL 指定可访问的归档地址"
+    local url="${WPS_ADAPTER_ARCHIVE_URL:-https://ghfast.top/$direct_url}"
+    printf '下载源代码：%s\n' "$url"
+    download_file "$url" "$ARCHIVE" \
+        || die "项目归档下载失败"
+    tar -tzf "$ARCHIVE" >/dev/null 2>&1 \
+        || die "项目归档不是可读取的 tar.gz 文件"
 }
 
 health_check() {
@@ -395,17 +354,16 @@ usage() {
   --adapter-user USER 适配器 Basic Auth 用户名
   --run-user USER      服务运行用户，默认执行 sudo 的当前用户
   --source-ref SHA     要安装的 40 位 Git 提交号（默认使用脚本内固定版本）
-  --source-manifest-sha256 SHA256
-                       归档内容清单的 SHA-256（用于自定义 source-ref）
   --help              显示帮助
 
 环境变量：
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
+  WPS_ADAPTER_GO_URL                   自定义 Go 工具链 HTTPS 地址
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
 
 Native 构建：
-  主机已有 Go 1.25 或更高版本时优先使用；否则自动下载并校验 Go ${GO_VERSION}，不会安装 Python。
+  主机已有 Go 1.25 或更高版本时优先使用；否则从单一地址下载 Go ${GO_VERSION}，不会安装 Python。
 
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
 EOF
@@ -455,12 +413,6 @@ while (($# > 0)); do
             shift 2
             ;;
         --source-ref=*) SOURCE_REF="${1#*=}"; shift ;;
-        --source-manifest-sha256)
-            (($# >= 2)) || die "--source-manifest-sha256 缺少参数"
-            SOURCE_MANIFEST_SHA256="$2"
-            shift 2
-            ;;
-        --source-manifest-sha256=*) SOURCE_MANIFEST_SHA256="${1#*=}"; shift ;;
         --help|-h) usage; exit 0 ;;
         *) die "未知参数：$1" ;;
     esac
@@ -476,14 +428,13 @@ done
 progress_step "检查运行环境和安装参数"
 
 GO_BIN="$(find_go || true)"
-if ! has_command curl || ! has_command tar || ! has_command sha256sum \
+if ! has_command curl || ! has_command tar \
     || ! has_command find; then
     detect_package_manager || die "缺少安装依赖，且未识别 apt、dnf、yum、apk、pacman、zypper 或 xbps-install"
     install_native_dependencies
 fi
 has_command curl || has_command wget || die "缺少 curl 或 wget，无法下载项目归档"
 has_command tar || die "缺少 tar，无法解压项目归档"
-has_command sha256sum || die "缺少 sha256sum；请安装 coreutils 或提供该命令"
 
 if host_uses_systemd; then
     SERVICE_MODE="systemd"
@@ -577,9 +528,6 @@ validate_safe_value() {
 }
 
 [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]] || die "source-ref 必须是 40 位 Git 提交号"
-[[ "$SOURCE_MANIFEST_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
-    || die "source-manifest-sha256 必须是 64 位 SHA-256"
-
 OLD_PORT="$(read_env_value ADAPTER_PORT || true)"
 OLD_BIND="$(read_env_value ADAPTER_BIND || true)"
 OLD_GROUP_ID="$(read_env_value WPS_GROUP_ID || true)"
@@ -669,7 +617,7 @@ chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
 install -d -m 700 "$RESUME_DIR"
 progress_step "下载并显示项目归档进度"
 download_archive
-progress_step "校验归档清单和文件完整性"
+progress_step "检查归档内容和文件类型"
 archive_members_are_safe "$ARCHIVE" \
     || die "下载的项目归档包含不安全的路径"
 tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
@@ -684,22 +632,6 @@ archive_tree_is_safe() {
 }
 archive_tree_is_safe "$SOURCE_DIR" \
     || die "下载的项目包含不允许的特殊文件或符号链接"
-MANIFEST_FILE="$SOURCE_DIR/release-manifest.txt"
-[[ -f "$MANIFEST_FILE" ]] || die "下载的项目缺少内容清单"
-MANIFEST_DIGEST="$(sha256sum "$MANIFEST_FILE" | awk '{print $1}')"
-[[ "${MANIFEST_DIGEST,,}" == "${SOURCE_MANIFEST_SHA256,,}" ]] \
-    || die "下载归档的内容清单校验失败"
-MANIFEST_FILES="$TMP_DIR/manifest.files"
-ACTUAL_FILES="$TMP_DIR/actual.files"
-awk 'length($0) >= 67 { print substr($0, 67) }' "$MANIFEST_FILE" | LC_ALL=C sort >"$MANIFEST_FILES"
-(
-    cd "$SOURCE_DIR"
-    find . -type f -print
-) | sed 's#^\./##' | awk '$0 != "release-manifest.txt" && $0 != "scripts/install-native.sh" && $0 != "scripts/install-docker.sh"' \
-    | LC_ALL=C sort >"$ACTUAL_FILES"
-cmp -s "$MANIFEST_FILES" "$ACTUAL_FILES" || die "下载归档的文件清单与预期不一致"
-(cd "$SOURCE_DIR" && sha256sum -c release-manifest.txt >/dev/null) \
-    || die "下载归档的文件校验失败"
 [[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
 [[ -f "$SOURCE_DIR/go/go.mod" && -f "$SOURCE_DIR/go/cmd/wps-adapter/main.go" ]] \
     || die "下载的项目缺少 Go 服务源码"

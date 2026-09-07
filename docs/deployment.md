@@ -7,7 +7,7 @@
 下面两个脚本都可以通过一行命令启动。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。云盘显示名称安装后直接在网页右上角齿轮中修改，不需要编辑配置文件。
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
 ```
 
 上面是 Native 安装。把最后的 `18080` 换成你想使用的端口即可。
@@ -15,22 +15,22 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --r
 Docker：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080
 ```
 
-安装脚本会从脚本内固定的 40 位 Git 提交归档下载代码，并校验归档内置的 SHA-256 文件清单，不要求 VPS 已安装 `git`；可用 `--source-ref` 和对应的 `--source-manifest-sha256` 指定另一个完整提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
+安装脚本会从脚本内固定的 40 位 Git 提交归档下载代码，不要求 VPS 已安装 `git`，也不执行归档哈希校验。可用 `--source-ref` 指定另一个完整提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
 
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080 --replace-native
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080 --replace-native
 ```
 
-如果 `ghfast.top` 无法访问，把命令中的 `ghfast.top` 替换为 `gh-proxy.com`。安装器运行后会从固定提交归档下载项目，并自行校验文件清单。
+如果 `ghfast.top` 无法访问，需要在命令中显式替换为你自己确认可用的 HTTPS 归档地址，安装器不会自动切换节点。
 
-建议先下载脚本检查内容，再执行；不要把未知来源的内容直接通过管道交给 root。国内加速节点只用于传输，项目归档会按固定清单校验。安装器内部的所有下载都有连接超时和总超时，并会在候选地址之间自动回退。
+建议先下载脚本检查内容，再执行；不要把未知来源的内容直接通过管道交给 root。安装器内部的下载有连接超时和总超时，但不会在候选地址之间自动回退，也不会做哈希校验。
 
-安装器会按 `[当前阶段/总阶段]` 输出进度。下载安装器和源码归档时会显示进度；Native 会优先使用主机已有的 Go `1.25+`，没有时自动下载并校验 Go 工具链。Docker 会优先从国内镜像获取 Go 构建镜像，并在构建镜像时持续显示逐层构建输出。若某个地址无响应，会在超时后自动切换，不会无限卡住。
+安装器会按 `[当前阶段/总阶段]` 输出进度。下载安装器和源码归档时会显示进度；Native 会优先使用主机已有的 Go `1.25+`，没有时从单一国内地址下载 Go 工具链。Docker 会使用配置的 Go 构建镜像，并在构建镜像时持续显示逐层构建输出。若地址无响应，会在超时后退出，不会无限卡住。
 
 手动使用 Compose 且 Docker Hub 访问不稳定时，可在构建前指定镜像：
 
@@ -54,8 +54,8 @@ docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 
 确认主机满足：
 
-- Native 模式需要 Go `1.25+`；主机没有时安装器会自动下载官方 Go 工具链并校验 SHA-256，不会安装 Python。Docker 模式只需要 Docker，Go 在构建阶段由镜像提供。
-- Bash、`tar`、`find`、`sha256sum`，以及 `curl` 或 `wget`。安装命令使用 `sudo bash`，极简系统如果没有 Bash，需要先按该系统方式安装 Bash。
+- Native 模式需要 Go `1.25+`；主机没有时安装器会从单一地址下载 Go 工具链，不会安装 Python。Docker 模式只需要 Docker，Go 在构建阶段由镜像提供。
+- Bash、`tar`、`find`，以及 `curl` 或 `wget`。安装命令使用 `sudo bash`，极简系统如果没有 Bash，需要先按该系统方式安装 Bash。
 - 安装器覆盖常见发行版的包管理器；未列出的定制发行版仍可能需要手工提供 Go/Docker 和服务管理方式。
 - 能访问 WPS 和对象存储域名。
 - 临时上传文件所在磁盘有足够空间。
@@ -66,7 +66,7 @@ docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 - 适配器生成的单个 JSON/XML 响应默认不超过 16 MiB；超大目录响应会返回 `507`，避免目录元数据耗尽内存。
 - 进程内 WebDAV 锁默认最多保留 4096 把，超过时返回 `503`，避免异常客户端无限堆积锁状态。
 
-安装器从归档中读取 `release-manifest.txt`，并只接受清单中列出的普通文件。修改 `--source-ref` 时必须同时提供该提交对应的清单 SHA-256；不要随意复制其他版本的摘要。
+安装器下载指定归档后只检查归档能否读取、路径是否安全以及必要文件是否存在，不读取或生成发布哈希清单。
 
 ## 2. Install the source
 
@@ -197,13 +197,13 @@ sudo cp /etc/wps-adapter/wps-adapter.env \
 Native 和 Docker 共用一个卸载脚本。默认会停止并删除适配器服务、应用代码和本项目管理的 Docker 容器，但会保留 `/etc/wps-adapter/wps-adapter.env` 以及 `/etc/wps-adapter/secrets/`，便于以后重新安装：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ```
 
 如果确定不再保留本机配置和凭据，添加 `--purge`。如果还要删除本项目 Docker 镜像，添加 `--remove-image`：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
 ```
 
 脚本会要求输入 `YES` 确认；自动化执行时可以添加 `--yes`。卸载脚本不会删除 Docker 软件，也不会删除 WPS 云盘上的远端文件。如果 Docker daemon 当前不可用，脚本会拒绝执行，启动 Docker 后重新运行即可。

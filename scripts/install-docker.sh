@@ -6,7 +6,6 @@ set -Eeuo pipefail
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
 SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-2026d8faaae5b70c86028534813ecef001c78e7b}"
-SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-d9b267678ccc7510f13c8771b033887d57d60a2cf14d9de85406403ddea5e40a}"
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
@@ -139,14 +138,14 @@ download_file() {
     if has_command curl; then
         curl --fail --show-error --progress-bar --location --max-filesize "$max_filesize" \
             --connect-timeout "$DOWNLOAD_CONNECT_TIMEOUT" --max-time "$DOWNLOAD_MAX_TIME" \
-            --retry 2 --retry-delay 1 --proto-redir '=https' --proto '=https' --tlsv1.2 \
+            --proto-redir '=https' --proto '=https' --tlsv1.2 \
             "$url" -o "$target"
     elif has_command wget; then
         if has_command timeout; then
             timeout "$DOWNLOAD_MAX_TIME" \
-                wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 3 -O "$target" "$url"
+                wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 1 -O "$target" "$url"
         else
-            wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 3 -O "$target" "$url"
+            wget -T "$DOWNLOAD_CONNECT_TIMEOUT" -t 1 -O "$target" "$url"
         fi
     else
         die "缺少 curl 或 wget，无法下载项目归档"
@@ -155,28 +154,12 @@ download_file() {
 
 download_archive() {
     local direct_url="$REPOSITORY/archive/$SOURCE_REF.tar.gz"
-    local candidate index=0 total
-    local candidates=()
-    [[ -n "${WPS_ADAPTER_ARCHIVE_URL:-}" ]] && candidates+=("$WPS_ADAPTER_ARCHIVE_URL")
-    candidates+=(
-        "https://ghfast.top/$direct_url"
-        "https://gh-proxy.com/$direct_url"
-        "$direct_url"
-    )
-    total="${#candidates[@]}"
-    for candidate in "${candidates[@]}"; do
-        ((index += 1))
-        printf '尝试下载源代码（地址 %d/%d）\n' "$index" "$total"
-        rm -f -- "$ARCHIVE"
-        if download_file "$candidate" "$ARCHIVE" \
-            && tar -tzf "$ARCHIVE" >/dev/null 2>&1 \
-            && tar -xOf "$ARCHIVE" "WPS_2_WebDAV-$SOURCE_REF/release-manifest.txt" \
-                | sha256sum -c <(printf '%s  -\n' "$SOURCE_MANIFEST_SHA256") >/dev/null 2>&1; then
-            return 0
-        fi
-        printf '该下载地址不可用，准备尝试下一个地址。\n' >&2
-    done
-    die "项目归档下载失败；可设置 WPS_ADAPTER_ARCHIVE_URL 指定可访问的归档地址"
+    local url="${WPS_ADAPTER_ARCHIVE_URL:-https://ghfast.top/$direct_url}"
+    printf '下载源代码：%s\n' "$url"
+    download_file "$url" "$ARCHIVE" \
+        || die "项目归档下载失败"
+    tar -tzf "$ARCHIVE" >/dev/null 2>&1 \
+        || die "项目归档不是可读取的 tar.gz 文件"
 }
 
 health_check() {
@@ -279,29 +262,15 @@ docker_pull() {
 }
 
 prepare_go_builder_image() {
-    local candidate
-    local candidates=()
-    [[ -n "${WPS_ADAPTER_GO_BUILDER_IMAGE:-}" ]] \
-        && candidates+=("$WPS_ADAPTER_GO_BUILDER_IMAGE")
-    candidates+=(
-        "docker.m.daocloud.io/library/golang:1.25.0"
-        "dockerproxy.net/library/golang:1.25.0"
-        "mirror.ccs.tencentyun.com/library/golang:1.25.0"
-        "golang:1.25.0"
-    )
-    for candidate in "${candidates[@]}"; do
-        printf '准备 Go 构建镜像：%s\n' "$candidate"
-        if ! docker image inspect "$candidate" >/dev/null 2>&1; then
-            docker_pull "$candidate" || {
-                printf '该基础镜像地址不可用，准备尝试下一个地址。\n' >&2
-                continue
-            }
-        fi
-        docker tag "$candidate" "$LOCAL_BUILDER_IMAGE"
-        DOCKER_BUILDER_IMAGE="$LOCAL_BUILDER_IMAGE"
-        return 0
-    done
-    die "Go 构建镜像下载失败；可设置 WPS_ADAPTER_GO_BUILDER_IMAGE 指定可访问的镜像"
+    local image="${WPS_ADAPTER_GO_BUILDER_IMAGE:-docker.m.daocloud.io/library/golang:1.25.0}"
+    printf '准备 Go 构建镜像：%s\n' "$image"
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+        docker_pull "$image" \
+            || die "Go 构建镜像下载失败；可设置 WPS_ADAPTER_GO_BUILDER_IMAGE 指定可访问的镜像"
+    fi
+    docker tag "$image" "$LOCAL_BUILDER_IMAGE" \
+        || die "Go 构建镜像标记失败"
+    DOCKER_BUILDER_IMAGE="$LOCAL_BUILDER_IMAGE"
 }
 
 usage() {
@@ -316,8 +285,6 @@ usage() {
   --adapter-user USER 适配器 Basic Auth 用户名
   --run-user USER      容器运行用户，默认执行 sudo 的当前用户
   --source-ref SHA     要安装的 40 位 Git 提交号（默认使用脚本内固定版本）
-  --source-manifest-sha256 SHA256
-                       归档内容清单的 SHA-256（用于自定义 source-ref）
   --replace-native    停用同名的原生服务
   --help              显示帮助
 
@@ -375,12 +342,6 @@ while (($# > 0)); do
             shift 2
             ;;
         --source-ref=*) SOURCE_REF="${1#*=}"; shift ;;
-        --source-manifest-sha256)
-            (($# >= 2)) || die "--source-manifest-sha256 缺少参数"
-            SOURCE_MANIFEST_SHA256="$2"
-            shift 2
-            ;;
-        --source-manifest-sha256=*) SOURCE_MANIFEST_SHA256="${1#*=}"; shift ;;
         --replace-native) REPLACE_NATIVE=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) die "未知参数：$1" ;;
@@ -396,14 +357,13 @@ done
 
 progress_step "检查运行环境和安装参数"
 
-if ! has_command curl || ! has_command tar || ! has_command sha256sum \
+if ! has_command curl || ! has_command tar \
     || ! has_command find; then
     detect_package_manager || die "缺少安装依赖，且未识别 apt、dnf、yum、apk、pacman、zypper 或 xbps-install"
     install_docker_dependencies
 fi
 has_command curl || has_command wget || die "缺少 curl 或 wget，无法下载项目归档"
 has_command tar || die "缺少 tar，无法解压项目归档"
-has_command sha256sum || die "缺少 sha256sum；请安装 coreutils 或提供该命令"
 
 if ! has_command docker; then
     detect_package_manager || die "没有 Docker，且未识别可用的软件包管理器"
@@ -498,9 +458,6 @@ validate_safe_value() {
 }
 
 [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]] || die "source-ref 必须是 40 位 Git 提交号"
-[[ "$SOURCE_MANIFEST_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
-    || die "source-manifest-sha256 必须是 64 位 SHA-256"
-
 OLD_PORT="$(read_env_value ADAPTER_PORT || true)"
 OLD_BIND="$(read_env_value ADAPTER_BIND || true)"
 OLD_GROUP_ID="$(read_env_value WPS_GROUP_ID || true)"
@@ -688,7 +645,7 @@ chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
 install -d -m 700 "$RESUME_DIR"
 progress_step "下载并显示项目归档进度"
 download_archive
-progress_step "校验归档清单和文件完整性"
+progress_step "检查归档内容和文件类型"
 archive_members_are_safe "$ARCHIVE" \
     || die "下载的项目归档包含不安全的路径"
 tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
@@ -703,22 +660,6 @@ archive_tree_is_safe() {
 }
 archive_tree_is_safe "$SOURCE_DIR" \
     || die "下载的项目包含不允许的特殊文件或符号链接"
-MANIFEST_FILE="$SOURCE_DIR/release-manifest.txt"
-[[ -f "$MANIFEST_FILE" ]] || die "下载的项目缺少内容清单"
-MANIFEST_DIGEST="$(sha256sum "$MANIFEST_FILE" | awk '{print $1}')"
-[[ "${MANIFEST_DIGEST,,}" == "${SOURCE_MANIFEST_SHA256,,}" ]] \
-    || die "下载归档的内容清单校验失败"
-MANIFEST_FILES="$TMP_DIR/manifest.files"
-ACTUAL_FILES="$TMP_DIR/actual.files"
-awk 'length($0) >= 67 { print substr($0, 67) }' "$MANIFEST_FILE" | LC_ALL=C sort >"$MANIFEST_FILES"
-(
-    cd "$SOURCE_DIR"
-    find . -type f -print
-) | sed 's#^\./##' | awk '$0 != "release-manifest.txt" && $0 != "scripts/install-native.sh" && $0 != "scripts/install-docker.sh"' \
-    | LC_ALL=C sort >"$ACTUAL_FILES"
-cmp -s "$MANIFEST_FILES" "$ACTUAL_FILES" || die "下载归档的文件清单与预期不一致"
-(cd "$SOURCE_DIR" && sha256sum -c release-manifest.txt >/dev/null) \
-    || die "下载归档的文件校验失败"
 [[ -f "$SOURCE_DIR/deploy/Dockerfile" ]] || die "下载的项目缺少 Dockerfile"
 [[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
 

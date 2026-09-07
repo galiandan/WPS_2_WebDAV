@@ -26,22 +26,22 @@ WPS 企业云盘 -> Go 适配器 -> 网页 / WebDAV / REST
 Native（推荐，运行时不需要 Docker）：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
 ~~~
 
 Docker：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ~~~
 
 安装器会显示阶段进度和下载进度，并在首次安装时询问网页/WebDAV 共用的 Basic Auth 用户名和密码。密码不会显示，请记住它。
 
-Native 安装器不要求 VPS 预装 Go：如果系统没有 Go 1.25+，它会从国内 Go 镜像临时下载固定版本、校验 SHA-256、编译静态二进制，安装完成后删除临时工具链。服务运行时只使用编译好的 Go 二进制，不需要 Python、Node.js 或 Go 运行时。
+Native 安装器不要求 VPS 预装 Go：如果系统没有 Go 1.25+，它会从国内 Go 镜像临时下载固定版本、编译静态二进制，安装完成后删除临时工具链。服务运行时只使用编译好的 Go 二进制，不需要 Python、Node.js 或 Go 运行时。
 
 Docker 安装器会从国内 Docker 镜像获取 Go 构建镜像，最终容器只包含服务二进制和 CA 证书；你的个人电脑不需要安装 Docker。
 
-如果 ghfast.top 当前不可访问，可以把命令中的 ghfast.top 替换为国内备用节点 gh-proxy.com。两种安装器还会在内部校验固定提交的归档清单和文件 SHA-256，下载失败会自动尝试其他地址。不要把未知网页中的安装命令直接交给 root。
+安装器默认只访问命令中显示的国内加速地址；网络不可用时不会静默切换到其他地址。也不会执行项目归档或 Go 工具链的哈希校验。不要把未知网页中的安装命令直接交给 root。
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
@@ -50,7 +50,7 @@ Docker 安装器会从国内 Docker 镜像获取 Go 构建镜像，最终容器�
 只下载一个登录脚本，不需要 clone 整个项目：
 
 ~~~bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
+curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
 ~~~
 
 电脑需要 Python 3.11+、Chrome 或 Chromium。脚本会询问：
@@ -138,7 +138,7 @@ https://<你的域名>/dav/
 安装器支持自定义端口。例如：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
 ~~~
 
 登录助手中的端口也必须填写 18080，不能继续使用默认的 54321。
@@ -170,13 +170,13 @@ CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
 默认卸载服务、程序和本项目管理的容器，但保留本机配置、Basic Auth、Cookie、CSRF 和工作区文件，方便以后重新安装：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ~~~
 
 确认连同本机凭据一起删除：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
 ~~~
 
 卸载不会删除 Docker 软件，也不会删除 WPS 云盘中的远端文件。脚本会要求输入 YES；自动化场景可额外添加 --yes。
@@ -190,7 +190,6 @@ deploy/          systemd 加固文件和 Docker 构建配置
 wps_login.py     独立 WPS 登录/凭据同步助手
 docs/            使用、接口、架构、部署和研究文档
 contract_tests/  脱敏 JSON 契约金标准，供 Go 回归测试读取
-tools/            发布清单校验工具
 ~~~
 
 ## 当前限制

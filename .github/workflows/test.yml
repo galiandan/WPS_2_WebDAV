@@ -28,5 +28,3 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
       - name: Check shell installers
         run: bash -n scripts/install-native.sh scripts/install-docker.sh scripts/uninstall.sh
-      - name: Check release manifest
-        run: bash tools/build-release-manifest.sh --check

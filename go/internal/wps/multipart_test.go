@@ -443,8 +443,7 @@ func TestMultipartPartInstructionValidation(t *testing.T) {
 		{"null expect code", `{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file"},"response":{"expect_code":null}}`, "WPS operation failed: unsupported multipart part status"},
 		{"empty expect code", `{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file"},"response":{"expect_code":[]}}`, "WPS operation failed: unsupported multipart part status"},
 		{"headers missing", `{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file"},"response":{"expect_code":[200]}}`, "WPS operation failed: multipart part headers missing"},
-		{"md5 mismatch", `{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file","headers":{"Content-MD5":"bGll","Content-Type":"application/octet-stream"}},"response":{"expect_code":[200]}}`, "WPS operation failed: multipart part headers do not match content"},
-		{"content type mismatch", `{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file","headers":{"Content-MD5":"` + md5Part1Base64 + `","Content-Type":"text/plain"}},"response":{"expect_code":[200]}}`, "WPS operation failed: multipart part headers do not match content"},
+		{"content type mismatch", `{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file","headers":{"Content-MD5":"` + md5Part1Base64 + `","Content-Type":"text/plain"}},"response":{"expect_code":[200]}}`, "WPS operation failed: multipart part content type does not match instruction"},
 	}
 	for _, face := range faces {
 		t.Run(face.name, func(t *testing.T) {
@@ -465,11 +464,11 @@ func TestMultipartPartInstructionValidation(t *testing.T) {
 			}
 		})
 	}
-	t.Run("lowercase headers accepted", func(t *testing.T) {
+	t.Run("instruction MD5 is forwarded without local comparison", func(t *testing.T) {
 		control := []scriptedResponse{
 			{status: 200, body: []byte(`{"result":"ok"}`)},
 			multipartInitScript("u1"),
-			{status: 200, body: []byte(`{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file","headers":{"content-md5":"` + md5Part1Base64 + `","content-type":"application/octet-stream"}},"response":{"expect_code":[200]}}`)},
+			{status: 200, body: []byte(`{"result":"ok","url":"https://hwc-bj.ag.kdocs.cn/p","method":"PUT","request":{"body_type":"file","headers":{"content-md5":"bGll","content-type":"application/octet-stream"}},"response":{"expect_code":[200]}}`)},
 			multipartPartScript(md5Part2Base64, 2),
 			multipartMergeScript(),
 			{status: 200, body: []byte(registerEntryPayload)},

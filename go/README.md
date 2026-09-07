@@ -56,8 +56,8 @@ CGO_ENABLED=0 go build -trimpath \
 ## 运行约束
 
 服务使用纯 Go、`CGO_ENABLED=0` 单二进制构建，不需要 Python、Node.js 或运行时
-依赖。Native 安装器会优先使用主机 Go `1.25+`，否则自动下载并校验固定版本的
-Go 工具链；Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。
+依赖。Native 安装器会优先使用主机 Go `1.25+`，否则从单一国内地址下载固定版本的
+Go 工具链；Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。安装器不执行发布归档或工具链哈希校验。
 
 网页登录和 WebDAV 共用同一个 Basic Auth。WPS Cookie、CSRF、workspace 和
 refresh 轮换文件由配置指定，服务不会把它们写入日志。所有上传、下载、目录

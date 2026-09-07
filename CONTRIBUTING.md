@@ -20,7 +20,6 @@ go vet ./...
 CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
 cd ..
 bash -n scripts/install-native.sh scripts/install-docker.sh scripts/uninstall.sh
-bash tools/build-release-manifest.sh --check
 git diff --check
 ```
 

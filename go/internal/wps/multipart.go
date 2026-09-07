@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"crypto/md5"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -508,9 +507,10 @@ func (c *Client) reinitializeMultipart(spool *uploadSpool, groupText string, par
 }
 
 // uploadMultipartPart mirrors one part attempt: the exact PUT body, the
-// instruction validation in client.py's order, the Content-MD5 agreement
-// check, and the credential-free signed PUT that returns the normalized
-// ETag.
+// instruction validation in client.py's order, and the credential-free signed
+// PUT that returns the normalized ETag. The Content-MD5 value is passed
+// through exactly as instructed by WPS; it is not compared locally with the
+// body.
 func (c *Client) uploadMultipartPart(partNumber int64, data []byte, md5Sum [md5.Size]byte, state *multipartState, options *UploadOptions, csrf string) (string, error) {
 	body := &pyObject{
 		keys: []string{"key", "md5", "part_number", "part_size", "req_by_internal", "store", "upload_id", "csrfmiddlewaretoken"},
@@ -563,11 +563,13 @@ func (c *Client) uploadMultipartPart(partNumber int64, data []byte, md5Sum [md5.
 	}
 	contentMD5Value, _ := firstHeaderValue(partHeaders, "Content-MD5", "content-md5")
 	contentTypeValue, _ := firstHeaderValue(partHeaders, "Content-Type", "content-type")
-	expectedMD5 := base64.StdEncoding.EncodeToString(md5Sum[:])
 	contentMD5, _ := contentMD5Value.(string)
 	contentType, _ := contentTypeValue.(string)
-	if contentMD5 != expectedMD5 || contentType != "application/octet-stream" {
-		return "", model.NewWpsAPIError("multipart part headers do not match content", 0, model.WpsCategoryUpstream)
+	if contentMD5 == "" {
+		return "", model.NewWpsAPIError("multipart part Content-MD5 header missing", 0, model.WpsCategoryUpstream)
+	}
+	if contentType != "application/octet-stream" {
+		return "", model.NewWpsAPIError("multipart part content type does not match instruction", 0, model.WpsCategoryUpstream)
 	}
 	return c.putSignedPart(partURL, data, contentMD5)
 }

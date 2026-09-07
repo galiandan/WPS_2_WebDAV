@@ -18,7 +18,7 @@ HTTP/HTTPS 直接同步不需要 SSH。远程 HTTPS 是推荐方式；没有域�
 直接下载并运行单文件助手：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
+curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
 ```
 
 如果 `ghfast.top` 无法访问，把命令中的 `ghfast.top` 替换为 `gh-proxy.com`。如果已经下载过脚本，也可以只运行 `python3 wps_login.py`。
