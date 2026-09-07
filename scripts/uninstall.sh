@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Remove the Native and Docker installations created by this project.
-# Credentials/configuration are retained unless --purge is explicitly used.
+# This command always removes local configuration and credentials.
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
@@ -17,11 +17,14 @@ WANTS_LINK="/etc/systemd/system/multi-user.target.wants/wps-adapter.service"
 CONTAINER_NAME="wps-adapter"
 IMAGE_NAME="wps-enterprise-adapter:latest"
 
-PURGE=0
+# Kept only so older commands using --purge continue to work. Uninstall is
+# always destructive for local configuration now.
+PURGE=1
 ASSUME_YES=0
 REMOVE_IMAGE=0
 SYSTEMD_RUNNING=0
 DOCKER_READY=0
+DOCKER_SKIPPED=0
 UNIT_MANAGED=0
 CONTAINER_MANAGED=0
 MANAGED_IMAGE_ID=""
@@ -52,13 +55,12 @@ usage() {
 用法：uninstall.sh [选项]
 
 默认行为：
-  停止并删除 WPS 适配器服务、应用文件和本项目管理的 Docker 容器。
-  保留 /etc/wps-adapter/wps-adapter.env 和 /etc/wps-adapter/secrets/，
-  这样以后重新安装时仍可继续使用原来的凭据。
+  自动处理 Native 服务和 Docker 容器，删除服务、应用文件、配置和本机凭据。
+  如果主机没有 Docker，会自动跳过 Docker 容器和镜像部分，继续卸载 Native。
 
 选项：
-  --purge        同时删除配置、Cookie、CSRF、Basic Auth 和工作区文件
-  --remove-image 删除本项目 Docker 镜像 wps-enterprise-adapter:latest
+  --purge        兼容旧命令；现在所有卸载都会删除配置和凭据
+  --remove-image 删除本项目 Docker 镜像；没有 Docker 时自动跳过
   --yes          跳过确认提示；适合已经明确确认目标的自动化执行
   --help         显示帮助
 
@@ -168,13 +170,14 @@ validate_targets() {
 
 inspect_docker() {
     if ! has_command docker; then
-        if (( REMOVE_IMAGE )); then
-            die "未找到 Docker 命令，无法执行 --remove-image"
-        fi
+        DOCKER_SKIPPED=1
+        warn "未找到 Docker 命令，跳过 Docker 容器和镜像清理"
         return 0
     fi
     if ! docker info >/dev/null 2>&1; then
-        die "无法连接 Docker daemon；为避免留下未清理的容器，请启动 Docker 后重新运行卸载脚本"
+        DOCKER_SKIPPED=1
+        warn "无法连接 Docker daemon，跳过 Docker 容器和镜像清理"
+        return 0
     fi
     DOCKER_READY=1
     if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
@@ -193,11 +196,7 @@ confirm() {
         || die "当前终端不能确认卸载；确认目标后请添加 --yes"
     printf '\n即将卸载 WPS 适配器。\n' > /dev/tty
     printf '将删除：服务、应用代码和本项目管理的 Docker 容器。\n' > /dev/tty
-    if (( PURGE )); then
-        printf '将额外删除：配置、Cookie、CSRF、Basic Auth 和工作区文件。\n' > /dev/tty
-    else
-        printf '将保留：%s 和其中的凭据，便于以后重新安装。\n' "$SECRET_DIR" > /dev/tty
-    fi
+    printf '将删除：配置、Cookie、CSRF、Basic Auth 和工作区文件。\n' > /dev/tty
     printf '确认请输入 YES：' > /dev/tty
     local answer
     IFS= read -r answer < /dev/tty || die "读取确认失败"
@@ -276,15 +275,9 @@ remove_image() {
 }
 
 remove_configuration() {
-    if (( PURGE )); then
-        if [[ -d "$ETC_DIR" ]]; then
-            rm -rf -- "$ETC_DIR"
-        fi
-        return 0
+    if [[ -d "$ETC_DIR" ]]; then
+        rm -rf -- "$ETC_DIR"
     fi
-    # Keep ENV_FILE and SECRET_DIR for a future reinstall. Remove only files
-    # created solely for running the current installation.
-    rmdir -- "$ETC_DIR" >/dev/null 2>&1 || true
 }
 
 progress_step "检查卸载目标和运行状态"
@@ -306,14 +299,11 @@ remove_image
 remove_configuration
 
 printf '\nWPS 适配器卸载完成。\n'
-printf '已删除服务和应用文件。\n'
-if (( PURGE )); then
-    printf '已删除配置和凭据。\n'
-else
-    printf '已保留配置和凭据：%s\n' "$SECRET_DIR"
-fi
+printf '已删除服务、应用文件、配置和本机凭据。\n'
 if (( REMOVE_IMAGE )); then
-    if (( INCOMPLETE )); then
+    if (( DOCKER_SKIPPED )); then
+        printf '未处理 Docker 镜像：主机没有可用的 Docker。\n'
+    elif (( INCOMPLETE )); then
         printf '部分 Docker 镜像未删除，请按上面的警告处理。\n' >&2
     else
         printf '已处理 Docker 镜像：%s\n' "$IMAGE_NAME"

@@ -167,19 +167,19 @@ CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
 
 ## 卸载
 
-默认卸载服务、程序和本项目管理的容器，但保留本机配置、Basic Auth、Cookie、CSRF 和工作区文件，方便以后重新安装：
+卸载脚本会自动识别 Native 和 Docker，删除服务、程序、本机配置、Basic Auth、Cookie、CSRF 和工作区文件：
 
 ~~~bash
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ~~~
 
-确认连同本机凭据一起删除：
+如果还安装过 Docker，并希望同时删除本项目镜像：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --remove-image
 ~~~
 
-卸载不会删除 Docker 软件，也不会删除 WPS 云盘中的远端文件。脚本会要求输入 YES；自动化场景可额外添加 --yes。
+卸载不会删除 Docker 软件，也不会删除 WPS 云盘中的远端文件。没有 Docker 时会自动跳过容器和镜像清理。脚本会要求输入 YES；自动化场景可额外添加 --yes。
 
 ## 项目目录
 

@@ -194,16 +194,16 @@ sudo cp /etc/wps-adapter/wps-adapter.env \
 
 ## 9. Uninstall
 
-Native 和 Docker 共用一个卸载脚本。默认会停止并删除适配器服务、应用代码和本项目管理的 Docker 容器，但会保留 `/etc/wps-adapter/wps-adapter.env` 以及 `/etc/wps-adapter/secrets/`，便于以后重新安装：
+Native 和 Docker 共用一个卸载脚本。脚本会自动识别两种部署方式，停止并删除适配器服务、应用代码、配置和 `/etc/wps-adapter/secrets/` 中的本机凭据：
 
 ```bash
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ```
 
-如果确定不再保留本机配置和凭据，添加 `--purge`。如果还要删除本项目 Docker 镜像，添加 `--remove-image`：
+如果还要删除本项目 Docker 镜像，添加 `--remove-image`：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --remove-image
 ```
 
-脚本会要求输入 `YES` 确认；自动化执行时可以添加 `--yes`。卸载脚本不会删除 Docker 软件，也不会删除 WPS 云盘上的远端文件。如果 Docker daemon 当前不可用，脚本会拒绝执行，启动 Docker 后重新运行即可。
+脚本会要求输入 `YES` 确认；自动化执行时可以添加 `--yes`。卸载脚本不会删除 Docker 软件，也不会删除 WPS 云盘上的远端文件。如果没有 Docker 命令或 Docker daemon 不可用，会跳过容器和镜像清理，但继续删除 Native 和本机配置。
