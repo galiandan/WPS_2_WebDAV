@@ -12,5 +12,5 @@ func diskFreeBytes(path string) (int64, error) {
 	if err := syscall.Statfs(path, &fs); err != nil {
 		return 0, err
 	}
-	return int64(fs.Bavail) * fs.Frsize, nil
+	return int64(fs.Bavail) * int64(fs.Frsize), nil
 }

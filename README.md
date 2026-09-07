@@ -37,13 +37,15 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 
 安装器会显示阶段进度和下载进度，并在首次安装时询问网页/WebDAV 共用的 Basic Auth 用户名和密码。密码不会显示，请记住它。
 
-Native 安装器不要求 VPS 预装 Go：如果系统没有 Go 1.25+，它会从国内 Go 镜像临时下载固定版本、编译静态二进制，安装完成后删除临时工具链。服务运行时只使用编译好的 Go 二进制，不需要 Python、Node.js 或 Go 运行时。
+Native 安装器不要求 VPS 预装 Go：它会先从国内加速的 GitHub Release 下载对应 Linux 架构的预编译静态二进制。只有预编译文件下载失败、无法执行或当前架构没有资产时，才会从源码现场编译；这时优先使用主机已有的 Go 1.25+，否则临时下载 Go 工具链，完成后删除。服务运行时只使用编译好的 Go 二进制，不需要 Python、Node.js 或 Go 运行时。
 
-Docker 安装器会从国内 Docker 镜像获取 Go 构建镜像，并在发行版提供时自动安装 Docker Buildx；最终容器只包含服务二进制和 CA 证书，你的个人电脑不需要安装 Docker。Buildx 可用时使用 Buildx 构建，旧发行版会自动使用兼容构建器。
+Docker 安装器也会先下载预编译二进制并制作最小运行镜像；只有二进制或运行镜像制作失败时，才从国内 Docker 镜像获取 Go 构建镜像并现场编译。最终容器只包含服务二进制和 CA 证书，你的个人电脑不需要安装 Docker。Buildx 可用时使用 Buildx 构建，旧发行版会自动使用兼容构建器。
 
-安装器默认只访问命令中显示的国内加速地址；网络不可用时不会静默切换到其他地址。也不会执行项目归档或 Go 工具链的哈希校验。不要把未知网页中的安装命令直接交给 root。
+安装器默认只访问命令中显示的国内加速地址；网络不可用时不会静默切换到其他地址。预编译资产不可用时会明确显示“回退到源码现场编译”，也不会执行项目归档、二进制或 Go 工具链的哈希校验。不要把未知网页中的安装命令直接交给 root。
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
+
+预编译 Release 默认使用 `v0.9.9`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 

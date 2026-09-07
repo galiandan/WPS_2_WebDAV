@@ -15,26 +15,28 @@ go test -race ./...
 CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
-发布目标是 Linux `amd64` 和 `arm64`。本地交叉构建：
+发布目标是 Linux `amd64`、`arm64`、`386`、`armv6`、`armv7`、`ppc64le`、`riscv64` 和 `s390x`。本地交叉构建示例：
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/wps-adapter-linux-amd64 ./cmd/wps-adapter
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/wps-adapter-linux-arm64 ./cmd/wps-adapter
 ```
 
+带 `v` 前缀的 Git 标签会触发 `.github/workflows/release-binaries.yml`，自动生成上述 Linux 静态二进制并上传到 GitHub Release。Native/Docker 安装器优先下载这些资产；下载失败时才回退到源码和 Go 工具链现场构建。安装器不执行二进制或源码归档哈希校验，但会检查二进制是否可执行并能输出版本信息。
+
 ## 构建元数据
 
-默认版本为 `0.9.8`。发布构建应注入提交号和 UTC 构建时间：
+默认版本为 `0.9.9`。发布构建应注入提交号和 UTC 构建时间：
 
 ```sh
 CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-s -w -X main.version=0.9.8 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -ldflags "-s -w -X main.version=0.9.9 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
 ```sh
 /tmp/wps-adapter --version
-# 0.9.8 commit=<commit> build_time=<UTC时间>
+# 0.9.9 commit=<commit> build_time=<UTC时间>
 ```
 
 ## 命令
@@ -56,8 +58,10 @@ CGO_ENABLED=0 go build -trimpath \
 ## 运行约束
 
 服务使用纯 Go、`CGO_ENABLED=0` 单二进制构建，不需要 Python、Node.js 或运行时
-依赖。Native 安装器会优先使用主机 Go `1.25+`，否则从单一国内地址下载固定版本的
-Go 工具链；Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。安装器不执行发布归档或工具链哈希校验。
+依赖。Native/Docker 安装器会优先下载对应架构的预编译二进制；只有预编译路径失败时，
+Native 才使用主机 Go `1.25+` 或下载固定版本的 Go 工具链，Docker 才下载 Go 构建镜像。
+Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。安装器不执行发布归档、二进制
+或工具链哈希校验。
 
 网页登录和 WebDAV 共用同一个 Basic Auth。WPS Cookie、CSRF、workspace 和
 refresh 轮换文件由配置指定，服务不会把它们写入日志。所有上传、下载、目录

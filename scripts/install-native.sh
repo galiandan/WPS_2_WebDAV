@@ -5,7 +5,12 @@ set -Eeuo pipefail
 # falls back to a portable background process on systems without systemd.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-1a809c744d37901ee6f95a232ce08caeb33bc349}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-2ce25559c246d44d6b8c4893f721083618443913}"
+# Release assets are preferred. The source path below remains the complete
+# fallback for hosts that cannot reach the binary mirror or have an unsupported
+# prebuilt architecture.
+BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v0.9.9}"
+BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 # The service is built with a fixed toolchain only when the host does not
 # already provide a compatible Go compiler. The toolchain stays in the
 # installer's private temporary directory and is never installed system-wide.
@@ -34,6 +39,9 @@ SERVICE_FILE="/etc/systemd/system/wps-adapter.service"
 OVERRIDE_FILE="/etc/systemd/system/wps-adapter.service.d/override.conf"
 OVERRIDE_DIR="/etc/systemd/system/wps-adapter.service.d"
 SERVICE_MODE="direct"
+USE_PREBUILT=0
+BINARY_ASSET=""
+BINARY_FILE=""
 
 die() {
     printf '安装失败：%s\n' "$*" >&2
@@ -161,6 +169,21 @@ linux_go_target() {
     esac
 }
 
+linux_binary_target() {
+    BINARY_ASSET=""
+    case "$(uname -m)" in
+        x86_64|amd64) BINARY_ASSET="amd64" ;;
+        aarch64|arm64) BINARY_ASSET="arm64" ;;
+        armv7l|armv8l) BINARY_ASSET="armv7" ;;
+        armv6l) BINARY_ASSET="armv6" ;;
+        i386|i686) BINARY_ASSET="386" ;;
+        ppc64le) BINARY_ASSET="ppc64le" ;;
+        riscv64) BINARY_ASSET="riscv64" ;;
+        s390x) BINARY_ASSET="s390x" ;;
+        *) return 1 ;;
+    esac
+}
+
 download_file() {
     local url="$1"
     local target="$2"
@@ -201,6 +224,32 @@ download_go_toolchain() {
     tar -xzf "$archive" -C "$TMP_DIR" \
         || die "Go ${GO_VERSION} 工具链解压失败"
     [[ -x "$GO_BIN" ]] || die "Go 工具链解压后不可用"
+}
+
+download_prebuilt_binary() {
+    linux_binary_target || {
+        printf '提示：当前 Linux CPU 架构没有对应预编译二进制。\n' >&2
+        return 1
+    }
+    local base_url="${BINARY_BASE_URL:-https://ghfast.top/$REPOSITORY/releases/download/$BINARY_RELEASE_TAG}"
+    base_url="${base_url%/}"
+    local url="$base_url/wps-adapter-linux-$BINARY_ASSET"
+    local partial="$TMP_DIR/wps-adapter.binary.part"
+    BINARY_FILE="$TMP_DIR/wps-adapter"
+    printf '尝试下载预编译二进制（Linux/%s）：%s\n' "$BINARY_ASSET" "$url"
+    rm -f -- "$partial" "$BINARY_FILE"
+    if ! download_file "$url" "$partial" 52428800; then
+        rm -f -- "$partial"
+        return 1
+    fi
+    chmod 755 "$partial"
+    if ! "$partial" --version >/dev/null 2>&1; then
+        printf '提示：下载的预编译文件无法执行。\n' >&2
+        rm -f -- "$partial"
+        return 1
+    fi
+    mv -f -- "$partial" "$BINARY_FILE"
+    return 0
 }
 
 download_archive() {
@@ -358,12 +407,14 @@ usage() {
 
 环境变量：
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
+  WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
+  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v0.9.9
   WPS_ADAPTER_GO_URL                   自定义 Go 工具链 HTTPS 地址
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
 
 Native 构建：
-  主机已有 Go 1.25 或更高版本时优先使用；否则从单一地址下载 Go ${GO_VERSION}，不会安装 Python。
+  优先下载对应架构的静态预编译二进制；失败后才使用主机 Go 1.25+，或下载 Go ${GO_VERSION} 和源码现场编译。
 
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
 EOF
@@ -528,6 +579,7 @@ validate_safe_value() {
 }
 
 [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]] || die "source-ref 必须是 40 位 Git 提交号"
+[[ "$BINARY_RELEASE_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || die "binary-release-tag 格式不正确"
 OLD_PORT="$(read_env_value ADAPTER_PORT || true)"
 OLD_BIND="$(read_env_value ADAPTER_BIND || true)"
 OLD_GROUP_ID="$(read_env_value WPS_GROUP_ID || true)"
@@ -611,16 +663,9 @@ TMP_DIR="$(mktemp -d -p "$APP_PARENT" -t wps-adapter-install.XXXXXX)"
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
-mkdir -p "$SOURCE_DIR"
 mkdir -p /var/lib/wps-adapter/uploads
 chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
 install -d -m 700 "$RESUME_DIR"
-progress_step "下载并显示项目归档进度"
-download_archive
-progress_step "检查归档内容和文件类型"
-archive_members_are_safe "$ARCHIVE" \
-    || die "下载的项目归档包含不安全的路径"
-tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
 archive_tree_is_safe() {
     local root="$1"
     local path
@@ -630,21 +675,42 @@ archive_tree_is_safe() {
         [[ -f "$path" || -d "$path" ]] || return 1
     done < <(find "$root" -print)
 }
-archive_tree_is_safe "$SOURCE_DIR" \
-    || die "下载的项目包含不允许的特殊文件或符号链接"
-[[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
-[[ -f "$SOURCE_DIR/go/go.mod" && -f "$SOURCE_DIR/go/cmd/wps-adapter/main.go" ]] \
-    || die "下载的项目缺少 Go 服务源码"
-if [[ "$SERVICE_MODE" == "systemd" ]]; then
-    [[ -f "$SOURCE_DIR/deploy/wps-adapter.service" ]] || die "下载的项目缺少 systemd 服务文件"
-    [[ -f "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" ]] || die "下载的项目缺少 systemd 安全配置"
-    [[ -f "$SOURCE_DIR/deploy/wps-adapter-hardening.env" ]] || die "下载的项目缺少安全环境变量配置"
+
+progress_step "下载预编译服务（失败后回退源码编译）"
+if download_prebuilt_binary; then
+    USE_PREBUILT=1
+    printf '预编译二进制下载成功，将跳过 Go 和源码下载。\n'
+else
+    printf '预编译二进制不可用，回退到源码现场编译。\n'
+    mkdir -p "$SOURCE_DIR"
+    download_archive
+fi
+
+progress_step "检查安装内容"
+if (( USE_PREBUILT == 0 )); then
+    archive_members_are_safe "$ARCHIVE" \
+        || die "下载的项目归档包含不安全的路径"
+    tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
+    archive_tree_is_safe "$SOURCE_DIR" \
+        || die "下载的项目包含不允许的特殊文件或符号链接"
+    [[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
+    [[ -f "$SOURCE_DIR/go/go.mod" && -f "$SOURCE_DIR/go/cmd/wps-adapter/main.go" ]] \
+        || die "下载的项目缺少 Go 服务源码"
+    if [[ "$SERVICE_MODE" == "systemd" ]]; then
+        [[ -f "$SOURCE_DIR/deploy/wps-adapter.service" ]] || die "下载的项目缺少 systemd 服务文件"
+        [[ -f "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" ]] || die "下载的项目缺少 systemd 安全配置"
+        [[ -f "$SOURCE_DIR/deploy/wps-adapter-hardening.env" ]] || die "下载的项目缺少安全环境变量配置"
+    fi
+else
+    [[ -x "$BINARY_FILE" ]] || die "预编译二进制文件不可执行"
 fi
 
 ENV_TARGET_FILE="$TMP_DIR/wps-adapter.env"
 progress_step "准备配置和保留现有凭据"
 if [[ -f "$ENV_FILE" ]]; then
     cp -p "$ENV_FILE" "$ENV_TARGET_FILE"
+elif (( USE_PREBUILT )); then
+    : >"$ENV_TARGET_FILE"
 else
     install -o root -g root -m 600 "$SOURCE_DIR/.env.example" "$ENV_TARGET_FILE"
 fi
@@ -662,37 +728,97 @@ chmod 600 "$ENV_TARGET_FILE"
 
 APP_STAGE_DIR="$TMP_DIR/app"
 mkdir -p "$APP_STAGE_DIR"
-cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
 
-progress_step "准备 Go 工具链并构建静态服务"
-linux_go_target
-if [[ -z "$GO_BIN" ]]; then
-    download_go_toolchain
+progress_step "准备预编译服务或现场构建"
+if (( USE_PREBUILT )); then
+    printf '使用预编译静态二进制：Linux/%s\n' "$BINARY_ASSET"
+    install -m 755 "$BINARY_FILE" "$APP_STAGE_DIR/wps-adapter"
 else
-    printf '使用现有 Go 工具链：%s\n' "$GO_BIN"
+    cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
+    linux_go_target
+    if [[ -z "$GO_BIN" ]]; then
+        download_go_toolchain
+    else
+        printf '使用现有 Go 工具链：%s\n' "$GO_BIN"
+    fi
+    GO_BUILD_DIR="$TMP_DIR/go-build"
+    mkdir -p "$GO_BUILD_DIR"
+    GO_BUILD_ENV=(CGO_ENABLED=0 GOTOOLCHAIN=local GOOS=linux GOARCH="$GOARCH")
+    [[ -n "$GOARM" ]] && GO_BUILD_ENV+=(GOARM="$GOARM")
+    (
+        cd "$SOURCE_DIR/go"
+        env "${GO_BUILD_ENV[@]}" \
+            "$GO_BIN" build -trimpath -ldflags "-s -w -X main.commit=$SOURCE_REF" \
+            -o "$GO_BUILD_DIR/wps-adapter" ./cmd/wps-adapter
+    )
+    [[ -x "$GO_BUILD_DIR/wps-adapter" ]] || die "Go 服务构建失败"
+    install -m 755 "$GO_BUILD_DIR/wps-adapter" "$APP_STAGE_DIR/wps-adapter"
 fi
-GO_BUILD_DIR="$TMP_DIR/go-build"
-mkdir -p "$GO_BUILD_DIR"
-GO_BUILD_ENV=(CGO_ENABLED=0 GOTOOLCHAIN=local GOOS=linux GOARCH="$GOARCH")
-[[ -n "$GOARM" ]] && GO_BUILD_ENV+=(GOARM="$GOARM")
-(
-    cd "$SOURCE_DIR/go"
-    env "${GO_BUILD_ENV[@]}" \
-        "$GO_BIN" build -trimpath -ldflags "-s -w -X main.commit=$SOURCE_REF" \
-        -o "$GO_BUILD_DIR/wps-adapter" ./cmd/wps-adapter
-)
-[[ -x "$GO_BUILD_DIR/wps-adapter" ]] || die "Go 服务构建失败"
-install -m 755 "$GO_BUILD_DIR/wps-adapter" "$APP_STAGE_DIR/wps-adapter"
 chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
 
 UNIT_FILE="$TMP_DIR/wps-adapter.service"
+HARDENING_ENV_STAGE="$TMP_DIR/wps-adapter-hardening.env"
 if [[ "$SERVICE_MODE" == "systemd" ]]; then
-    awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" '
-        /^User=/ { print "User=" run_user; next }
-        /^Group=/ { print "Group=" run_group; next }
-        /^ExecStart=/ { print "ExecStart=/opt/wps-adapter/wps-adapter serve"; next }
-        { print }
-    ' "$SOURCE_DIR/deploy/wps-adapter.service" >"$UNIT_FILE"
+    if (( USE_PREBUILT )); then
+        cat >"$UNIT_FILE" <<EOF
+[Unit]
+Description=WPS enterprise cloud drive WebDAV adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$RUN_USER
+Group=$RUN_GROUP
+WorkingDirectory=/opt/wps-adapter
+EnvironmentFile=-/etc/wps-adapter/wps-adapter.env
+ExecStart=/opt/wps-adapter/wps-adapter serve
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/wps-adapter/secrets /var/lib/wps-adapter/uploads
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        printf '%s\n' '[Service]' \
+            'EnvironmentFile=-/etc/wps-adapter/wps-adapter-hardening.env' \
+            >"$TMP_DIR/wps-adapter-hardening.conf"
+        cat >"$HARDENING_ENV_STAGE" <<'EOF'
+# Deployment overrides for the low-memory VPS. No credentials belong here.
+WPS_ENABLE_RANGE=true
+WPS_AUTO_REFRESH=true
+WPS_UPLOAD_SPOOL_MEMORY=8388608
+WPS_UPLOAD_MIN_FREE_BYTES=536870912
+WPS_MAX_UPLOAD_BYTES=1073741824
+WPS_UPLOAD_RETRIES=2
+WPS_UPLOAD_RETRY_DELAY=0.5
+WPS_UPLOAD_RESUME_DIR=/var/lib/wps-adapter/uploads
+WPS_MAX_UPLOADS=2
+WPS_MAX_DOWNLOADS=4
+WPS_TRANSFER_WAIT_TIMEOUT=30
+WPS_MAX_COPY_ENTRIES=10000
+WPS_MAX_COPY_DEPTH=64
+WPS_MAX_PROPFIND_ENTRIES=10000
+WPS_MAX_PROPFIND_DEPTH=64
+WPS_MAX_LOCKS=4096
+WPS_MAX_JSON_RESPONSE_BYTES=8388608
+WPS_MAX_RESPONSE_BODY_BYTES=16777216
+EOF
+    else
+        awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" '
+            /^User=/ { print "User=" run_user; next }
+            /^Group=/ { print "Group=" run_group; next }
+            /^ExecStart=/ { print "ExecStart=/opt/wps-adapter/wps-adapter serve"; next }
+            { print }
+        ' "$SOURCE_DIR/deploy/wps-adapter.service" >"$UNIT_FILE"
+        cp -p "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" "$TMP_DIR/wps-adapter-hardening.conf"
+        cp -p "$SOURCE_DIR/deploy/wps-adapter-hardening.env" "$HARDENING_ENV_STAGE"
+    fi
 fi
 
 STAGED_COOKIE="$TMP_DIR/wps-cookie"
@@ -870,8 +996,8 @@ install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$ENV_TARGET_FILE" "${ENV_FILE}.ne
 mv -f "${ENV_FILE}.new" "$ENV_FILE"
 if [[ "$SERVICE_MODE" == "systemd" ]]; then
     install -o root -g root -m 644 "$UNIT_FILE" "$SERVICE_FILE"
-    install -o root -g root -m 644 "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" "$OVERRIDE_FILE"
-    install -o root -g root -m 600 "$SOURCE_DIR/deploy/wps-adapter-hardening.env" "$HARDENING_ENV_FILE"
+    install -o root -g root -m 644 "$TMP_DIR/wps-adapter-hardening.conf" "$OVERRIDE_FILE"
+    install -o root -g root -m 600 "$HARDENING_ENV_STAGE" "$HARDENING_ENV_FILE"
 fi
 
 service_reload

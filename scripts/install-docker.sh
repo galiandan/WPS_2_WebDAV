@@ -5,7 +5,9 @@ set -Eeuo pipefail
 # the image contains only the dependency-free application code.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-179448b332a924947239359016eb69f644b786aa}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-2ce25559c246d44d6b8c4893f721083618443913}"
+BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v0.9.9}"
+BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
@@ -31,6 +33,9 @@ DOCKER_SERVICE_MODE=""
 DOCKER_BUILDER_IMAGE=""
 LOCAL_BUILDER_IMAGE="wps-adapter-go-builder:1.25.0"
 DOCKER_BUILD_MODE="legacy"
+USE_PREBUILT=0
+BINARY_ASSET=""
+BINARY_FILE=""
 
 die() {
     printf '安装失败：%s\n' "$*" >&2
@@ -188,6 +193,47 @@ download_file() {
     fi
 }
 
+linux_binary_target() {
+    BINARY_ASSET=""
+    case "$(uname -m)" in
+        x86_64|amd64) BINARY_ASSET="amd64" ;;
+        aarch64|arm64) BINARY_ASSET="arm64" ;;
+        armv7l|armv8l) BINARY_ASSET="armv7" ;;
+        armv6l) BINARY_ASSET="armv6" ;;
+        i386|i686) BINARY_ASSET="386" ;;
+        ppc64le) BINARY_ASSET="ppc64le" ;;
+        riscv64) BINARY_ASSET="riscv64" ;;
+        s390x) BINARY_ASSET="s390x" ;;
+        *) return 1 ;;
+    esac
+}
+
+download_prebuilt_binary() {
+    linux_binary_target || {
+        printf '提示：当前 Linux CPU 架构没有对应预编译二进制。\n' >&2
+        return 1
+    }
+    local base_url="${BINARY_BASE_URL:-https://ghfast.top/$REPOSITORY/releases/download/$BINARY_RELEASE_TAG}"
+    base_url="${base_url%/}"
+    local url="$base_url/wps-adapter-linux-$BINARY_ASSET"
+    local partial="$TMP_DIR/wps-adapter.binary.part"
+    BINARY_FILE="$TMP_DIR/wps-adapter"
+    printf '尝试下载预编译二进制（Linux/%s）：%s\n' "$BINARY_ASSET" "$url"
+    rm -f -- "$partial" "$BINARY_FILE"
+    if ! download_file "$url" "$partial" 52428800; then
+        rm -f -- "$partial"
+        return 1
+    fi
+    chmod 755 "$partial"
+    if ! "$partial" --version >/dev/null 2>&1; then
+        printf '提示：下载的预编译文件无法执行。\n' >&2
+        rm -f -- "$partial"
+        return 1
+    fi
+    mv -f -- "$partial" "$BINARY_FILE"
+    return 0
+}
+
 download_archive() {
     local direct_url="$REPOSITORY/archive/$SOURCE_REF.tar.gz"
     local url="${WPS_ADAPTER_ARCHIVE_URL:-https://ghfast.top/$direct_url}"
@@ -309,6 +355,52 @@ prepare_go_builder_image() {
     DOCKER_BUILDER_IMAGE="$LOCAL_BUILDER_IMAGE"
 }
 
+build_prebuilt_application_image() {
+    local certificate=""
+    local candidate
+    for candidate in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem; do
+        if [[ -f "$candidate" ]]; then
+            certificate="$candidate"
+            break
+        fi
+    done
+    if [[ -z "$certificate" ]]; then
+        printf '提示：主机没有找到 CA 证书，无法制作预编译运行镜像。\n' >&2
+        return 1
+    fi
+
+    local context="$TMP_DIR/binary-context"
+    mkdir -p "$context/etc/ssl/certs"
+    install -m 755 "$BINARY_FILE" "$context/wps-adapter"
+    cat "$certificate" >"$context/etc/ssl/certs/ca-certificates.crt"
+    cat >"$context/Dockerfile" <<'EOF'
+FROM scratch
+ARG APP_UID=1000
+ARG APP_GID=1000
+WORKDIR /app
+COPY wps-adapter /usr/local/bin/wps-adapter
+COPY etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+USER ${APP_UID}:${APP_GID}
+ENTRYPOINT ["/usr/local/bin/wps-adapter", "serve"]
+EOF
+
+    local build_args=(
+        --file "$context/Dockerfile"
+        --build-arg "APP_UID=$RUN_UID"
+        --build-arg "APP_GID=$RUN_GID"
+        --tag "$IMAGE_NAME"
+    )
+    if docker_buildx_available; then
+        DOCKER_BUILD_MODE="prebuilt-binary/buildx"
+        printf '使用预编译二进制和 Docker Buildx 制作运行镜像。\n'
+        docker buildx build --load --progress=plain "${build_args[@]}" "$context"
+    else
+        DOCKER_BUILD_MODE="prebuilt-binary/legacy"
+        printf '使用预编译二进制和 Docker 兼容构建器制作运行镜像。\n'
+        docker build "${build_args[@]}" "$context"
+    fi
+}
+
 usage() {
     cat <<'EOF'
 用法：install-docker.sh [选项]
@@ -326,12 +418,15 @@ usage() {
 
 环境变量：
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
+  WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
+  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v0.9.9
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
   WPS_ADAPTER_GO_BUILDER_IMAGE         自定义 Go 1.25 构建镜像地址
 
 Docker 构建：
-  优先安装并使用 Docker Buildx；发行版没有 Buildx 时使用兼容构建器。
+  优先下载预编译二进制并制作运行镜像；失败后才下载源码和 Go 构建镜像。
+  每条路径都优先使用 Docker Buildx；发行版没有 Buildx 时使用兼容构建器。
 
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
 EOF
@@ -498,6 +593,7 @@ validate_safe_value() {
 }
 
 [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]] || die "source-ref 必须是 40 位 Git 提交号"
+[[ "$BINARY_RELEASE_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || die "binary-release-tag 格式不正确"
 OLD_PORT="$(read_env_value ADAPTER_PORT || true)"
 OLD_BIND="$(read_env_value ADAPTER_BIND || true)"
 OLD_GROUP_ID="$(read_env_value WPS_GROUP_ID || true)"
@@ -679,16 +775,9 @@ trap rollback EXIT
 
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
-mkdir -p "$SOURCE_DIR"
 mkdir -p /var/lib/wps-adapter/uploads
 chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
 install -d -m 700 "$RESUME_DIR"
-progress_step "下载并显示项目归档进度"
-download_archive
-progress_step "检查归档内容和文件类型"
-archive_members_are_safe "$ARCHIVE" \
-    || die "下载的项目归档包含不安全的路径"
-tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
 archive_tree_is_safe() {
     local root="$1"
     local path
@@ -698,10 +787,29 @@ archive_tree_is_safe() {
         [[ -f "$path" || -d "$path" ]] || return 1
     done < <(find "$root" -print)
 }
-archive_tree_is_safe "$SOURCE_DIR" \
-    || die "下载的项目包含不允许的特殊文件或符号链接"
-[[ -f "$SOURCE_DIR/deploy/Dockerfile" ]] || die "下载的项目缺少 Dockerfile"
-[[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
+
+progress_step "下载预编译服务（失败后回退源码编译）"
+if download_prebuilt_binary; then
+    USE_PREBUILT=1
+    printf '预编译二进制下载成功，将跳过源码和 Go 构建镜像下载。\n'
+else
+    printf '预编译二进制不可用，回退到源码现场构建。\n'
+    mkdir -p "$SOURCE_DIR"
+    download_archive
+fi
+
+progress_step "检查安装内容"
+if (( USE_PREBUILT == 0 )); then
+    archive_members_are_safe "$ARCHIVE" \
+        || die "下载的项目归档包含不安全的路径"
+    tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
+    archive_tree_is_safe "$SOURCE_DIR" \
+        || die "下载的项目包含不允许的特殊文件或符号链接"
+    [[ -f "$SOURCE_DIR/deploy/Dockerfile" ]] || die "下载的项目缺少 Dockerfile"
+    [[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
+else
+    [[ -x "$BINARY_FILE" ]] || die "预编译二进制文件不可执行"
+fi
 
 if host_uses_systemd && systemctl is-active --quiet wps-adapter.service; then
     NATIVE_WAS_ACTIVE=1
@@ -717,6 +825,8 @@ if [[ -f "$ENV_FILE" ]]; then
     ENV_BACKUP="$TMP_DIR/wps-adapter.env.before"
     cp -p "$ENV_FILE" "$ENV_BACKUP"
     cp -p "$ENV_FILE" "$TMP_DIR/wps-adapter.env"
+elif (( USE_PREBUILT )); then
+    : >"$TMP_DIR/wps-adapter.env"
 else
     install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$SOURCE_DIR/.env.example" "$TMP_DIR/wps-adapter.env"
 fi
@@ -735,11 +845,7 @@ chmod 600 "$ENV_TARGET_FILE"
 
 APP_STAGE_DIR="$TMP_DIR/app"
 mkdir -p "$APP_STAGE_DIR"
-cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
-chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
 
-# Build from the temporary checkout before stopping an active native service.
-prepare_go_builder_image
 progress_step "构建 Docker 镜像（构建输出会持续显示）"
 build_application_image() {
     local build_args=(
@@ -759,7 +865,49 @@ build_application_image() {
         docker build "${build_args[@]}" "$SOURCE_DIR"
     fi
 }
-build_application_image
+if (( USE_PREBUILT )); then
+    install -m 755 "$BINARY_FILE" "$APP_STAGE_DIR/wps-adapter"
+    if ! build_prebuilt_application_image; then
+        printf '预编译运行镜像制作失败，回退到源码和 Go 构建镜像。\n' >&2
+        USE_PREBUILT=0
+        mkdir -p "$SOURCE_DIR"
+        download_archive
+        archive_members_are_safe "$ARCHIVE" \
+            || die "下载的项目归档包含不安全的路径"
+        tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
+        archive_tree_is_safe "$SOURCE_DIR" \
+            || die "下载的项目包含不允许的特殊文件或符号链接"
+        [[ -f "$SOURCE_DIR/deploy/Dockerfile" ]] || die "下载的项目缺少 Dockerfile"
+        [[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
+        if (( ENV_WAS_PRESENT == 0 )); then
+            install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 \
+                "$SOURCE_DIR/.env.example" "$ENV_TARGET_FILE"
+            set_env_value WPS_GROUP_ID "$GROUP_ID"
+            set_env_value WPS_ROOT_ID "$ROOT_ID"
+            set_env_value WPS_WORKSPACE_FILE "$WORKSPACE_FILE"
+            set_env_value WPS_COOKIE_FILE "$COOKIE_FILE"
+            set_env_value WPS_CSRF_TOKEN_FILE "$CSRF_FILE"
+            set_env_value ADAPTER_USERNAME_FILE "$USER_FILE"
+            set_env_value ADAPTER_PASSWORD_FILE "$PASSWORD_FILE"
+            set_env_value ADAPTER_BIND "$BIND"
+            set_env_value ADAPTER_PORT "$PORT"
+            chown "$RUN_USER:$RUN_GROUP" "$ENV_TARGET_FILE"
+            chmod 600 "$ENV_TARGET_FILE"
+        fi
+        rm -rf -- "$APP_STAGE_DIR"
+        mkdir -p "$APP_STAGE_DIR"
+        cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
+        chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
+        prepare_go_builder_image
+        build_application_image
+    fi
+else
+    cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
+    chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
+    # Build from the temporary checkout before stopping an active native service.
+    prepare_go_builder_image
+    build_application_image
+fi
 
 STAGED_COOKIE="$TMP_DIR/wps-cookie"
 STAGED_CSRF="$TMP_DIR/wps-csrf"

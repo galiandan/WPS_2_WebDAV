@@ -18,7 +18,7 @@ Docker：
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080
 ```
 
-安装脚本会从脚本内固定的 40 位 Git 提交归档下载代码，不要求 VPS 已安装 `git`，也不执行归档哈希校验。可用 `--source-ref` 指定另一个完整提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
+安装器会先从国内加速的 GitHub Release 下载对应 Linux 架构的预编译二进制。预编译资产下载失败、无法执行、没有对应架构或 Docker 运行镜像制作失败时，才会从脚本固定的 40 位 Git 提交归档下载源码并现场编译；不要求 VPS 已安装 `git`，也不执行归档、二进制或工具链哈希校验。可用 `--source-ref` 指定源码回退提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
 
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
@@ -30,7 +30,9 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 
 建议先下载脚本检查内容，再执行；不要把未知来源的内容直接通过管道交给 root。安装器内部的下载有连接超时和总超时，但不会在候选地址之间自动回退，也不会做哈希校验。
 
-安装器会按 `[当前阶段/总阶段]` 输出进度。下载安装器和源码归档时会显示进度；Native 会优先使用主机已有的 Go `1.25+`，没有时从单一国内地址下载 Go 工具链。Docker 会在发行版提供时自动安装 Buildx，优先使用 Buildx 和逐行构建输出；旧发行版没有插件时使用兼容构建器。Docker 会使用配置的 Go 构建镜像，并在构建镜像时持续显示逐层构建输出。若地址无响应，会在超时后退出，不会无限卡住。
+安装器会按 `[当前阶段/总阶段]` 输出进度。预编译二进制和源码归档下载都会显示进度；只有进入回退路径时，Native 才会检查/下载 Go `1.25+` 并现场构建。Docker 会在发行版提供时自动安装 Buildx，预编译路径和源码路径都优先使用 Buildx 和逐行构建输出；旧发行版没有插件时使用兼容构建器。源码回退时 Docker 才会下载配置的 Go 构建镜像。若地址无响应，会在超时后退出，不会无限卡住。
+
+预编译 Release 默认标签为 `v0.9.9`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
 
 手动使用 Compose 且 Docker Hub 访问不稳定时，可在构建前指定镜像：
 
@@ -54,7 +56,7 @@ docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 
 确认主机满足：
 
-- Native 模式需要 Go `1.25+`；主机没有时安装器会从单一地址下载 Go 工具链，不会安装 Python。Docker 模式只需要 Docker，Go 在构建阶段由镜像提供。
+- Native 模式正常安装只需要下载对应架构的预编译二进制；只有预编译下载失败时才需要主机 Go `1.25+`，没有时安装器会从单一地址下载 Go 工具链，不会安装 Python。Docker 模式只需要 Docker，源码回退时 Go 在构建阶段由镜像提供。
 - Bash、`tar`、`find`，以及 `curl` 或 `wget`。安装命令使用 `sudo bash`，极简系统如果没有 Bash，需要先按该系统方式安装 Bash。
 - 安装器覆盖常见发行版的包管理器；未列出的定制发行版仍可能需要手工提供 Go/Docker 和服务管理方式。
 - 能访问 WPS 和对象存储域名。

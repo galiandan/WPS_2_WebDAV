@@ -1,0 +1,86 @@
+name: release-binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build linux/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            asset: amd64
+          - goarch: arm64
+            asset: arm64
+          - goarch: 386
+            asset: 386
+          - goarch: arm
+            goarm: "6"
+            asset: armv6
+          - goarch: arm
+            goarm: "7"
+            asset: armv7
+          - goarch: ppc64le
+            asset: ppc64le
+          - goarch: riscv64
+            asset: riscv64
+          - goarch: s390x
+            asset: s390x
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: Build static Linux binary
+        working-directory: go
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p ../dist
+          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" GOARM="$GOARM" \
+            go build -trimpath -ldflags "-s -w -X main.commit=${GITHUB_SHA} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "../dist/wps-adapter-linux-${{ matrix.asset }}" ./cmd/wps-adapter
+          chmod 755 "../dist/wps-adapter-linux-${{ matrix.asset }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wps-adapter-linux-${{ matrix.asset }}
+          path: dist/wps-adapter-linux-${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wps-adapter-linux-*
+          merge-multiple: true
+
+      - name: Publish GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/wps-adapter-linux-* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
