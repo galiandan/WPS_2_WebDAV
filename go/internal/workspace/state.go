@@ -245,11 +245,21 @@ func (s *WorkspaceState) Update(groupID string, rootID string, spaces []Mount) e
 		return configErrorf("too many workspace spaces")
 	}
 	normalized := make([]Mount, 0, len(spaces))
+	seenGroups := make(map[string]struct{}, len(spaces))
+	seenNames := make(map[string]struct{}, len(spaces))
 	for _, mount := range spaces {
 		validated, err := NewMount(mount.GroupID, mount.RootID, mount.Name)
 		if err != nil {
 			return err
 		}
+		if _, duplicate := seenGroups[validated.GroupID]; duplicate {
+			return configErrorf("workspace spaces contain duplicate groups")
+		}
+		if _, duplicate := seenNames[validated.Name]; duplicate {
+			return configErrorf("workspace spaces contain duplicate names")
+		}
+		seenGroups[validated.GroupID] = struct{}{}
+		seenNames[validated.Name] = struct{}{}
 		normalized = append(normalized, validated)
 	}
 	if len(normalized) == 0 {

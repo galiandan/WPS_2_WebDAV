@@ -1,24 +1,26 @@
-ARG BASE_IMAGE=python:3.12-slim
-FROM ${BASE_IMAGE}
+ARG GO_BUILDER_IMAGE=golang:1.25.0
+FROM ${GO_BUILDER_IMAGE} AS builder
+
+ARG VERSION=0.9.8
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+
+WORKDIR /src
+COPY go /src/go
+WORKDIR /src/go
+
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}" \
+    -o /out/wps-adapter ./cmd/wps-adapter
+
+FROM scratch
 
 ARG APP_UID=1000
 ARG APP_GID=1000
 
 WORKDIR /app
-COPY src /app/src
-COPY LICENSE README.md pyproject.toml /app/
+COPY --from=builder /out/wps-adapter /usr/local/bin/wps-adapter
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
-ENV PYTHONPATH=/app/src \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    APP_UID=${APP_UID} \
-    APP_GID=${APP_GID}
-
-RUN mkdir -p /var/lib/wps-adapter/uploads \
-    && chown -R ${APP_UID}:${APP_GID} /var/lib/wps-adapter
-
-# Run with the invoking host user's numeric identity so the mounted secret
-# directory does not need to be writable by root inside the container.
 USER ${APP_UID}:${APP_GID}
 
-ENTRYPOINT ["python3", "-m", "wps_adapter", "serve"]
+ENTRYPOINT ["/usr/local/bin/wps-adapter", "serve"]

@@ -11,8 +11,7 @@ User=root
 Group=root
 WorkingDirectory=/opt/wps-adapter
 EnvironmentFile=-/etc/wps-adapter/wps-adapter.env
-Environment=PYTHONPATH=/opt/wps-adapter/src
-ExecStart=/usr/bin/python3 -m wps_adapter serve
+ExecStart=/opt/wps-adapter/wps-adapter serve
 Restart=on-failure
 RestartSec=5s
 UMask=0077

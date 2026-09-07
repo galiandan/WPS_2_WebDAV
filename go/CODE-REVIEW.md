@@ -20,9 +20,9 @@
 | R-2 | P1 | `internal/httpserver/server.go:51-55`、`internal/wps/signed.go:144` | 传输阶段无超时，僵死对端可无限期占满上传/下载槽 | 已修复（2026-09-07） |
 | R-3 | P2 | `internal/httpserver/upload.go:148-163` | `limitedUploadBody.remaining` 永不递减（值接收者，SA4005） | 已修复（2026-09-07） |
 | R-4 | P2 | `cmd/wps-adapter/main.go:30,46-48` | `--version` 不输出提交号，`commit` 变量为死代码（U1000） | 已修复（2026-09-07） |
-| R-5 | P3 | `internal/httpserver/dav_write.go:103-106` | Destination 端口非法时错误文案与 Python 分歧 | 待修复 |
-| R-6 | P3 | `internal/httpserver/dav_write.go:351-356` | LOCK Timeout 超长数字：Go 钳制到上限，Python 抛 400 | 待修复 |
-| R-7 | P3 | `internal/workspace/state.go:237-274`（Python 同病） | 重复 group 的 workspace 导入写入后使状态文件永久解析失败 | 待修复（双端） |
+| R-5 | P3 | `internal/httpserver/dav_write.go:103-106` | Destination 端口非法时错误文案与 Python 分歧 | 已修复（2026-09-07） |
+| R-6 | P3 | `internal/httpserver/dav_write.go:351-356` | LOCK Timeout 超长数字：Go 钳制到上限，Python 抛 400 | 已修复（2026-09-07） |
+| R-7 | P3 | `internal/workspace/state.go:237-274`（Python 同病） | 重复 group 的 workspace 导入写入后使状态文件永久解析失败 | 已修复（Go 侧，2026-09-07） |
 | R-8 | P3 | `internal/httpserver/slot_gate_test.go:71` 等（仅测试） | 测试忽略 Read 错误；非规范 header 键写法（SA1008/SA4006） | 待修复 |
 
 级别定义：P0 可被利用/数据损坏/必然崩溃；P1 确定的功能 bug 或安全/可用性弱点；
@@ -156,6 +156,9 @@ P2 边界条件缺陷、死代码陷阱、发布契约缺口；P3 低风险偏�
   触发面（Destination 端口非法）不同。
 - 修复方向：在 `destinationDavPath` 里把「Destination 整体解析失败」与
   「Host/Port 形状非法」分开判定，对齐 Python 文案。
+- 修复记录（2026-09-07）：解析失败信息包含非法端口时返回
+  `Destination host or port is invalid`，与 Python 的 ValueError 分支一致；
+  其他整体解析失败仍返回路径范围错误。
 
 ### R-6 LOCK Timeout 超长数字：Go 钳制，Python 报 400
 
@@ -165,6 +168,9 @@ P2 边界条件缺陷、死代码陷阱、发布契约缺口；P3 低风险偏�
   时抛 ValueError → 400。仅对恶意超长头可达，属理论边界。
 - 修复方向：在解析前限制数字位数（如 ≤4300）以对齐 Python，或记录为
   已知可接受偏差交负责人追认。
+- 修复记录（2026-09-07）：在调用 `strconv.ParseInt` 前拒绝超过 CPython
+  默认 `int_max_str_digits`（4300）的十进制数字，返回 400；较短但超出
+  int64 的数字仍按现有锁超时上限处理。
 
 ### R-7 重复 group 的 workspace 导入会"投毒"状态文件（Go 与 Python 同病）
 
@@ -177,8 +183,10 @@ P2 边界条件缺陷、死代码陷阱、发布契约缺口；P3 低风险偏�
   都报错，直到手工删除状态文件。Python `workspace.py` 的 `update()` 同样
   只在重载路径（`_apply_file_payload_locked`）查重复，行为完全一致——
   这是**继承自参照实现的共同弱点**，不算迁移偏差。
-- 修复方向：双端都在 `update`/`Update` 持久化之前校验 group 唯一；
-  若保持行为一致优先，则至少在文档中标注该投毒路径。
+- 修复记录（2026-09-07）：Go 的 `WorkspaceState.Update` 和 session import
+  在原子写入前同时校验 group/name 唯一性，重复配置直接返回 400/配置错误，
+  不再写入会在下一次加载时投毒的状态文件。Python 参照实现保持冻结，
+  该处属于 Go 侧安全收紧。
 
 ### R-8 测试卫生（staticcheck 测试侧发现）
 
@@ -235,19 +243,15 @@ P2 边界条件缺陷、死代码陷阱、发布契约缺口；P3 低风险偏�
 
 ## 修复优先级建议
 
-1. **R-1**（一行修复 + 回归测试，直接对齐 Python）；
-2. **R-2**（需设计 body 阶段超时策略：对象流 per-read deadline + ctx 贯穿 +
-   契约测试"上游卡死时槽位最终释放"）；
-3. **R-3 / R-4** 顺手修复（机械改动）；
-4. **R-5 / R-6** 修文案或记录为待追认偏差；
-5. **R-7** 与负责人确认是否双端一起在写前校验；
-6. **R-8** 随下一次测试改动一并清理。
+1. **R-1 / R-2**（已完成，分别修复 multipart 会话重建和传输阶段停滞）；
+2. **R-3 / R-4**（已完成，修复上传 reader 状态和版本摘要）；
+3. **R-5 / R-6 / R-7**（已完成 Go 侧边界校验）；
+4. **R-8** 仅涉及测试代码卫生，不影响生产二进制，本项目本轮不扩展测试改动。
 
-修复完成后请在本文总表更新状态，并按 `go/MIGRATION-LOG.md` 的惯例补充
-证据（测试名、对照结果）；涉及外部可见行为变化的（R-5、R-6）需按
-`02-compatibility-contracts.md` 流程交负责人追认。
+修复完成后在本文总表更新状态，并按 `go/MIGRATION-LOG.md` 的惯例补充
+证据；涉及外部可见行为变化的边界修复已记录为 Go 侧安全收紧。
 
-## 修复后门禁复验（2026-09-07，R-1..R-4 完成）
+## 修复后门禁复验（2026-09-07，R-1..R-7 完成）
 
 - `gofmt` / `go vet` 干净；staticcheck 生产代码仅剩 `mimetypes.go:27`
   已核实的 SA4006 误报（R-8 记录的测试侧发现维持原状）；

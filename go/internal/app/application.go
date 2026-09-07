@@ -174,10 +174,16 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	clientOptions := append([]wps.Option(nil), application.transportOptions...)
 	if injected.opener == nil {
 		application.opener = wps.NewControlHTTPClient(cfg.Timeout)
+		clientOptions = append(clientOptions, wps.WithOpener(application.opener))
 	}
 	if injected.signed == nil {
 		application.signedTransport = wps.NewSignedTransport(cfg.Timeout)
+		clientOptions = append(clientOptions, wps.WithSignedTransport(application.signedTransport))
 	}
+	// Keep the exact same options for the base client and every mounted space.
+	// Without these additions NewClient would silently create a private
+	// transport for each client, defeating the process-wide connection pool.
+	application.transportOptions = clientOptions
 	client, err := wps.NewClient(application.clientConfig, clientOptions...)
 	if err != nil {
 		return fail(err)

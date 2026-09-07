@@ -102,6 +102,9 @@ func (d *DAVDispatcher) destinationDavPath(r *http.Request) (string, error) {
 	}
 	parsed, err := url.Parse(destination)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "invalid port") {
+			return "", model.NewStorageError(model.KindInvalidPath, "Destination host or port is invalid")
+		}
 		return "", model.NewStorageError(model.KindInvalidPath, "Destination must point inside the WebDAV path")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -346,6 +349,9 @@ func lockTimeoutHeader(r *http.Request, store *DavLockStore) (int, error) {
 	}
 	match := lockTimeoutPattern.FindStringSubmatch(value)
 	if match == nil {
+		return 0, errBadRequest("Timeout must be Second-N or Infinite")
+	}
+	if len(match[1]) > 4300 {
 		return 0, errBadRequest("Timeout must be Second-N or Infinite")
 	}
 	parsed, err := strconv.ParseInt(match[1], 10, 64)

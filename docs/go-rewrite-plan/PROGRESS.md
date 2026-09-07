@@ -5,16 +5,15 @@
 （`00-README.md` ~ `09-python-retirement-plan.md`）和 `go/MIGRATION-LOG.md`
 的逐任务证据为准，此处不重复。
 
-最后更新：2026-09-06
+最后更新：2026-09-07
 
 ## 分支布局
 
-- `rewrite`：Go 重写的唯一工作线。所有重写相关内容（`go/` 模块、
-  `go/MIGRATION-LOG.md`、本目录细纲）都在这条分支上，每个任务一个
-  `BXXX <描述>` 提交并推送。
-- `main`：保持为完整、可直接运行的 Python 参照实现（仅保留 `go/web`
-  三个前端资产文件，因为 Python 的 `web.py` 默认从该目录读取）。
-  重写期间不在 main 上开发。
+- `rewrite`：Go 重写和当前发布候选线。长期运行服务、Native/Docker
+  安装器、部署模板和嵌入式前端都以 Go 为准；Python 只作为参照实现和
+  本地登录助手保留。
+- `main`：迁移完成前的旧 Python 发布线。安装说明不会指向它，待本线的
+  发布清单和灰度门禁完成后再合并替换。
 
 ## 已完成
 
@@ -33,7 +32,8 @@
 | 阶段 10 普通上传 | 请求正文与 spool、pre_check 与冲突语义、create_update 与对象 PUT、文件登记 | B1000–B1003 |
 | 阶段 11 multipart 上传与检查点 | 检查点格式、初始化与分片大小、单片上传、session 失效恢复、merge 与登记 | B1100–B1104 |
 | 阶段 12 COPY 与 DAV LOCK | 原生单文件 COPY、文件中继 COPY、文件夹 COPY、Lock Store、LOCK/UNLOCK 协议与全路由锁检查 | B1200–B1204 |
-| 阶段 13 完整服务整合 | 全量组装（凭据/热 workspace/共享 opener/全局 budget/storage/handlers/server）、Go 嵌入前端三资产与三入口、Python/Go 119 场景全量对照（未批准差异归零）、fuzz/构建/冒烟门禁 | B1300–B1303 |
+| 阶段 13 完整服务整合 | 全量组装（凭据/热 workspace/共享 opener/全局 budget/storage/handlers/server）、Go 嵌入前端三资产与三入口、Python/Go 契约对照、fuzz/构建/冒烟门禁 | B1300–B1303 |
+| 阶段 14 Go 部署切换 | Native/Docker/systemd/卸载器改为 Go 服务，安装器自动准备或构建 Go 工具链，发布清单与安装校验保持一致 | R1400 |
 
 当前 Go 侧门禁基线：`gofmt`/`go vet` 无差异，`go test ./...` 全绿
 （含 -race）；解析器 fuzz 目标 7 个实机通过；构建目标为 Linux
@@ -45,16 +45,15 @@ contract_tests/results/comparison-report.json）。
 
 ## 下一步（按细纲顺序）
 
-1. **阶段 14 部署、灰度与发布**：按 `07-deployment-release-plan.md`
-   与 `08-executor-checklist.md` 执行（`05-frontend-plan.md` 最终
-   浏览器验收、`06-testing-risk-gates.md` 完整门禁、Native/Docker/
-   CI 发布步骤、灰度与回滚演练），全部签字后才允许切换默认服务
+1. **发布收尾与主分支替换**：完成一次 Linux amd64/arm64 构建、安装器
+   固定提交校验、Native/Docker 冒烟和回滚检查后，将 `rewrite` 合并为新的
+   默认 `main`。旧 Python 代码继续作为参照源，不能被服务启动入口调用。
 
 ## 遗留提醒
 
 - 所有者侧门禁仍未执行：真实 WPS 专用目录的人工验证、浏览器 E2E
-  （M203/M205）、fuzz 长跑（CI 定时 10 分钟/发布候选 30 分钟）、
-  三项契约偏差追认（重复 Content-Length、204 Content-Length、
-  见 MIGRATION-LOG B1302）等，按细纲留到对应阶段。
+  （M203/M205）、fuzz 长跑（CI 定时 10 分钟/发布候选 30 分钟）和三项
+  契约偏差追认（见 MIGRATION-LOG B1302）。这些是发布灰度门禁，不是 Go
+  服务运行时对 Python 的依赖。
 - 任何任务开始前先读对应细纲小节；完成后 MIGRATION-LOG 记录证据、
   门禁全绿再提交推送；未完成前置任务不开后续任务。

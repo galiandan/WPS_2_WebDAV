@@ -372,6 +372,7 @@ func Load() (Config, error) {
 	if cfg.Bind == "" {
 		cfg.Bind = DefaultBind
 	}
+	cfg.Bind = normalizeBind(cfg.Bind)
 	// Python parses ADAPTER_PORT while building the CLI parser, so a broken
 	// value fails every command.
 	port, err := envInt("ADAPTER_PORT", DefaultPort)
@@ -622,6 +623,19 @@ func normalisePrefix(value, fallback string) string {
 	value = strings.TrimRight(value, "/")
 	if value == "" {
 		return "/"
+	}
+	return value
+}
+
+// normalizeBind accepts the bracketed IPv6 spelling commonly copied from a
+// URL or an installer prompt. net.JoinHostPort adds its own brackets, so
+// keeping them here would produce the invalid address "[[::1]]:port".
+func normalizeBind(value string) string {
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") && len(value) > 2 {
+		inner := value[1 : len(value)-1]
+		if !strings.ContainsAny(inner, "[]") {
+			return inner
+		}
 	}
 	return value
 }

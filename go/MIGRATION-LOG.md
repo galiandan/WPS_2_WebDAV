@@ -3586,3 +3586,41 @@ cmd 进程测试补强（check-config 组装路径、坏 workspace 失败、
 完成条件：Go 服务具备全部旧能力（REST/DAV 读写、上传、multipart、
 COPY、LOCK、多空间、session import、前端资源），尚未替换生产入口
 （阶段 14 部署、灰度与发布后按 08-executor-checklist.md 签字切换）。
+
+## R1400 Go 生产入口切换准备
+
+日期：2026-09-07
+
+本任务把 Go 服务接入长期运行的部署链路，保留 Python 代码仅作为参照和
+本地登录助手：
+
+- `deploy/wps-adapter.service` 的 `ExecStart` 改为
+  `/opt/wps-adapter/wps-adapter serve`，移除 `PYTHONPATH`。
+- `deploy/Dockerfile` 改为 Go 1.25 多阶段构建，最终镜像为 `scratch`，
+  只包含静态 Go 二进制和 CA 证书；Compose 和 Docker 安装器同步改用
+  `GO_BUILDER_IMAGE`。
+- Native 安装器不再安装或启动 Python，主机已有 Go 1.25+ 时复用，
+  否则下载固定版本 Go 工具链并校验架构 SHA-256，再构建 `CGO_ENABLED=0`
+  服务。Docker/Native 均保留原有凭据路径、端口参数、回滚和进度输出。
+- 安装器的 Go 版本解析修正为读取 `go version` 的工具链字段；32 位 ARM
+  的校验值按 `armv6l` 归档名选择。Native、Docker、卸载器只把 Go 服务
+  作为新的生产入口，便携模式仍能识别旧进程以便平滑升级。
+- Go 侧同步修复非法 Destination 端口、超长 LOCK Timeout、重复 workspace
+  group 写入以及 IPv6 方括号监听地址；这些修改不引入新的 WPS 接口。
+- README、部署说明和 Go 模块说明改为 Go 服务优先；安装命令暂时指向
+  `rewrite`，避免在 `main` 完成替换前下载旧 Python 安装器。
+
+必要门禁（本次工作树）：
+
+```text
+GOCACHE=/tmp/wps-go-cache-audit go test ./...   PASS
+GOCACHE=/tmp/wps-go-cache-audit go vet ./...   PASS
+CGO_ENABLED=0 go build -trimpath ./cmd/wps-adapter PASS
+bash -n scripts/install-native.sh scripts/install-docker.sh scripts/uninstall.sh PASS
+git diff --check PASS
+```
+
+发布清单需在本任务所有文档和源码变更完成后重新生成；安装器默认的
+`SOURCE_REF` 与 `SOURCE_MANIFEST_SHA256` 必须在发布提交后固定到同一份
+可验证归档。真实 WPS 目录、浏览器和 Native/Docker VPS 灰度仍由发布者
+执行，不能用 fake upstream 结果替代。

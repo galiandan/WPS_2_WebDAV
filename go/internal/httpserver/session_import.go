@@ -129,7 +129,8 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 			if !ok || len(spaces) == 0 || len(spaces) > workspace.MaxSpaces {
 				return errBadRequest("JSON field 'workspace.spaces' is invalid")
 			}
-			seen := map[string]struct{}{}
+			seenNames := map[string]struct{}{}
+			seenGroups := map[string]struct{}{}
 			for _, item := range spaces {
 				spaceMap, ok := item.(map[string]any)
 				if !ok {
@@ -139,10 +140,14 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 				if err != nil {
 					return err
 				}
-				if _, duplicate := seen[mount.Name]; duplicate {
+				if _, duplicate := seenNames[mount.Name]; duplicate {
 					return errBadRequest("workspace spaces contain duplicate names")
 				}
-				seen[mount.Name] = struct{}{}
+				if _, duplicate := seenGroups[mount.GroupID]; duplicate {
+					return errBadRequest("workspace spaces contain duplicate groups")
+				}
+				seenNames[mount.Name] = struct{}{}
+				seenGroups[mount.GroupID] = struct{}{}
 				mounts = append(mounts, mount)
 			}
 		}

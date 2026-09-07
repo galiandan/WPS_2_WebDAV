@@ -59,7 +59,7 @@ class InstallerTemplateTests(unittest.TestCase):
         self.assertIn("/etc/wps-adapter/secrets/", script)
         self.assertIn("com.galiandan.wps-adapter.managed", script)
         self.assertIn("Description=WPS enterprise cloud drive WebDAV adapter", script)
-        self.assertIn("python3(\\.[0-9]+)* -m wps_adapter serve", script)
+        self.assertIn("ExecStart=/opt/wps-adapter/wps-adapter serve", script)
         self.assertIn("不会删除 WPS 云盘上的远端文件", script)
         self.assertNotIn("rm -rf / ", script)
 
@@ -84,12 +84,12 @@ class InstallerTemplateTests(unittest.TestCase):
             self.assertIn('SOURCE_MANIFEST_SHA256', script)
             self.assertIn('--source-manifest-sha256', script)
             self.assertIn('sha256sum -c release-manifest.txt', script)
-            self.assertIn('--max-filesize 52428800', script)
+            self.assertIn('--max-filesize "$max_filesize"', script)
             self.assertIn('GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-auto}}"', script)
             self.assertIn('ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"', script)
             self.assertIn('WPS_WORKSPACE_FILE', script)
             self.assertNotIn('ask_value "WPS 企业群组 ID"', script)
-            self.assertIn('--progress-bar --location --max-filesize 52428800', script)
+            self.assertIn('--progress-bar --location --max-filesize "$max_filesize"', script)
             self.assertIn('WPS_ADAPTER_ARCHIVE_URL', script)
             self.assertIn('DOWNLOAD_CONNECT_TIMEOUT', script)
             self.assertIn('DOWNLOAD_MAX_TIME', script)
@@ -122,12 +122,12 @@ class InstallerTemplateTests(unittest.TestCase):
         self.assertIn('--user "$RUN_UID:$RUN_GID"', docker)
         self.assertIn('host_uses_systemd', native)
         self.assertIn('SERVICE_MODE="direct"', native)
-        self.assertIn('BASE_IMAGE', docker)
-        self.assertIn('docker.m.daocloud.io/library/python:3.12-slim', docker)
+        self.assertIn('GO_BUILDER_IMAGE', docker)
+        self.assertIn('docker.m.daocloud.io/library/golang:1.25.0', docker)
         self.assertIn('DOCKER_SERVICE_MODE="openrc"', docker)
 
         dockerfile = (PROJECT_ROOT / "deploy/Dockerfile").read_text(encoding="utf-8")
-        self.assertIn('ARG BASE_IMAGE=python:3.12-slim', dockerfile)
+        self.assertIn('ARG GO_BUILDER_IMAGE=golang:1.25.0', dockerfile)
 
     def test_installers_accept_default_and_ipv6_bind_addresses(self) -> None:
         bind_check = r'''set -eu
@@ -155,7 +155,7 @@ done
     def test_compose_passes_current_user_identity_to_the_container(self) -> None:
         compose = (PROJECT_ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
 
-        self.assertIn('BASE_IMAGE: "${WPS_ADAPTER_DOCKER_BASE_IMAGE:-python:3.12-slim}"', compose)
+        self.assertIn('GO_BUILDER_IMAGE: "${WPS_ADAPTER_GO_BUILDER_IMAGE:-golang:1.25.0}"', compose)
         self.assertIn('APP_UID: "${WPS_ADAPTER_UID:-1000}"', compose)
         self.assertIn('APP_GID: "${WPS_ADAPTER_GID:-1000}"', compose)
         self.assertIn('user: "${WPS_ADAPTER_UID:-1000}:${WPS_ADAPTER_GID:-1000}"', compose)

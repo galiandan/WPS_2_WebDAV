@@ -8,14 +8,14 @@ WPS 企业云盘 -> WPS 2 WebDAV -> 网页 / WebDAV / REST
 
 当前版本：`0.9.8`。项目仍属于实验性适配器，不是 WPS 官方软件。
 
-这个分支正在用 Go 重写服务端：行为与稳定版逐字节对齐（119 项合同场景全部一致），网页已换为新版界面。不管你用哪种方式运行，下面的用法完全一样。
+这个分支的长期运行服务已经改为 Go 单二进制：现有合同场景全部通过，112 项逐字节一致，其余差异均有迁移决策或记录；网页也已换为新版界面。不管你用哪种方式运行，下面的用法完全一样。
 
 ## 两种用法，怎么选？
 
 | 你是谁 | 用哪种 |
 | --- | --- |
 | 只想尽快用起来 | 看下面的「三步上手」，复制粘贴三条命令即可 |
-| 想体验 Go 重写版 | 看后面的「直接运行 Go 版」，需要一点命令行基础 |
+| 想自己编译或开发 | 看后面的「手动运行 Go 版」 |
 
 ## 三步上手
 
@@ -28,13 +28,13 @@ WPS 企业云盘 -> WPS 2 WebDAV -> 网页 / WebDAV / REST
 Native（推荐，VPS 不需要 Docker）：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/install-native.sh' | sudo bash -s -- --port 54321
 ```
 
 Docker：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ```
 
 安装器会显示下载和安装进度，并在首次安装时询问 WebDAV/网页共用的 Basic Auth 用户名和密码。密码不会显示，请记住它，后面连接服务时要使用。
@@ -44,8 +44,8 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 如果 `gh-proxy.com` 无法访问，可将命令中的加速地址替换为 `ghfast.top`：
 
 ```text
-https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
-https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
+https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/...
+https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/...
 ```
 
 安装器会校验固定版本的文件清单。看到“下载归档的内容清单校验失败”时，重新复制当前 README 的命令执行，不要混用旧命令或旧校验值。
@@ -55,7 +55,7 @@ https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
 在你自己的电脑上下载并运行独立登录脚本（国内加速下载）：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/wps_login.py' -o wps_login.py && python3 wps_login.py
 ```
 
 电脑需要 Python `3.11+`、Chrome 或 Chromium。如果选择 SSH 同步，还需要系统自带的 `ssh` 命令。
@@ -88,9 +88,9 @@ http://<VPS-IP>:54321/dav/
 
 网页支持：浏览、上传、拖动上传、上传队列与进度、下载、新建文件夹、重命名、移动（可视化选择目标文件夹）、删除、当前目录搜索（命中高亮）、按名称/大小/时间排序、列表与卡片双视图、深色模式。点击右上角滑块图标可以修改云盘显示名称。
 
-## 直接运行 Go 版
+## 手动运行 Go 版
 
-Go 版是单个静态可执行文件，运行时不需要 Python。目前还没有提供一键安装脚本和预编译包，需要先用 Go 工具链构建一次（全程约两分钟）。
+一键安装脚本已经默认部署 Go 服务。下面的方式适合开发者在没有 systemd/Docker 的环境中手动运行；运行时不需要 Python。
 
 ### 1. 安装 Go 工具链
 
@@ -151,7 +151,7 @@ export WPS_COOKIE_FILE=$HOME/wps-creds/wps-cookie \
 curl http://127.0.0.1:54321/healthz
 ```
 
-### 5. 升级 Go 版
+### 5. 升级手动运行的 Go 版
 
 ```bash
 cd WPS_2_WebDAV
@@ -225,13 +225,13 @@ curl -u <用户名> 'http://<VPS-IP>:54321/api/v1/status'
 默认卸载服务和程序，但保留本机配置、Basic Auth、Cookie 和工作区文件：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/uninstall.sh' | sudo bash -s --
 ```
 
 连同本机配置和凭据一起删除：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/uninstall.sh' | sudo bash -s -- --purge
 ```
 
 Docker 镜像需要额外添加 `--remove-image`。卸载不会删除 WPS 云盘中的远端文件，也不会删除 Docker 软件本身。

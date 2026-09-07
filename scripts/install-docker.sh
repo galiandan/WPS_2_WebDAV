@@ -29,8 +29,8 @@ PACKAGE_MANAGER=""
 DOWNLOAD_CONNECT_TIMEOUT="${WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT:-10}"
 DOWNLOAD_MAX_TIME="${WPS_ADAPTER_DOWNLOAD_MAX_TIME:-300}"
 DOCKER_SERVICE_MODE=""
-DOCKER_BASE_IMAGE=""
-LOCAL_BASE_IMAGE="wps-adapter-python-base:3.12-slim"
+DOCKER_BUILDER_IMAGE=""
+LOCAL_BUILDER_IMAGE="wps-adapter-go-builder:1.25.0"
 
 die() {
     printf '安装失败：%s\n' "$*" >&2
@@ -128,6 +128,7 @@ install_docker_dependencies() {
 download_file() {
     local url="$1"
     local target="$2"
+    local max_filesize="${3:-52428800}"
     case "$url" in
         https://*) ;;
         *)
@@ -136,7 +137,7 @@ download_file() {
             ;;
     esac
     if has_command curl; then
-        curl --fail --show-error --progress-bar --location --max-filesize 52428800 \
+        curl --fail --show-error --progress-bar --location --max-filesize "$max_filesize" \
             --connect-timeout "$DOWNLOAD_CONNECT_TIMEOUT" --max-time "$DOWNLOAD_MAX_TIME" \
             --retry 2 --retry-delay 1 --proto-redir '=https' --proto '=https' --tlsv1.2 \
             "$url" -o "$target"
@@ -277,30 +278,30 @@ docker_pull() {
     fi
 }
 
-prepare_docker_base_image() {
+prepare_go_builder_image() {
     local candidate
     local candidates=()
-    [[ -n "${WPS_ADAPTER_DOCKER_BASE_IMAGE:-}" ]] \
-        && candidates+=("$WPS_ADAPTER_DOCKER_BASE_IMAGE")
+    [[ -n "${WPS_ADAPTER_GO_BUILDER_IMAGE:-}" ]] \
+        && candidates+=("$WPS_ADAPTER_GO_BUILDER_IMAGE")
     candidates+=(
-        "docker.m.daocloud.io/library/python:3.12-slim"
-        "dockerproxy.net/library/python:3.12-slim"
-        "mirror.ccs.tencentyun.com/library/python:3.12-slim"
-        "python:3.12-slim"
+        "docker.m.daocloud.io/library/golang:1.25.0"
+        "dockerproxy.net/library/golang:1.25.0"
+        "mirror.ccs.tencentyun.com/library/golang:1.25.0"
+        "golang:1.25.0"
     )
     for candidate in "${candidates[@]}"; do
-        printf '准备 Python 基础镜像：%s\n' "$candidate"
+        printf '准备 Go 构建镜像：%s\n' "$candidate"
         if ! docker image inspect "$candidate" >/dev/null 2>&1; then
             docker_pull "$candidate" || {
                 printf '该基础镜像地址不可用，准备尝试下一个地址。\n' >&2
                 continue
             }
         fi
-        docker tag "$candidate" "$LOCAL_BASE_IMAGE"
-        DOCKER_BASE_IMAGE="$LOCAL_BASE_IMAGE"
+        docker tag "$candidate" "$LOCAL_BUILDER_IMAGE"
+        DOCKER_BUILDER_IMAGE="$LOCAL_BUILDER_IMAGE"
         return 0
     done
-    die "Python 基础镜像下载失败；可设置 WPS_ADAPTER_DOCKER_BASE_IMAGE 指定可访问的镜像"
+    die "Go 构建镜像下载失败；可设置 WPS_ADAPTER_GO_BUILDER_IMAGE 指定可访问的镜像"
 }
 
 usage() {
@@ -324,7 +325,7 @@ usage() {
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
-  WPS_ADAPTER_DOCKER_BASE_IMAGE        自定义 Python 基础镜像地址
+  WPS_ADAPTER_GO_BUILDER_IMAGE         自定义 Go 1.25 构建镜像地址
 
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
 EOF
@@ -757,11 +758,11 @@ cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
 chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
 
 # Build from the verified temporary checkout before stopping an active native service.
-prepare_docker_base_image
+prepare_go_builder_image
 progress_step "构建 Docker 镜像（构建输出会持续显示）"
 docker build \
     --file "$SOURCE_DIR/deploy/Dockerfile" \
-    --build-arg "BASE_IMAGE=$DOCKER_BASE_IMAGE" \
+    --build-arg "GO_BUILDER_IMAGE=$DOCKER_BUILDER_IMAGE" \
     --build-arg "APP_UID=$RUN_UID" \
     --build-arg "APP_GID=$RUN_GID" \
     --tag "$IMAGE_NAME" \

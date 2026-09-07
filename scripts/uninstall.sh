@@ -110,7 +110,8 @@ pid_is_adapter() {
     kill -0 "$pid" 2>/dev/null || return 1
     local command_line
     command_line="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
-    [[ "$command_line" == *wps_adapter* && "$command_line" == *" serve"* ]]
+    [[ "$command_line" == *"wps-adapter"* && "$command_line" == *" serve"* ]] \
+        || [[ "$command_line" == *wps_adapter* && "$command_line" == *" serve"* ]]
 }
 
 host_uses_systemd() {
@@ -129,11 +130,9 @@ validate_unit() {
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     grep -Fqx 'WorkingDirectory=/opt/wps-adapter' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
-    grep -Eq '^ExecStart=/[^[:space:]]*/python3(\.[0-9]+)* -m wps_adapter serve$' "$SERVICE_FILE" \
+    grep -Fxq 'ExecStart=/opt/wps-adapter/wps-adapter serve' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     grep -Fqx 'EnvironmentFile=-/etc/wps-adapter/wps-adapter.env' "$SERVICE_FILE" \
-        || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
-    grep -Fqx 'Environment=PYTHONPATH=/opt/wps-adapter/src' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     UNIT_MANAGED=1
 }

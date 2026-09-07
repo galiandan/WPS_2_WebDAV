@@ -1,71 +1,77 @@
 # wps-adapter (Go)
 
-本目录是 Go 重写的 module 根（module path
-`github.com/galiandan/WPS_2_WebDAV/go`）。迁移细纲见
-`../docs/go-rewrite-plan/`，逐任务证据见 `MIGRATION-LOG.md`。
+本目录是 WPS 2 WebDAV 的长期运行服务，module path 为
+`github.com/galiandan/WPS_2_WebDAV/go`。它已经替代 VPS 上的 Python 常驻
+服务；Python 只保留为协议参照实现、开发工具和本地 `wps_login.py` 登录助手。
 
 ## 常用命令
 
 ```sh
 cd go
-
-# 格式化与静态检查（每个任务提交前都要全绿）
 go fmt ./...
 go vet ./...
-
-# 单元测试与竞态测试
 go test ./...
 go test -race ./...
-
-# 本机构建
-go build -o /tmp/wps-adapter ./cmd/wps-adapter
-
-# 交叉构建（B200 完成条件：Windows 开发二进制 + Linux amd64/arm64）
-GOOS=windows GOARCH=amd64 go build -o /tmp/wps-adapter.exe ./cmd/wps-adapter
-GOOS=linux GOARCH=amd64 go build -o /tmp/wps-adapter-linux-amd64 ./cmd/wps-adapter
-GOOS=linux GOARCH=arm64 go build -o /tmp/wps-adapter-linux-arm64 ./cmd/wps-adapter
+CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
-## 版本注入
-
-默认版本与 Python 参照实现对齐（0.9.8）。发布构建注入提交信息：
+发布目标是 Linux `amd64` 和 `arm64`。本地交叉构建：
 
 ```sh
-go build -ldflags "-X main.version=0.9.8 -X main.commit=$(git rev-parse --short HEAD)" \
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/wps-adapter-linux-amd64 ./cmd/wps-adapter
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/wps-adapter-linux-arm64 ./cmd/wps-adapter
+```
+
+## 构建元数据
+
+默认版本为 `0.9.8`。发布构建应注入提交号和 UTC 构建时间：
+
+```sh
+CGO_ENABLED=0 go build -trimpath \
+  -ldflags "-s -w -X main.version=0.9.8 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
-## 命令形状（B200 骨架）
+```sh
+/tmp/wps-adapter --version
+# 0.9.8 commit=<commit> build_time=<UTC时间>
+```
 
-- `wps-adapter --version`：输出版本、提交号和构建时间的非敏感摘要（首个字段为裸版本号）。
-- `wps-adapter check-config`：校验环境配置并输出摘要，不访问 WPS。
-- `wps-adapter serve --bind 127.0.0.1 --port 54321`：启动 HTTP 服务；
-  骨架阶段仅提供 `/healthz`，真实路由随后续任务接入。
+## 命令
+
+- `wps-adapter serve [--bind ADDRESS] [--port PORT]`：启动 WebDAV、REST 和网页服务。
+- `wps-adapter check-config`：校验本地配置并组装服务，不访问 WPS。
+- `wps-adapter --version`：输出版本、提交号和构建时间摘要。
 
 ## 目录约定
 
-- `cmd/wps-adapter/`：CLI、组装、信号与退出码。
-- `internal/config/`：环境变量读取、默认值、集中校验。
-- `internal/app/`：应用组装与生命周期。
-- `web/`：前端三文件（index.html、style.css、app.js），Python 桥与
-  Go embed 共用同一份，禁止复制第二份。页面自带内联 SVG 图标集，
-  无外部资源、无构建步骤、无内联脚本（CSP 限制）。
+- `cmd/wps-adapter/`：CLI、应用组装、信号处理和退出码。
+- `internal/config/`：环境变量、默认值和运行期校验。
+- `internal/app/`：凭据、workspace、WPS 客户端、预算、存储和 HTTP 组装。
+- `internal/wps/`：WPS 控制面、签名对象存储、上传、下载和 refresh。
+- `internal/storage/`：路径、单/多空间、分页、缓存和 COPY 中继。
+- `internal/httpserver/`：REST、WebDAV、Basic Auth、锁和静态资源路由。
+- `web/`：嵌入二进制的 `index.html`、`style.css`、`app.js`，没有前端构建步骤或外部资源。
 
-## Web 前端
+## 运行约束
 
-- 设计语言：简洁但不简单——克制的靛蓝→紫渐变只用于品牌标、主按钮
-  与统计数字；玻璃拟态页头、背景极光、分层阴影构成质感。
-- 主题：跟随系统 / 浅色 / 深色三态循环，跟随系统由 CSS
-  `prefers-color-scheme` 实现，切换无闪烁；偏好保存在 localStorage。
-- 视图：列表（可按名称/大小/修改时间排序，列头可点）与卡片网格
-  双视图；目录加载期间展示骨架屏，空目录/搜索无结果/连接异常各有
-  专属插画空状态。
-- 动效：入场级联、行/卡片交错浮入、连接点脉冲、拖放遮罩行军蚁
-  边框、弹窗弹性缩放、toast 滑入、上传进度环；全部尊重
-  `prefers-reduced-motion`。
-- 功能扩展（相对 Python 基线的行为增强，均已与后端契约对齐）：
-  hash 路由（`#/路径`，刷新/前进/后退可用）、当前目录搜索高亮、
-  上传队列托盘（逐文件状态、进度环、速度、整队取消）、移动对话框
-  的文件夹选择器（目录接口不可用时回退手写路径）、同名文件夹
-  冲突显式跳过提示、`/` 聚焦搜索、`Alt+↑` 返回上级、30 秒轮询在
-  页面隐藏时暂停。
+服务使用纯 Go、`CGO_ENABLED=0` 单二进制构建，不需要 Python、Node.js 或运行时
+依赖。Native 安装器会优先使用主机 Go `1.25+`，否则自动下载并校验固定版本的
+Go 工具链；Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。
+
+网页登录和 WebDAV 共用同一个 Basic Auth。WPS Cookie、CSRF、workspace 和
+refresh 轮换文件由配置指定，服务不会把它们写入日志。所有上传、下载、目录
+递归、并发和临时磁盘操作都经过预算限制。
+
+## 前端
+
+前端由 Go `embed` 提供。它支持多空间根目录、列表/网格视图、目录预取、拖放
+上传、上传速度和进度、下载、重命名、移动、删除、新建文件夹、搜索、主题和
+云盘显示名称设置。资源保持原生 HTML/CSS/JavaScript，无浏览器扩展和第三方
+前端依赖。
+
+## 迁移记录
+
+实现任务和 Python/Go 对照证据见 [`MIGRATION-LOG.md`](MIGRATION-LOG.md)，总体
+计划见 [`../docs/go-rewrite-plan/`](../docs/go-rewrite-plan/)。`src/wps_adapter/`
+仍保留用于参照和回滚验证，不应被 Native 或 Docker 服务启动。
