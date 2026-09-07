@@ -1,6 +1,6 @@
-// Package app assembles the adapter services in the fixed migration order
-// (B1300): config -> secure state -> credentials/workspace/settings ->
-// HTTP clients -> global budget/cache -> storage -> handlers -> server.
+// Package app assembles the adapter services in a fixed order: config ->
+// secure state -> credentials/workspace/settings -> HTTP clients -> global
+// budget/cache -> storage -> handlers -> server.
 // Nothing here dials WPS: construction builds transports and local state
 // only, so check-config can run the same assembly offline.
 package app
@@ -25,8 +25,8 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/web"
 )
 
-// webContentSecurityPolicy mirrors the fixed CSP Python serves on the page
-// (05-frontend-plan F4): everything self, no inline script or style.
+// webContentSecurityPolicy keeps the embedded page self-contained: there are
+// no inline scripts or styles and no third-party network resources.
 const webContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; " +
 	"img-src 'self'; connect-src 'self'; object-src 'none'; " +
 	"base-uri 'none'; frame-ancestors 'none'"
@@ -64,16 +64,14 @@ type Application struct {
 	transportOptions []wps.Option
 
 	// Shared transports: one control-plane opener and one signed transport
-	// reused by the base client and every child space (Python shares a
-	// single opener). Closed when the assembly or the process stops.
+	// reused by the base client and every child space. Closed when the assembly
+	// or the process stops.
 	opener          *http.Client
 	signedTransport http.RoundTripper
 }
 
-// Option adjusts the assembly. Production wiring passes none; the
-// test-only contract entrypoint (go/internal/contractsrv) injects the fake
-// WPS transports, mirroring how python_service.py patches the Python
-// client constructor without touching configuration, secure files,
+// Option adjusts the assembly. Production wiring passes none; focused tests
+// may inject fake WPS transports without changing configuration, secure files,
 // storage routing, or the server lifecycle.
 type Option func(*transports)
 

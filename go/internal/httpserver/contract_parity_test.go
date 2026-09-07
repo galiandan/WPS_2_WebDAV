@@ -12,11 +12,9 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
 
-// The B700 completion gate replays the REST read-only records captured from
-// the Python service (contract_tests/results/REST-*.json) against the Go
-// dispatcher. The fake storage models the upstream listing exactly like the
-// contract harness does; the records are Python's observed wire output, so
-// a mismatch means the Go semantics drifted.
+// Replay the REST read-only wire records in contract_tests/results/REST-*.json
+// against the Go dispatcher. The records are sanitized compatibility
+// goldens; a mismatch means the Go semantics drifted.
 
 func contractResultsDir(t *testing.T) string {
 	t.Helper()

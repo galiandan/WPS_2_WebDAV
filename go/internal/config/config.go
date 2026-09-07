@@ -1,9 +1,7 @@
 // Package config loads adapter runtime configuration from the environment.
 //
-// Field set, defaults, types, and accept/reject rules mirror the Python
-// reference (src/wps_adapter/__main__.py, client.py from_env, storage.py,
-// server.py, settings.py, workspace.py) in the same evaluation order, so
-// check-config agrees with the Python service on the same environment.
+// Field set, defaults, types, and accept/reject rules are kept in one place
+// and evaluated in a stable order, so check-config is deterministic.
 // Error text names the variable and the rule; it never echoes the value.
 package config
 

@@ -4,7 +4,7 @@
 // page at runtime — the root name reaches the page through the settings
 // API, never through template substitution.
 //
-// Cache policy (05-frontend-plan section 10): the file names carry no
+// Cache policy: the file names carry no
 // content hash, so every asset — page, style, and script — is served
 // no-store to keep upgraded binaries from mixing old resources with new
 // HTML.

@@ -28,19 +28,5 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
       - name: Check shell installers
         run: bash -n scripts/install-native.sh scripts/install-docker.sh scripts/uninstall.sh
-
-  python-reference:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-      - name: Run tests
-        run: PYTHONPATH=src python -m unittest discover -s tests -v
-      - name: Compile source
-        run: PYTHONPATH=src python -m compileall -q src tests wps_login.py
-      - name: Check shell installers
-        run: bash -n scripts/install-native.sh scripts/install-docker.sh
+      - name: Check release manifest
+        run: bash tools/build-release-manifest.sh --check

@@ -1,7 +1,7 @@
 // Package workspace resolves configured or login-selected group and root
 // IDs from the workspace state file.
 //
-// B303 scope: the full WorkspaceState port of src/wps_adapter/workspace.py —
+// WorkspaceState owns configured and login-selected group/root IDs —
 // old {group_id,root_id} and new spaces schemas, hot reload on mtime
 // change, atomic persist with Python-compatible ensure_ascii JSON, and the
 // pending-login state when the file is absent.

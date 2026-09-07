@@ -2,7 +2,7 @@
 
 本目录是 WPS 2 WebDAV 的生产服务，module path 为
 `github.com/galiandan/WPS_2_WebDAV/go`。它是 VPS 上长期运行的唯一服务实现；
-Python 只保留为本地登录助手、协议参照和开发测试工具。
+Python 只保留为用户电脑上的独立登录助手。
 
 ## 常用命令
 
@@ -74,9 +74,8 @@ refresh 轮换文件由配置指定，服务不会把它们写入日志。所有
 
 - `go/` 是 Native 和 Docker 使用的生产代码。
 - `wps_login.py` 负责在用户自己的电脑上完成官方 WPS 登录并同步凭据。
-- `src/wps_adapter/`、`tests/`、`contract_tests/` 和 `tools/` 是协议参照、回归
-  测试与研究工具，不会被 Native 或 Docker 服务启动。
+- `contract_tests/results/` 只保存脱敏后的 JSON 契约金标准，供 Go 回归测试读取。
 
-重写过程文档已经在 Go 版本定稿后移除；当前维护以代码、契约测试、
+重写过程文档已经在 Go 版本定稿后移除；当前维护以代码、契约金标准、
 [`docs/api.md`](../docs/api.md) 和 [`docs/architecture.md`](../docs/architecture.md)
 为准。

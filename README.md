@@ -189,10 +189,8 @@ scripts/         Native、Docker 和卸载脚本
 deploy/          systemd 加固文件和 Docker 构建配置
 wps_login.py     独立 WPS 登录/凭据同步助手
 docs/            使用、接口、架构、部署和研究文档
-contract_tests/  黑盒契约测试与 Go/Python 对照结果
-src/             Python 协议参照实现，仅用于测试和研究
-tests/            Python 参照测试
-tools/            HAR 检查、契约分析和发布清单工具
+contract_tests/  脱敏 JSON 契约金标准，供 Go 回归测试读取
+tools/            发布清单校验工具
 ~~~
 
 ## 当前限制

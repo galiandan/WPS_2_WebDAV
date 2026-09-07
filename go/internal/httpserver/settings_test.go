@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -192,7 +191,7 @@ func TestSettingsPATCHLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(raw) != `{"name":"\u6211\u7684\u4e91\u76d8"}`+"\n" {
-		t.Errorf("fixture = %q, want Python-format payload", raw)
+		t.Errorf("fixture = %q, want escaped JSON payload", raw)
 	}
 	if applied := harness.storage.applied(); len(applied) != 2 || applied[1] != "我的云盘" {
 		t.Errorf("storage names = %q", applied)
@@ -317,77 +316,6 @@ func TestSettingsPatchRequiresContentLength(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Connection"); got != "close" {
 		t.Errorf("Connection = %q", got)
-	}
-}
-
-// TestSettingsNameInteroperatesWithPython fulfils the B603 completion
-// condition: Python and Go take turns reading and writing one fixture file.
-func TestSettingsNameInteroperatesWithPython(t *testing.T) {
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 is not available")
-	}
-	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "src", "wps_adapter", "settings.py")); err != nil {
-		t.Skip("Python reference tree is not available")
-	}
-
-	dir := filepath.Join(t.TempDir(), "secrets")
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	fixture := filepath.Join(dir, "web-settings.json")
-
-	runPython := func(script string, args ...string) string {
-		t.Helper()
-		cmd := exec.Command(python, append([]string{"-c", script}, args...)...)
-		cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("python failed: %v\n%s", err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-
-	goSettings, err := workspace.NewWebSettings(fixture, "Go 缺省")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Round 1: Python writes, Go hot-reads.
-	runPython(`import sys
-from wps_adapter.settings import WebSettings
-settings = WebSettings(sys.argv[1], fallback_name="ignored")
-settings.set_name("来自 Python")`, fixture)
-	name, err := goSettings.Name()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if name != "来自 Python" {
-		t.Fatalf("Go read %q after the Python write", name)
-	}
-
-	// Round 2: Go writes, Python reads.
-	if _, err := goSettings.SetName("来自 Go"); err != nil {
-		t.Fatal(err)
-	}
-	got := runPython(`import sys
-from wps_adapter.settings import WebSettings
-print(WebSettings(sys.argv[1]).name)`, fixture)
-	if got != "来自 Go" {
-		t.Fatalf("Python read %q after the Go write", got)
-	}
-
-	// The fixture stays byte-identical to Python's persisted format.
-	raw, err := os.ReadFile(fixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != `{"name":"\u6765\u81ea Go"}`+"\n" {
-		t.Errorf("fixture = %q", raw)
 	}
 }
 

@@ -7,7 +7,6 @@
 | [`scope-and-safety.md`](scope-and-safety.md) | 授权范围和安全边界 |
 | [`capture-plan.md`](capture-plan.md) | 网页端抓包与实验顺序 |
 | [`findings.md`](findings.md) | 已观察、重放和推断的请求事实 |
-| [`prototype.md`](prototype.md) | 当前原型状态与研究边界 |
 | [`request-record-template.md`](request-record-template.md) | 脱敏实验记录模板 |
 | [`openlist-reference.md`](openlist-reference.md) | OpenList 借鉴总览、优先级和统一研究流程 |
 | [`01-native-copy.md`](01-native-copy.md) | P0：原生 COPY 的剩余范围：文件夹和覆盖 |

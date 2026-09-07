@@ -10,15 +10,22 @@
 
 ## 本地检查
 
-项目只依赖 Python 标准库，测试不访问 WPS：
+服务和回归测试只使用 Go 标准工具链，不访问 WPS：
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-python3 -m compileall -q src tests
-python3 tools/build_login_script.py --check
-python3 tools/build_release_manifest.py --check
+cd go
+gofmt -d .
+go test ./...
+go vet ./...
+CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
+cd ..
+bash -n scripts/install-native.sh scripts/install-docker.sh scripts/uninstall.sh
+bash tools/build-release-manifest.sh --check
 git diff --check
 ```
+
+`wps_login.py` 是给最终用户使用的独立登录助手，不参与 VPS 服务构建；修改它时要
+同时运行 `python3 -m py_compile wps_login.py`。
 
 涉及真实 WPS 行为的改动，需要在 `docs/research/findings.md` 中记录实验编号、证据等级和脱敏后的请求形状。原始抓包只保存在本机 `captures/`，不要放入提交。
 

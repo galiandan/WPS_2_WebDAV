@@ -1,47 +1,25 @@
-# 契约测试（语言无关，黑盒）
+# 契约金标准
 
-本目录是与实现语言无关的黑盒契约测试。测试只通过 HTTP/原始 TCP 与被测
-服务对话，不 import 适配器内部模块；被测服务由 harness 以子进程启动。
+这里保存脱敏后的 HTTP/WebDAV JSON 金标准，供 Go 服务的回归测试读取。生产服务不依赖本目录，金标准也不包含真实 Cookie、CSRF、签名 URL、账号 ID 或文件内容。
 
-## 被测服务与输入方式
+## 目录
 
-- `harness.Service` 负责启动被测服务。Python 服务入口
-  （`python_service.py` 调用 `wps_adapter.__main__.main`）作为冻结参照，
-  仅 WPS HTTP 传输层替换为进程内 fake upstream（`fake_upstream.py`，使用
-  client 自带的测试注入点）；Go 服务的对照结果保存在 `results/go/`。
-- 服务地址：子进程绑定 harness 预分配的 loopback 端口，固定输出
-  `listening=` 行作为就绪信号。
-- Basic Auth：`ADAPTER_USERNAME_FILE` / `ADAPTER_PASSWORD_FILE`（0600，
-  位于 0700 临时目录）。
-- fixture upstream：无独立网络端口；fake upstream 与服务同进程，路由与
-  行为由 `scenario JSON` 描述（路由正则、状态码、JSON/文本响应、延迟、
-  barrier 并发屏障、对象存储内容）。
-- 临时 secret 目录：`tempfile.mkdtemp`（0700），cookie/csrf/workspace 文件
-  全部 0600；内容均为 `bench-*` 占位值。
+- results/：基线响应和请求行为记录。
+- results/go/：Go 服务对应的复核结果。
 
-## 观测与证据
-
-- 每个上游请求（method、path、host、是否携带 Cookie/Authorization 等）
-  追加写入 `upstream-requests.jsonl`。
-- 并发计数、对象 PUT 摘要写入 `upstream-stats.json`（原子替换）。
-- 每个场景把观察到的真实行为写入 `results/<场景ID>.json`，作为
-  Python 基线证据；Go 对照结果将写入 `results/go/`。
-
-## 场景分组与 ID
-
-- `DEC-D01-A` 起为 D-01..D-09 兼容性决策特征测试（`test_decisions.py`）。
-- 场景按 health/auth、REST、WebDAV、WPS fixture、resource/fault 五组维护：
-  health/auth、REST、WebDAV、WPS fixture、resource/fault；
-  场景 ID 形如 `HTTP-AUTH-001`、`REST-LIST-001`、`DAV-LOCK-002`。
+金标准覆盖健康检查、Basic Auth、REST、WebDAV、上传、下载、COPY、LOCK、递归 PROPFIND、空间状态和资源限制等场景。Go 测试会在 go/internal/httpserver/ 中直接加载这些 JSON，并对响应状态、正文和关键头部做断言。
 
 ## 运行
 
-```sh
-python -m unittest discover -s contract_tests -v
-```
+在仓库根目录执行：
+
+~~~sh
+cd go
+go test ./...
+~~~
+
+测试只使用本地 fake storage 和静态金标准，不访问真实 WPS。
 
 ## 安全
 
-- 默认全部场景不访问真实 WPS；fixture 全部为本机 fake。
-- 不把 Cookie、CSRF、rtk、Basic Auth 密码、签名 URL 或真实 ID 写入
-  仓库；`results/` 中只有状态码、计数与占位名。
+不要向金标准中加入 Cookie、CSRF、refresh token、Basic Auth 密码、签名 URL、真实文件名、真实 ID 或用户文件内容。真实抓包只保存在本机 captures/，该目录已被 .gitignore 忽略。
