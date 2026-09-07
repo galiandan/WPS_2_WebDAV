@@ -5,8 +5,8 @@ set -Eeuo pipefail
 # falls back to a portable background process on systems without systemd.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-8d9b9d84ee484a84cb6aab9cd3567ad41f8ad115}"
-SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-3b0df9c8b608edf6ba9dfded175a26186eac8e67b0fc4d47e450171f6e24aaf4}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-22fcde8678f623ee32d83d7d8667cc72aa6efe47}"
+SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-7517e1553b043396c4680eb5339fa1b7d9daaee6871e9ccd7199d73a1fa3f230}"
 # The service is built with a fixed toolchain only when the host does not
 # already provide a compatible Go compiler. The toolchain stays in the
 # installer's private temporary directory and is never installed system-wide.
