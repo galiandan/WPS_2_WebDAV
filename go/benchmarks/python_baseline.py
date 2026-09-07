@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""B002 Python performance baseline harness (migration-only, not shipped).
+"""Python reference performance baseline harness (development-only).
 
-Methodology (per docs/go-rewrite-plan/04-backend-migration-steps.md B002):
+Methodology:
 
 - The real Python adapter runs in a child process. Its WPS transport is
   replaced by an in-process fake upstream (the injection points the client

@@ -1,8 +1,8 @@
 """B003 characteristic tests for compatibility decisions D-01..D-09.
 
-Each scenario pins the CURRENT Python service behavior as observable over
-HTTP (black box). The observed values are written to results/ and recorded
-in go/MIGRATION-LOG.md as the evidence for the D-01..D-09 decisions.
+Each scenario pins the CURRENT Python reference behavior as observable over
+HTTP (black box). The observed values are written to results/ and kept as
+the evidence for the D-01..D-09 compatibility decisions.
 
 Scenario IDs are stable: DEC-D01-A ... DEC-D09-A. Run:
 

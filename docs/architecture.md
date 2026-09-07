@@ -19,7 +19,7 @@ WebDAV clients / REST clients / browser UI
        WPS object-storage upload/download
 ```
 
-适配器是单进程 Python 服务，默认只使用标准库。WPS 控制请求负责目录、元数据、上传会话和下载地址；实际文件内容通过短时内存/临时 spool 或流式对象请求传输，不作为长期缓存保存在服务器上。
+适配器是单进程 Go 服务，使用 `CGO_ENABLED=0` 构建为单二进制。WPS 控制请求负责目录、元数据、上传会话和下载地址；实际文件内容通过短时内存/临时 spool 或流式对象请求传输，不作为长期缓存保存在服务器上。
 
 网页文件管理器在当前目录成功加载后，会另外在浏览器内存中预取最多 24 个直接子文件夹，最多同时执行 2 个目录请求，并缓存 30 秒。该缓存只保存目录条目元数据，不保存文件正文或凭据；它与服务端短 TTL 元数据缓存分离，刷新、写操作和重新连接时必须防止旧结果污染当前目录。
 
@@ -34,7 +34,7 @@ WebDAV clients / REST clients / browser UI
 7. `/api/v1/status` 使用缓存的只读 `islogin` 预检和一次最小根目录列表，网页据此区分进程健康与 WPS 会话状态。
 8. 网页的云盘显示名称通过同源、Basic Auth 保护的设置接口写入本机状态文件，不依赖 WPS 请求。
 
-登录助手在本机临时 Chrome 中完成官方登录后，读取当前官方 WPS `/space/<tenant>/<group>/<folder>` 页面地址，调用受 Basic Auth 保护的 `POST /api/v1/session/import`。该接口更新 Cookie、CSRF 和工作区状态文件，不参与普通 WebDAV/REST 文件请求；后续请求和轮换 Cookie 仍由服务进程直接处理。工作区状态会在运行中重新加载，服务无需重启。
+登录助手在本机临时 Chrome 中完成官方登录后，读取当前官方 WPS `/space/<tenant>/<group>/<folder>` 页面地址，调用受 Basic Auth 保护的 `POST /api/v1/session/import`。该接口更新 Cookie、CSRF 和工作区状态文件，不参与普通 WebDAV/REST 文件请求；后续请求和轮换 Cookie 仍由 Go 服务进程直接处理。工作区状态会在运行中重新加载，服务无需重启。
 
 ## Authentication boundaries
 

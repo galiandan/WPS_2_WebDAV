@@ -5,12 +5,10 @@
 
 ## 被测服务与输入方式
 
-- `harness.Service` 负责启动被测服务：
-  - 当前被测对象：真实 Python 服务入口（`python_service.py` 调用
-    `wps_adapter.__main__.main`），仅 WPS HTTP 传输层替换为进程内
-    fake upstream（`fake_upstream.py`，使用 client 自带的测试注入点）。
-  - 未来被测对象：Go 服务入口。场景与断言不变，harness 以相同的环境
-    变量、secret 文件与 scenario JSON 启动 Go 二进制即可。
+- `harness.Service` 负责启动被测服务。Python 服务入口
+  （`python_service.py` 调用 `wps_adapter.__main__.main`）作为冻结参照，
+  仅 WPS HTTP 传输层替换为进程内 fake upstream（`fake_upstream.py`，使用
+  client 自带的测试注入点）；Go 服务的对照结果保存在 `results/go/`。
 - 服务地址：子进程绑定 harness 预分配的 loopback 端口，固定输出
   `listening=` 行作为就绪信号。
 - Basic Auth：`ADAPTER_USERNAME_FILE` / `ADAPTER_PASSWORD_FILE`（0600，
@@ -32,7 +30,7 @@
 ## 场景分组与 ID
 
 - `DEC-D01-A` 起为 D-01..D-09 兼容性决策特征测试（`test_decisions.py`）。
-- 后续按 `docs/go-rewrite-plan/06-testing-risk-gates.md` 分为五组：
+- 场景按 health/auth、REST、WebDAV、WPS fixture、resource/fault 五组维护：
   health/auth、REST、WebDAV、WPS fixture、resource/fault；
   场景 ID 形如 `HTTP-AUTH-001`、`REST-LIST-001`、`DAV-LOCK-002`。
 

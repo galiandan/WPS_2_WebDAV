@@ -1,304 +1,216 @@
 # WPS 2 WebDAV
 
-把你自己的 WPS 企业云盘接入 WebDAV。安装完成后，可以用浏览器、Windows、Linux、手机、NAS 或其他 WebDAV 客户端访问文件。
+把你有权访问的 WPS 企业云盘接入 WebDAV，同时提供一个无需额外前端依赖的网页文件管理器和 REST 接口。
 
-```text
-WPS 企业云盘 -> WPS 2 WebDAV -> 网页 / WebDAV / REST
-```
+~~~text
+WPS 企业云盘 -> Go 适配器 -> 网页 / WebDAV / REST
+~~~
 
-当前版本：`0.9.8`。项目仍属于实验性适配器，不是 WPS 官方软件。
+当前长期运行服务是 Go 单二进制。项目仍是实验性适配器，不是 WPS 官方软件。它只适用于你自己的账号和你有权限访问的数据。
 
-这个分支的长期运行服务已经改为 Go 单二进制：现有合同场景全部通过，112 项逐字节一致，其余差异均有迁移决策或记录；网页也已换为新版界面。不管你用哪种方式运行，下面的用法完全一样。
+## 你能得到什么
 
-## 两种用法，怎么选？
+- 浏览器网页：浏览、搜索、排序、列表/网格视图、拖放上传、上传速度、下载、新建文件夹、重命名、移动、复制和删除。
+- WebDAV：Windows、Linux、macOS、手机、NAS、同步软件和其他 WebDAV 客户端。
+- REST：脚本化列目录、上传、下载、创建文件夹、重命名、移动、复制、删除和状态检查。
+- 多 WPS 空间：登录后按实时显示的空间名称选择一个、多个或全部，空间会显示为根目录下的文件夹。
+- 资源保护：上传/下载并发、临时磁盘、目录递归、响应大小和大目录读取都有上限。
+- 不需要浏览器扩展；登录只需要一个独立的 wps_login.py 文件。
 
-| 你是谁 | 用哪种 |
-| --- | --- |
-| 只想尽快用起来 | 看下面的「三步上手」，复制粘贴三条命令即可 |
-| 想自己编译或开发 | 看后面的「手动运行 Go 版」 |
+## 三步开始
 
-## 三步上手
+### 1. 在 Linux VPS 安装
 
-整个流程只需要三步：在 VPS 安装服务，在自己的电脑运行一次登录助手，然后打开网页或连接 WebDAV。
+先准备一台能访问 WPS 的 Linux VPS，并放行你要使用的端口。下面以 54321 为例，端口可以替换成任意未占用端口。
 
-### 第一步：安装到 VPS
+Native（推荐，运行时不需要 Docker）：
 
-下面两条命令选一条。端口可以改成任意未占用端口；下面以 `54321` 为例。
-
-Native（推荐，VPS 不需要 Docker）：
-
-```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
-```
+~~~bash
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
+~~~
 
 Docker：
 
-```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
-```
+~~~bash
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
+~~~
 
-安装器会显示下载和安装进度，并在首次安装时询问 WebDAV/网页共用的 Basic Auth 用户名和密码。密码不会显示，请记住它，后面连接服务时要使用。
+安装器会显示阶段进度和下载进度，并在首次安装时询问网页/WebDAV 共用的 Basic Auth 用户名和密码。密码不会显示，请记住它。
 
-安装器默认使用执行 `sudo` 的当前用户运行 Native 服务，不要求你额外创建 Linux 用户。Docker 方式要求 VPS 已能运行 Docker，但你的个人电脑不需要安装 Docker。
+Native 安装器不要求 VPS 预装 Go：如果系统没有 Go 1.25+，它会从国内 Go 镜像临时下载固定版本、校验 SHA-256、编译静态二进制，安装完成后删除临时工具链。服务运行时只使用编译好的 Go 二进制，不需要 Python、Node.js 或 Go 运行时。
 
-如果 `gh-proxy.com` 无法访问，可将命令中的加速地址替换为 `ghfast.top`：
+Docker 安装器会从国内 Docker 镜像获取 Go 构建镜像，最终容器只包含服务二进制和 CA 证书；你的个人电脑不需要安装 Docker。
 
-```text
-https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
-https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
-```
+如果 ghfast.top 当前不可访问，可以把命令中的 ghfast.top 替换为国内备用节点 gh-proxy.com。两种安装器还会在内部校验固定提交的归档清单和文件 SHA-256，下载失败会自动尝试其他地址。不要把未知网页中的安装命令直接交给 root。
 
-安装器会校验固定版本的文件清单。Native 安装需要 Go 工具链时，会优先使用阿里云 Go 镜像，再回退到官方镜像；每个下载地址都会使用固定 SHA-256 校验。看到“下载归档的内容清单校验失败”时，重新复制当前 README 的命令执行，不要混用旧命令或旧校验值。
+安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
-### 第二步：登录 WPS
+### 2. 在自己的电脑登录 WPS
 
-在你自己的电脑上下载并运行独立登录脚本（国内加速下载）：
+只下载一个登录脚本，不需要 clone 整个项目：
 
-```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
-```
+~~~bash
+curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
+~~~
 
-电脑需要 Python `3.11+`、Chrome 或 Chromium。如果选择 SSH 同步，还需要系统自带的 `ssh` 命令。
+电脑需要 Python 3.11+、Chrome 或 Chromium。脚本会询问：
 
-脚本会询问 VPS 地址、连接方式、端口和 Basic Auth 信息，然后打开一个临时隔离的官方 WPS 登录窗口：
+1. VPS 地址或域名。
+2. 连接方式：SSH 私钥、SSH 密码，或 HTTP/HTTPS 适配器接口。
+3. SSH 用户、端口、私钥路径，或适配器端口和 Basic Auth 信息。
 
-1. 只在官方 WPS 页面完成登录、企业 SSO、扫码或验证码。
-2. 登录完成后脚本自动读取当前账号可见的 WPS 空间。
-3. 浏览器自动关闭后，回到终端选择空间：输入 `1` 选择一个，输入 `1,3` 选择多个，输入 `all` 选择全部。
-4. 选择的空间会在 WebDAV 根目录下显示为文件夹；文件夹名称来自当前 WPS 账号，不需要手动填写。
-5. 脚本验证空间可访问后，自动把凭据和工作区配置同步到 VPS。
+随后脚本打开临时隔离的官方 WPS 登录窗口。只在这个官方窗口中完成登录、SSO、扫码、验证码或二次验证。登录完成后：
 
-不会需要你手动填写企业 ID、群组 ID 或文件夹 ID，也不会把 Cookie 显示出来。WPS 自动跳转到的旧文件夹不会被当作目标，默认使用空间根目录。
+1. 脚本自动读取当前账号能看到的全部 WPS 空间。
+2. 浏览器自动关闭，回到终端选择空间；输入序号选择一个，输入 1,3 选择多个，输入 all 选择全部。
+3. 脚本自动验证所选空间并把 Cookie、CSRF 和工作区配置安全同步到 VPS。
 
-### 第三步：访问
+WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。默认使用企业云盘空间根目录；只有明确使用 --workspace-url 时才会指定某个具体文件夹。脚本不会显示 Cookie、CSRF、密码或签名 URL，也不需要手动填写企业 ID、群组 ID 或文件夹 ID。
 
-浏览器打开：
+如果使用 HTTP 同步，脚本会要求明确确认风险，因为 HTTP 会明文传输凭据和文件内容。公网使用建议给适配器套 HTTPS 反向代理；没有域名和证书时，个人可信网络可以暂时使用 HTTP。
 
-```text
-http://<VPS-IP>:54321/
-```
+### 3. 打开网页或连接 WebDAV
 
-WebDAV 地址：
+浏览器：
 
-```text
-http://<VPS-IP>:54321/dav/
-```
+~~~text
+http://<VPS地址>:54321/
+~~~
 
-用户名和密码就是安装时设置的 Basic Auth 凭据。端口不是 `54321` 时，把地址中的端口替换成安装时填写的端口。
+WebDAV：
 
-网页支持：浏览、上传、拖动上传、上传队列与进度、下载、新建文件夹、重命名、移动（可视化选择目标文件夹）、删除、当前目录搜索（命中高亮）、按名称/大小/时间排序、列表与卡片双视图、深色模式。点击右上角滑块图标可以修改云盘显示名称。
+~~~text
+http://<VPS地址>:54321/dav/
+~~~
 
-## 手动运行 Go 版
+用户名和密码就是安装时设置的 Basic Auth。自定义端口时，把地址中的 54321 换成实际端口。服务显示 WPS 未连接 时，表示适配器进程正常但 WPS 凭据尚未同步、已过期或当前空间无权访问；重新运行 wps_login.py 即可。
 
-一键安装脚本已经默认部署 Go 服务。下面的方式适合开发者在没有 systemd/Docker 的环境中手动运行；运行时不需要 Python。
+## 登录助手的三种同步方式
 
-### 1. 安装 Go 工具链
+通常直接运行 python3 wps_login.py，按提示选择即可。也可以明确指定 HTTP/HTTPS：
 
-需要 Go `1.25+`。国内直接从官方镜像下载：
+~~~bash
+python3 wps_login.py --adapter-url https://<VPS地址或域名> --adapter-port 54321 --adapter-user <Basic Auth用户名>
+~~~
 
-```text
-https://golang.google.cn/dl/
-```
+没有 HTTPS 时：
 
-安装后运行 `go version` 确认版本不低于 `1.25`。
+~~~bash
+python3 wps_login.py --adapter-url http://<VPS地址> --adapter-port 54321 --adapter-user <Basic Auth用户名> --allow-http
+~~~
 
-### 2. 下载源码并构建
+SSH 私钥和 SSH 密码方式会把凭据写入 /etc/wps-adapter/secrets/，HTTP/HTTPS 方式调用受 Basic Auth 保护的 session import 接口。同步成功后不需要重启服务。
 
-```bash
-git clone https://gh-proxy.com/https://github.com/galiandan/WPS_2_WebDAV.git
-cd WPS_2_WebDAV/go
-CGO_ENABLED=0 go build -o wps-adapter ./cmd/wps-adapter
-```
+## 服务状态和常用检查
 
-Go 依赖会在首次构建时自动下载；如果网络不通，先执行 `go env -w GOPROXY=https://goproxy.cn,direct` 再重新构建。
+健康检查只表示 Go 进程正在运行，不代表 WPS 已登录：
 
-### 3. 登录 WPS 并生成本地凭据
+~~~bash
+curl 'http://<VPS地址>:54321/healthz'
+~~~
 
-登录助手可以把凭据直接写到本地目录（不需要 VPS）：
+查看 WPS 会话状态：
 
-```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py
-python3 wps_login.py --output-dir $HOME/wps-creds
-```
+~~~bash
+curl -u <Basic Auth用户名> 'http://<VPS地址>:54321/api/v1/status'
+~~~
 
-登录窗口完成后，`wps-creds` 目录里会出现三个文件：`wps-cookie`、`wps-csrf`、`wps-workspace.json`（目录权限会被自动收紧为仅本人可读）。
+常见状态：
 
-### 4. 启动服务
+- connected：WPS 凭据和目标空间可访问。
+- not_configured：还没有同步 Cookie、CSRF 或工作区配置。
+- session_expired：会话过期，重新运行登录助手。
+- permission_denied：当前账号无法访问所选空间或根目录。
+- upstream_unavailable：WPS 或对象存储暂时不可达。
 
-适配器要求凭据文件必须放在只有你自己能读的目录里（登录助手创建的 `wps-creds` 目录正好满足）。把网页/WebDAV 的用户名密码也放进去：
+服务遇到 WPS 401 时会尝试已确认的 rtk/grant_token 自动续期流程并重试一次。WPS 撤销刷新凭据或改变登录策略后，仍需重新登录。
 
-```bash
-printf 'admin' > $HOME/wps-creds/auth-user
-printf '你的密码' > $HOME/wps-creds/auth-pass
-chmod 600 $HOME/wps-creds/auth-user $HOME/wps-creds/auth-pass
+## HTTP、HTTPS 和端口
 
-export WPS_COOKIE_FILE=$HOME/wps-creds/wps-cookie \
-       WPS_CSRF_TOKEN_FILE=$HOME/wps-creds/wps-csrf \
-       WPS_WORKSPACE_FILE=$HOME/wps-creds/wps-workspace.json \
-       ADAPTER_USERNAME_FILE=$HOME/wps-creds/auth-user \
-       ADAPTER_PASSWORD_FILE=$HOME/wps-creds/auth-pass \
-       ADAPTER_BIND=0.0.0.0 ADAPTER_PORT=54321
+适配器支持 HTTP，适合没有域名和证书的个人环境；但 HTTP 会明文传输 Basic Auth、WPS 会话和文件内容，不适合直接暴露到公网。
 
-./wps-adapter serve
-```
+有域名时，建议使用 Caddy、Nginx 或其他反向代理提供 HTTPS，并把请求转发到 http://127.0.0.1:<端口>。WebDAV 客户端使用：
 
-本机试用可以把 `ADAPTER_BIND` 改成 `127.0.0.1`；放到 VPS 上时保持 `0.0.0.0`，并按上一节的方式访问 `http://<VPS-IP>:54321/`。
-
-启动后可以先自检：
-
-```bash
-./wps-adapter check-config   # 校验环境配置，不访问 WPS
-curl http://127.0.0.1:54321/healthz
-```
-
-### 5. 升级手动运行的 Go 版
-
-```bash
-cd WPS_2_WebDAV
-git pull
-cd go && CGO_ENABLED=0 go build -o wps-adapter ./cmd/wps-adapter
-```
-
-然后重启 `wps-adapter serve` 即可。凭据文件不用重新生成；WPS 登录过期时重新运行一次登录助手。
-
-## HTTP 和 HTTPS
-
-没有域名和证书时可以使用 HTTP，适合个人可信网络或临时测试。但 HTTP 会明文传输 Basic Auth、WPS 会话和文件内容，不适合直接暴露在公网。
-
-有域名时，建议使用 Nginx、Caddy 或其他反向代理提供 HTTPS，再让代理转发到适配器。WebDAV 客户端应使用：
-
-```text
+~~~text
 https://<你的域名>/dav/
-```
+~~~
 
-## 登录同步方式
+安装器支持自定义端口。例如：
 
-登录助手默认会询问三种方式：
+~~~bash
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
+~~~
 
-1. SSH 私钥：适合已经用 SSH 密钥管理 VPS 的用户。
-2. SSH 密码：适合没有 SSH 私钥的用户，登录完成后由 SSH 自己询问密码。
-3. HTTP/HTTPS 适配器接口：输入服务地址、Basic Auth 用户名和密码即可同步。
+登录助手中的端口也必须填写 18080，不能继续使用默认的 54321。
 
-没有 HTTPS 时，HTTP 方式必须明确确认风险：
+## 手工运行和开发
 
-```bash
-python3 wps_login.py --adapter-url http://<VPS-IP>:54321 --adapter-user <用户名> --allow-http
-```
+生产服务代码在 go/；前端是 Go embed 的原生 HTML、CSS 和 JavaScript，没有 Node.js 构建步骤或第三方前端依赖。
 
-如果登录脚本提示 Chrome 会话未启动、Cookie 不完整或无权访问，请确认官方 WPS 窗口已经完成登录并进入企业云盘，然后重新运行脚本。服务同步新凭据后不需要重启。
+本机开发需要 Go 1.25+。国内 Go 模块镜像：
 
-## WPS 空间文件夹
+~~~bash
+export GOPROXY=https://goproxy.cn,direct
+~~~
 
-选择多个空间或 `all` 后，根目录结构类似：
+构建和测试：
 
-```text
-/
-├── <你的空间 1>/
-├── <你的空间 2>/
-└── <你的空间 3>/
-```
+~~~bash
+cd go
+gofmt -w .
+go test ./...
+go vet ./...
+CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
+~~~
 
-这些空间文件夹是适配器提供的虚拟入口，不会在 WPS 中创建同名文件夹。空间内部的文件仍直接来自对应 WPS 空间。
-
-跨空间 `MOVE` 和 `COPY` 会被拒绝，避免误操作。空间名称和群组 ID 由登录助手在当前账号中实时获取，不需要手动配置。
-
-## 检查服务状态
-
-健康检查只检查适配器进程是否运行，不代表 WPS 已登录：
-
-```bash
-curl 'http://<VPS-IP>:54321/healthz'
-```
-
-检查 WPS 会话：
-
-```bash
-curl -u <用户名> 'http://<VPS-IP>:54321/api/v1/status'
-```
-
-正常会返回 `connected`。如果返回 `not_configured`、`session_expired` 或 `permission_denied`，重新运行 `wps_login.py` 即可。
-
-服务遇到 WPS `401` 时，会尝试使用保存的 `rtk` 自动续期会话。WPS 撤销刷新凭据或改变登录策略时，仍需要重新登录。
+如果需要从源码包开始，使用国内 GitHub 加速地址下载 main 源码归档，再按 go/README.md 构建。普通用户不需要执行这些步骤。
 
 ## 卸载
 
-默认卸载服务和程序，但保留本机配置、Basic Auth、Cookie 和工作区文件：
+默认卸载服务、程序和本项目管理的容器，但保留本机配置、Basic Auth、Cookie、CSRF 和工作区文件，方便以后重新安装：
 
-```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
-```
+~~~bash
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+~~~
 
-连同本机配置和凭据一起删除：
+确认连同本机凭据一起删除：
 
-```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge
-```
+~~~bash
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge --remove-image
+~~~
 
-Docker 镜像需要额外添加 `--remove-image`。卸载不会删除 WPS 云盘中的远端文件，也不会删除 Docker 软件本身。
+卸载不会删除 Docker 软件，也不会删除 WPS 云盘中的远端文件。脚本会要求输入 YES；自动化场景可额外添加 --yes。
 
-## 安全说明
+## 项目目录
 
-本项目只适用于你自己的 WPS 账号和你有权限访问的数据，不绕过权限、SSO、验证码、风控或租户隔离。
-
-以下内容不能提交到 GitHub、Issue、聊天或日志：
-
-- WPS Cookie、`rtk`、CSRF 和 refresh token；
-- WebDAV/网页 Basic Auth 密码；
-- 签名对象存储 URL；
-- 原始 HAR、PCAP 和真实文件内容。
-
-服务默认限制上传并发、下载并发、目录递归深度、目录条目数、响应大小和上传临时磁盘占用，以适配低配 VPS。上传和下载尽量流经 WPS，不长期保存文件正文。
+~~~text
+go/              Go 生产服务、嵌入式网页和 Go 测试
+scripts/         Native、Docker 和卸载脚本
+deploy/          systemd 加固文件和 Docker 构建配置
+wps_login.py     独立 WPS 登录/凭据同步助手
+docs/            使用、接口、架构、部署和研究文档
+contract_tests/  黑盒契约测试与 Go/Python 对照结果
+src/             Python 协议参照实现，仅用于测试和研究
+tests/            Python 参照测试
+tools/            HAR 检查、契约分析和发布清单工具
+~~~
 
 ## 当前限制
 
 - WPS 私有接口可能变化，项目不承诺长期兼容。
-- 上传请求需要 `Content-Length`，暂不接受 HTTP chunked request body。
+- 上传请求需要 Content-Length，暂不接受 HTTP chunked request body。
 - 大文件失败后会在当前请求内有限重试；跨进程断点恢复仍属于实验性能力。
-- 文件夹 `COPY` 使用 VPS 流式中继，目标已存在时不会覆盖；单文件同名复制可使用 WPS 原生 COPY。
-- `LOCK` 是当前进程内的兼容锁，服务重启后失效。
+- 文件夹 COPY 使用流式中继；LOCK 是当前进程内的兼容锁，服务重启后失效。
 - 多空间之间暂不支持移动和复制。
+- 递归 PROPFIND、递归 COPY、上传和下载都受深度、条目、并发和磁盘预算限制。
 
-## 高级文档
+## 安全
 
-- [`docs/login.md`](docs/login.md)：登录助手和凭据同步
-- [`docs/deployment.md`](docs/deployment.md)：升级、回滚和服务管理
-- [`docs/api.md`](docs/api.md)：REST、WebDAV 和状态码
-- [`docs/integration.md`](docs/integration.md)：Windows、NAS 和验收
-- [`docs/architecture.md`](docs/architecture.md)：组件和数据流
-- [`docs/go-rewrite-plan/`](docs/go-rewrite-plan/)：Go 重写的迁移计划、决策表与进度
-- [`go/README.md`](go/README.md)：Go 模块开发指南
-- [`go/CODE-REVIEW.md`](go/CODE-REVIEW.md)：Go 代码评审结论与修复记录
-- [`docs/research/`](docs/research/)：脱敏抓包记录和实验边界
-- [`SECURITY.md`](SECURITY.md)：安全问题报告
+不要把以下内容提交到 GitHub、Issue、聊天或日志：
 
-## 开发测试
+- WPS Cookie、rtk、CSRF、refresh token；
+- WebDAV/网页 Basic Auth 密码；
+- 签名对象存储 URL；
+- 原始 HAR、PCAP 和真实文件内容。
 
-### Go 版（本分支的重写实现）
-
-开发环境需要 Go `1.25+`，在 `go/` 目录下执行：
-
-```bash
-cd go
-go vet ./...
-go test ./...
-go test -race ./...
-CGO_ENABLED=0 go build -o /tmp/wps-adapter ./cmd/wps-adapter
-```
-
-### Python 参照实现
-
-项目运行时不依赖第三方 Python 包。开发环境需要 Python `3.11+`：
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-python3 -m compileall -q src tests
-python3 tools/build_login_script.py --check
-python3 tools/build_release_manifest.py --check
-git diff --check
-```
-
-真实 WPS 实验必须使用专用测试目录，原始抓包和真实文件不要提交。
-
-## License
-
-本项目采用 [GNU General Public License v3.0 or later](LICENSE) 发布。WPS 商标、服务和接口归其各自权利人所有；本项目不代表 WPS 官方立场。
+详见 SECURITY.md、docs/login.md 和 docs/deployment.md。项目采用 GNU GPL v3，见 LICENSE。

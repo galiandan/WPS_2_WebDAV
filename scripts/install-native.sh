@@ -234,8 +234,8 @@ download_archive() {
     local candidates=()
     [[ -n "${WPS_ADAPTER_ARCHIVE_URL:-}" ]] && candidates+=("$WPS_ADAPTER_ARCHIVE_URL")
     candidates+=(
-        "https://gh-proxy.com/$direct_url"
         "https://ghfast.top/$direct_url"
+        "https://gh-proxy.com/$direct_url"
         "$direct_url"
     )
     total="${#candidates[@]}"

@@ -111,9 +111,9 @@ class InstallerTemplateTests(unittest.TestCase):
             self.assertIn("gh-proxy.com", document)
             self.assertIn("ghfast.top", document)
             self.assertIn("--connect-timeout 10", document)
-            self.assertIn("--max-time 60", document)
+            self.assertIn("--max-time 120", document)
             self.assertNotIn("download_and_run", document)
-            self.assertIn("set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1", document)
+            self.assertIn("set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 --retry 2", document)
             self.assertIn("scripts/install-native.sh", document)
             self.assertIn("scripts/install-docker.sh", document)
 
