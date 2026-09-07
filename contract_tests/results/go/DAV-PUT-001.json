@@ -1,0 +1,13 @@
+{
+  "location": "/dav/bench-dav-upload.bin",
+  "payload": {
+    "etag": null,
+    "id": "bench-file-new",
+    "kind": "file",
+    "modified_at": "1788268272",
+    "name": "bench-dav-upload.bin",
+    "parent_id": "0",
+    "size": 11
+  },
+  "status": 201
+}

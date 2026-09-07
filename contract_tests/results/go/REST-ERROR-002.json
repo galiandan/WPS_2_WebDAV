@@ -1,0 +1,9 @@
+{
+  "payload": {
+    "code": "wps_session_expired",
+    "error": "WPS session expired; refresh the configured credentials",
+    "upstream_status": 401
+  },
+  "retry_after": "60",
+  "status": 503
+}

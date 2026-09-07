@@ -1,0 +1,5 @@
+{
+  "body": "{\"id\":\"bench-file-1\",\"name\":\"bench-one.txt\",\"kind\":\"file\",\"parent_id\":\"bench-dir-1\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":\"bench-etag-bench-file-1\"}",
+  "location": "/dav/bench-folder/bench-one.txt",
+  "status": 201
+}

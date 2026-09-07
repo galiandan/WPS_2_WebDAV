@@ -5,8 +5,12 @@ set -Eeuo pipefail
 # falls back to a portable background process on systems without systemd.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-cf7ebcc35777d3a0fdcc4fd58359d2798207900d}"
-SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-366ac8617b8b676b79aaf3245c5f3dbbafb08d83adba4dad1936770a74494e8a}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-8d9b9d84ee484a84cb6aab9cd3567ad41f8ad115}"
+SOURCE_MANIFEST_SHA256="${WPS_ADAPTER_SOURCE_MANIFEST_SHA256:-3b0df9c8b608edf6ba9dfded175a26186eac8e67b0fc4d47e450171f6e24aaf4}"
+# The service is built with a fixed toolchain only when the host does not
+# already provide a compatible Go compiler. The toolchain stays in the
+# installer's private temporary directory and is never installed system-wide.
+GO_VERSION="1.25.0"
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
 SECRET_DIR="$ETC_DIR/secrets"
@@ -20,7 +24,7 @@ ROOT_ID_ARG=""
 ADAPTER_USER_ARG=""
 RUN_USER_ARG=""
 
-TOTAL_STEPS=7
+TOTAL_STEPS=8
 CURRENT_STEP=0
 PACKAGE_MANAGER=""
 DOWNLOAD_CONNECT_TIMEOUT="${WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT:-10}"
@@ -107,58 +111,74 @@ install_native_dependencies() {
     if ! has_command find; then
         find_package="findutils"
     fi
-    case "$PACKAGE_MANAGER" in
-        pacman)
-            package_install ca-certificates tar coreutils $find_package $transport
-            find_python || package_install python
-            ;;
-        dnf|microdnf|tdnf|yum)
-            package_install ca-certificates tar coreutils $find_package $transport
-            if ! find_python; then
-                package_install python3.11 \
-                    || package_install python311 \
-                    || package_install python3
-            fi
-            ;;
-        zypper)
-            package_install ca-certificates tar coreutils $find_package $transport
-            if ! find_python; then
-                package_install python311 \
-                    || package_install python3
-            fi
-            ;;
-        *)
-            package_install ca-certificates tar coreutils $find_package $transport
-            if ! find_python; then
-                case "$PACKAGE_MANAGER" in
-                    apt)
-                        package_install python3.12 \
-                            || package_install python3.11 \
-                            || package_install python3
-                        ;;
-                    *) package_install python3 ;;
-                esac
-            fi
-            ;;
-    esac
+    package_install ca-certificates tar coreutils $find_package $transport
 }
 
-find_python() {
+go_version_at_least_125() {
+    local binary="$1"
+    local version major minor
+    # `go version` is: go version go1.25.0 linux/amd64.  Read the
+    # toolchain token (field 3), not the platform token (field 4).
+    version="$("$binary" version 2>/dev/null | awk 'NR == 1 { print $3 }')"
+    [[ "$version" =~ ^go([0-9]+)\.([0-9]+)(\.[0-9]+)?([a-zA-Z.-].*)?$ ]] || return 1
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    ((10#${major} > 1 || (10#${major} == 1 && 10#${minor} >= 25)))
+}
+
+find_go() {
     local candidate
-    for candidate in python3.14 python3.13 python3.12 python3.11 python3 python; do
-        if has_command "$candidate" \
-            && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
-            >/dev/null 2>&1; then
-            command -v "$candidate"
+    for candidate in go /usr/local/go/bin/go; do
+        if [[ "$candidate" == */* ]]; then
+            [[ -x "$candidate" ]] || continue
+        else
+            command -v "$candidate" >/dev/null 2>&1 || continue
+        fi
+        if go_version_at_least_125 "$candidate"; then
+            if [[ "$candidate" == */* ]]; then
+                printf '%s\n' "$candidate"
+            else
+                command -v "$candidate"
+            fi
             return 0
         fi
     done
     return 1
 }
 
+linux_go_target() {
+    GOARCH=""
+    GOARM=""
+    GO_ARCHIVE=""
+    case "$(uname -m)" in
+        x86_64|amd64) GOARCH="amd64"; GO_ARCHIVE="amd64" ;;
+        aarch64|arm64) GOARCH="arm64"; GO_ARCHIVE="arm64" ;;
+        armv6l|armv7l|armv8l) GOARCH="arm"; GOARM="6"; GO_ARCHIVE="armv6l" ;;
+        i386|i686) GOARCH="386"; GO_ARCHIVE="386" ;;
+        ppc64le) GOARCH="ppc64le"; GO_ARCHIVE="ppc64le" ;;
+        riscv64) GOARCH="riscv64"; GO_ARCHIVE="riscv64" ;;
+        s390x) GOARCH="s390x"; GO_ARCHIVE="s390x" ;;
+        *) die "不支持的 Linux CPU 架构：$(uname -m)；请提供 Go >= 1.25 或使用 amd64/arm64 VPS" ;;
+    esac
+    # Go publishes one 32-bit ARM Linux archive (armv6l); GOARM controls
+    # the target emitted by that toolchain.  Select the checksum by archive
+    # name rather than GOARCH, which is simply "arm" in that case.
+    case "$GO_ARCHIVE" in
+        amd64) GO_SHA256="2852af0cb20a13139b3448992e69b868e50ed0f8a1e5942ee1de9e19a123b613" ;;
+        arm64) GO_SHA256="05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae" ;;
+        armv6l) GO_SHA256="a5a8f8198fcf00e1e485b8ecef9ee020778bf32a408a4e8873371bfce458cd09" ;;
+        386) GO_SHA256="8c602dd9d99bc9453b3995d20ce4baf382cc50855900a0ece5de9929df4a993a" ;;
+        ppc64le) GO_SHA256="0f18a89e7576cf2c5fa0b487a1635d9bcbf843df5f110e9982c64df52a983ad0" ;;
+        riscv64) GO_SHA256="c018ff74a2c48d55c8ca9b07c8e24163558ffec8bea08b326d6336905d956b67" ;;
+        s390x) GO_SHA256="34e5a2e19f2292fbaf8783e3a241e6e49689276aef6510a8060ea5ef54eee408" ;;
+        *) die "没有 Go ${GO_VERSION} 的 Linux 架构校验值：$GO_ARCHIVE" ;;
+    esac
+}
+
 download_file() {
     local url="$1"
     local target="$2"
+    local max_filesize="${3:-52428800}"
     case "$url" in
         https://*) ;;
         *)
@@ -167,7 +187,7 @@ download_file() {
             ;;
     esac
     if has_command curl; then
-        curl --fail --show-error --progress-bar --location --max-filesize 52428800 \
+        curl --fail --show-error --progress-bar --location --max-filesize "$max_filesize" \
             --connect-timeout "$DOWNLOAD_CONNECT_TIMEOUT" --max-time "$DOWNLOAD_MAX_TIME" \
             --retry 2 --retry-delay 1 --proto-redir '=https' --proto '=https' --tlsv1.2 \
             "$url" -o "$target"
@@ -181,6 +201,30 @@ download_file() {
     else
         die "缺少 curl 或 wget，无法下载项目归档"
     fi
+}
+
+download_go_toolchain() {
+    linux_go_target
+    local filename="go${GO_VERSION}.linux-${GO_ARCHIVE}.tar.gz"
+    local archive="$TMP_DIR/$filename"
+    local candidates=(
+        "https://golang.google.cn/dl/$filename"
+        "https://go.dev/dl/$filename"
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        printf '下载 Go 工具链：%s\n' "$candidate"
+        rm -f -- "$archive"
+        if download_file "$candidate" "$archive" 157286400 \
+            && printf '%s  %s\n' "$GO_SHA256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+            GO_BIN="$TMP_DIR/go/bin/go"
+            tar -xzf "$archive" -C "$TMP_DIR"
+            [[ -x "$GO_BIN" ]] || die "Go 工具链解压后不可用"
+            return 0
+        fi
+        printf '该 Go 下载地址不可用，准备尝试下一个地址。\n' >&2
+    done
+    die "Go ${GO_VERSION} 工具链下载或校验失败；可先在主机安装 Go >= 1.25 后重试"
 }
 
 download_archive() {
@@ -245,7 +289,10 @@ pid_is_adapter() {
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     [[ -r "/proc/$pid/cmdline" ]] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
-    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -q 'wps_adapter'
+    local command_line
+    command_line="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$command_line" == *"wps-adapter"* && "$command_line" == *" serve"* ]] \
+        || [[ "$command_line" == *"wps_adapter"* && "$command_line" == *" serve"* ]]
 }
 
 host_uses_systemd() {
@@ -303,15 +350,15 @@ service_start() {
     mkdir -p -- "$(dirname "$PID_FILE")"
     : >"$LOG_FILE"
     chown "$RUN_USER:$RUN_GROUP" "$LOG_FILE"
-    local launcher='set -a; . "$1"; set +a; export PYTHONPATH="$2/src"; exec "$3" -m wps_adapter serve'
+    local launcher='set -a; . "$1"; set +a; exec "$2/wps-adapter" serve'
     if [[ "$(id -u)" == "$RUN_UID" ]]; then
-        nohup bash -c "$launcher" -- "$ENV_FILE" "$APP_DIR" "$PYTHON_BIN" \
+        nohup bash -c "$launcher" -- "$ENV_FILE" "$APP_DIR" \
             >>"$LOG_FILE" 2>&1 < /dev/null &
     elif has_command runuser; then
-        nohup runuser -u "$RUN_USER" -- bash -c "$launcher" -- "$ENV_FILE" "$APP_DIR" "$PYTHON_BIN" \
+        nohup runuser -u "$RUN_USER" -- bash -c "$launcher" -- "$ENV_FILE" "$APP_DIR" \
             >>"$LOG_FILE" 2>&1 < /dev/null &
     elif has_command su; then
-        nohup su -s /bin/sh "$RUN_USER" -c "$launcher" -- "$ENV_FILE" "$APP_DIR" "$PYTHON_BIN" \
+        nohup su -s /bin/sh "$RUN_USER" -c "$launcher" -- "$ENV_FILE" "$APP_DIR" \
             >>"$LOG_FILE" 2>&1 < /dev/null &
     else
         die "当前系统没有 systemd、runuser 或 su，无法以指定服务用户启动适配器"
@@ -355,6 +402,9 @@ usage() {
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
+
+Native 构建：
+  主机已有 Go 1.25 或更高版本时优先使用；否则自动下载并校验 Go ${GO_VERSION}，不会安装 Python。
 
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
 EOF
@@ -424,17 +474,15 @@ done
 
 progress_step "检查运行环境和安装参数"
 
-PYTHON_BIN="$(find_python || true)"
+GO_BIN="$(find_go || true)"
 if ! has_command curl || ! has_command tar || ! has_command sha256sum \
-    || ! has_command find || [[ -z "$PYTHON_BIN" ]]; then
+    || ! has_command find; then
     detect_package_manager || die "缺少安装依赖，且未识别 apt、dnf、yum、apk、pacman、zypper 或 xbps-install"
     install_native_dependencies
-    PYTHON_BIN="$(find_python || true)"
 fi
 has_command curl || has_command wget || die "缺少 curl 或 wget，无法下载项目归档"
 has_command tar || die "缺少 tar，无法解压项目归档"
 has_command sha256sum || die "缺少 sha256sum；请安装 coreutils 或提供该命令"
-[[ -n "$PYTHON_BIN" ]] || die "需要 Python 3.11 或更高版本；请通过系统软件源安装后重试"
 
 if host_uses_systemd; then
     SERVICE_MODE="systemd"
@@ -652,6 +700,8 @@ cmp -s "$MANIFEST_FILES" "$ACTUAL_FILES" || die "下载归档的文件清单与�
 (cd "$SOURCE_DIR" && sha256sum -c release-manifest.txt >/dev/null) \
     || die "下载归档的文件校验失败"
 [[ -f "$SOURCE_DIR/.env.example" ]] || die "下载的项目缺少环境变量模板"
+[[ -f "$SOURCE_DIR/go/go.mod" && -f "$SOURCE_DIR/go/cmd/wps-adapter/main.go" ]] \
+    || die "下载的项目缺少 Go 服务源码"
 if [[ "$SERVICE_MODE" == "systemd" ]]; then
     [[ -f "$SOURCE_DIR/deploy/wps-adapter.service" ]] || die "下载的项目缺少 systemd 服务文件"
     [[ -f "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" ]] || die "下载的项目缺少 systemd 安全配置"
@@ -680,14 +730,34 @@ chmod 600 "$ENV_TARGET_FILE"
 APP_STAGE_DIR="$TMP_DIR/app"
 mkdir -p "$APP_STAGE_DIR"
 cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
+
+progress_step "准备 Go 工具链并构建静态服务"
+linux_go_target
+if [[ -z "$GO_BIN" ]]; then
+    download_go_toolchain
+else
+    printf '使用现有 Go 工具链：%s\n' "$GO_BIN"
+fi
+GO_BUILD_DIR="$TMP_DIR/go-build"
+mkdir -p "$GO_BUILD_DIR"
+GO_BUILD_ENV=(CGO_ENABLED=0 GOTOOLCHAIN=local GOOS=linux GOARCH="$GOARCH")
+[[ -n "$GOARM" ]] && GO_BUILD_ENV+=(GOARM="$GOARM")
+(
+    cd "$SOURCE_DIR/go"
+    env "${GO_BUILD_ENV[@]}" \
+        "$GO_BIN" build -trimpath -ldflags "-s -w -X main.commit=$SOURCE_REF" \
+        -o "$GO_BUILD_DIR/wps-adapter" ./cmd/wps-adapter
+)
+[[ -x "$GO_BUILD_DIR/wps-adapter" ]] || die "Go 服务构建失败"
+install -m 755 "$GO_BUILD_DIR/wps-adapter" "$APP_STAGE_DIR/wps-adapter"
 chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
 
 UNIT_FILE="$TMP_DIR/wps-adapter.service"
 if [[ "$SERVICE_MODE" == "systemd" ]]; then
-    awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" -v python_bin="$PYTHON_BIN" '
+    awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" '
         /^User=/ { print "User=" run_user; next }
         /^Group=/ { print "Group=" run_group; next }
-        /^ExecStart=/ { print "ExecStart=" python_bin " -m wps_adapter serve"; next }
+        /^ExecStart=/ { print "ExecStart=/opt/wps-adapter/wps-adapter serve"; next }
         { print }
     ' "$SOURCE_DIR/deploy/wps-adapter.service" >"$UNIT_FILE"
 fi

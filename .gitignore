@@ -28,3 +28,7 @@ dist/
 build/
 *.egg-info/
 secrets/
+
+# Go build artifacts (the service targets Linux and is built at deploy time)
+go/wps-adapter
+go/wps-adapter.exe

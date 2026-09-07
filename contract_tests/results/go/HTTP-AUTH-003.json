@@ -1,0 +1,7 @@
+{
+  "body": "",
+  "connection": "close",
+  "content_length": "0",
+  "status": 401,
+  "www_authenticate": "Basic realm=\"wps-adapter\""
+}

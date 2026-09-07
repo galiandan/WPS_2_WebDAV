@@ -1,0 +1,7 @@
+{
+  "hrefs": [
+    "/dav/bench-folder/",
+    "/dav/bench-folder/child.txt"
+  ],
+  "status": 207
+}

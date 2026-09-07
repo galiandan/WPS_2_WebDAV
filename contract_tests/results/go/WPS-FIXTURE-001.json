@@ -1,0 +1,11 @@
+{
+  "credential_violations": [],
+  "object_put_sha256": "f2caaa6044f1f4a32bd30a6d229a828e7f8ae863d9c843eaeb6e7a5340aa78ba",
+  "part_md5s": [],
+  "request_contract_violations": [],
+  "served": {
+    "control:create_update": 1,
+    "control:pre_check": 1,
+    "control:register": 1
+  }
+}

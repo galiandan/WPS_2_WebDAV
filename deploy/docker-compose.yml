@@ -8,7 +8,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       args:
-        BASE_IMAGE: "${WPS_ADAPTER_DOCKER_BASE_IMAGE:-python:3.12-slim}"
+        GO_BUILDER_IMAGE: "${WPS_ADAPTER_GO_BUILDER_IMAGE:-golang:1.25.0}"
         APP_UID: "${WPS_ADAPTER_UID:-1000}"
         APP_GID: "${WPS_ADAPTER_GID:-1000}"
     restart: unless-stopped

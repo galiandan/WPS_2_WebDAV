@@ -1,0 +1,18 @@
+{
+  "control_char": {
+    "body": "{\"error\":\"root name contains a control character\"}",
+    "status": 400
+  },
+  "empty": {
+    "body": "{\"error\":\"root name must not be empty\"}",
+    "status": 400
+  },
+  "non_string": {
+    "body": "{\"error\":\"root name must be a string\"}",
+    "status": 400
+  },
+  "too_long": {
+    "body": "{\"error\":\"root name is too long\"}",
+    "status": 400
+  }
+}

@@ -1,0 +1,3626 @@
+# Go 重写迁移记录
+
+本文件是 `docs/go-rewrite-plan/` 的执行工作记录，只作迁移记录，不进发布产物。
+规则见 `docs/go-rewrite-plan/08-executor-checklist.md`：一次只做一个小任务，
+测试不过不进入下一任务，每完成任务一个提交。
+
+## B000 记录工作区状态
+
+日期：2026-09-05
+
+- 当前提交：`25c2784e6aebdef4997b84baaa7b61b769552935`（分支 `main`）。
+- 工作区状态：干净（`git status --porcelain` 为空），无用户未提交改动。
+- 项目版本：`0.9.8`（`pyproject.toml`），`CHANGELOG.md` 仍有 `[Unreleased]` 内容。
+- 参照测试入口：`PYTHONPATH=src python -m unittest discover -s tests -v`，
+  CI 配置在 `.github/workflows/test.yml`。
+- `wps_login.py` 是生成物，来源为 `tools/build_login_script.py`。
+- Python 参照实现规模（迁移期保留，不修改）：
+
+| 文件 | 行数 |
+| --- | --- |
+| src/wps_adapter/client.py | 2598 |
+| src/wps_adapter/server.py | 1854 |
+| src/wps_adapter/web.py | 1064 |
+| src/wps_adapter/storage.py | 857 |
+| src/wps_adapter/login.py | 1547 |
+| src/wps_adapter/workspace.py | 326 |
+| src/wps_adapter/login_command.py | 319 |
+| src/wps_adapter/har.py | 457 |
+| src/wps_adapter/settings.py | 209 |
+| src/wps_adapter/__main__.py | 160 |
+| src/wps_adapter/provider.py | 104 |
+| src/wps_adapter/__init__.py | 34 |
+
+- 本机工具链：Linux (zen kernel)，`go1.27.0`，git 可用。
+- Go 代码放在本仓库 `go/` 目录下，module path 为
+  `github.com/galiandan/WPS_2_WebDAV/go`；包结构遵循
+  `03-target-architecture.md` 第 4 节（cmd/wps-adapter + internal/*）。
+
+检查：没有源码或配置被修改。
+
+## B001 建立 Linux 参照环境
+
+日期：2026-09-05
+
+本机即 Linux（zen kernel，x86_64），无需 WSL。工具链实测：
+
+- Python `3.14.7`（满足 CI 矩阵 3.11-3.14 的上限）。
+- Go `go1.27.0`（`-X:nodwarf5` 本地变体）。
+- Git 可用，remote 为 `git@github.com:galiandan/WPS_2_WebDAV.git`。
+
+运行命令与结果：
+
+1. `PYTHONPATH=src python -m unittest discover -s tests`：
+   首次运行 155 项，1 failure。
+2. `PYTHONPATH=src python -m compileall -q src tests wps_login.py`：通过。
+3. `bash -n scripts/install-native.sh scripts/install-docker.sh`：通过。
+4. 登录脚本生成检查（`tools/build_login_script.py --check`，由测试套件覆盖）：通过。
+5. release manifest 检查（`tools/build_release_manifest.py --check`，由测试套件覆盖）：首次失败。
+
+失败归类（按 B001 要求）：
+
+- `test_release_manifest_matches_its_builder`：**仓库缺陷**，非环境缺失、非平台假设。
+  `docs/go-rewrite-plan/` 与 `go/MIGRATION-LOG.md` 在最近提交中加入后，
+  生成产物 `release-manifest.txt` 未重新生成。修复方式是运行
+  `python tools/build_release_manifest.py` 重新生成（纯生成产物，无行为变化），
+  已包含在本任务提交中。未发现 Windows 平台特有的失败（与 00-README 第 8 节
+  描述的 Windows 结果不同，Linux 上仅此 1 项失败）。
+- 未发现需要单独开修复任务的真实功能缺陷；未顺手修改任何功能。
+
+修复后复跑：`PYTHONPATH=src python -m unittest discover -s tests` →
+**155 项全部通过（OK）**。
+
+完成条件达成：已有可信的 Linux Python 参照基线（155 全绿 + compileall + shell
+语法 + 两个生成物检查），后续任务以它为协议 oracle。
+
+回滚：本任务仅重新生成 `release-manifest.txt` 并追加本记录；回滚即
+`git revert` 本提交。
+
+## B002 记录性能基线
+
+日期：2026-09-05
+
+工具：新增 `go/benchmarks/python_baseline.py`（迁移专用，不进发布产物）。
+方法：真实 Python 适配器跑在子进程，WPS 传输层换成进程内 fake upstream
+（使用 client 本身提供的测试注入点，未修改参照实现）；父进程经真实
+loopback HTTP 驱动并测量。完整数据在
+`go/benchmarks/results/python-baseline.json`（同仓库保存，全部为
+bench-* 占位数据，无任何真实 ID/Cookie/URL）。
+
+环境：Linux 7.2.2-zen1-1-zen x86_64，Python 3.14.7，16 CPU，15 GiB RAM。
+配置：默认参数（list_count=20、cache_ttl=2s、stream_chunk=1MiB、
+max_uploads=2、max_downloads=4），仅 WPS_UPLOAD_MIN_FREE_BYTES=0 与
+关闭 Basic Auth（loopback 基准）。
+
+主要结果（p50，另见 JSON）：
+
+| 场景 | 数值 |
+| --- | --- |
+| /healthz keep-alive | 41.0 ms |
+| /healthz 新建连接 | 0.15 ms |
+| /api/v1/status 冷 | 0.74 ms（fake upstream） |
+| /api/v1/status 缓存命中（keep-alive） | 41.0 ms |
+| REST 列表 204 条 冷（10 页上游分页） | 3.2 ms |
+| REST 列表 204 条 热缓存（keep-alive） | 41.0 ms |
+| PROPFIND Depth 1（204 条） | 6.2 ms |
+| 下载 8 MiB / 64 MiB | 79 / 98 MiB/s，SHA-256 校验一致 |
+| 上传 1 MiB / 8 MiB（spool+三摘要+signed PUT+登记） | 167 / 359 MiB/s，SHA-256 校验一致 |
+| RSS 空闲 / 峰值 | 31.4 MiB / 43.3 MiB |
+| 上游请求数（全部场景累计） | control list 89 次、islogin 1、object GET 5、PUT 2 |
+| 文件描述符（结束后） | 4（无泄漏） |
+
+发现 1（重要，影响所有 keep-alive 小响应）：Python 服务端接受的套接字
+未禁用 Nagle（`disable_nagle_algorithm=False`）且响应为多次小段写，
+keep-alive 连接上每个小响应稳定多出约 40 ms（41ms vs 新建连接 0.15ms；
+在服务端 handler 上设置 TCP_NODELAY 后同场景 0.056 ms，客户端侧设置
+无效，证明停顿在服务端）。该行为是当前 Python 可观察行为的一部分；
+Go 侧（net/http 默认 TCP_NODELAY）不会复现。**属于潜在行为差异，
+是否要求 Go 复现该停顿交由负责人决定（默认建议：不复现，记录为
+已批准变更，因为它不是协议语义而是 TCP 交互特征）。**
+
+发现 2（客户端取消释放）：断开检测只在流循环的两个 chunk 之间进行。
+- RST 断开（SO_LINGER(0)，写路径立即出错）：上游对象流 138 ms 内释放，
+  下载槽立即可复用。
+- 干净 FIN 断开（接收缓冲区空）：服务端阻塞在 `sendall`，直到
+  `ADAPTER_REQUEST_TIMEOUT`（默认 60 s）写超时才释放上游流；实测
+  60.4 s。这是当前真实行为，Go 需要决定是否复现（见 D 系列决定，
+  未决定前以保持行为为准）。
+
+未运行项：真实 WPS 专用目录的低频小文件与 100 MiB 文件测试。原因：
+执行环境无负责人凭据，且红线禁止执行模型访问真实账号；此项归入
+灰度阶段（M1002）由负责人执行。fake upstream 方法论已固定，Go 用
+同一 harness 形状对比。
+
+回滚：仅新增 `go/benchmarks/` 与本记录；`git revert` 本提交即可。
+
+## B003 兼容性决策记录（D-01 至 D-09）
+
+日期：2026-09-05
+
+新增 `contract_tests/`（黑盒契约测试目录，同时是 B100 的基础设施）：
+真实 Python 服务以子进程运行（生产入口 + 生产环境变量 + 生产 secret 文件
+语义），仅上游传输层为进程内 fake；`python -m unittest discover -s
+contract_tests -v` 当前 **13 项全部通过**。每个场景的观察结果保存在
+`contract_tests/results/DEC-*.json`。
+
+按负责人指示"严格遵守 docs/go-rewrite-plan 指导"，D-01..D-09 采用
+`03-target-architecture.md` 第 17 节的推荐决定作为工作决定；下表
+"当前行为"列均有自动化测试证据。若负责人日后否决某项，仅需更改对应
+决定并调整 Go 侧契约，特征测试本身就是证据链。
+
+| 编号 | 当前行为（证据/测试） | 决定（采纳文档推荐） | 破坏性 |
+| --- | --- | --- | --- |
+| D-01 | `WPS_GROUP_ID=auto` 且无 workspace 文件：根列表返回 200+空列表（DEC-D01-A）；固定 group：正常单空间（DEC-D01-B） | 不移植"空根成功"；Go 在 auto+未配置时显式报错 | 是（对未配置部署） |
+| D-02 | status 根列表 401 会触发凭据刷新（refresh 命令已执行，DEC-D02-A） | status 全流程禁止刷新；Go 对 status 探测关闭 401 重试 | 是（行为收紧） |
+| D-03 | 2 空间挂载时 4 个上传同时进入 pre_check，全局 WPS_MAX_UPLOADS=2 被放大（DEC-D03-A） | Go 实现真正进程级全局 ResourceBudget | 是（资源行为收紧） |
+| D-04 | REST 业务路径被二次解码：`%2Fweird%252Fname.txt`→404 "weird"；`%25252F` 才命中字面 `%2F` 条目；`+`→空格（DEC-D04-A） | Go 全入口只解码一次；以 DEC-D04 的反向 golden 固定 | 是（修正） |
+| D-05 | 仅配用户名文件时 0.0.0.0 可启动且所有请求 401（DEC-D05-A）；完整凭据正常（DEC-D05-B）；完全未配置则拒绝启动（DEC-D05-C） | Go 非本地 bind 必须用户名与密码都有效，启动期失败且错误不含值 | 是（启动期失败提前） |
+| D-06 | 固定 WPS_GROUP_ID 但存在 workspace 文件时 session import 可改映射并返回 200（DEC-D06-A/B） | 只有 auto 配置允许改映射；Go 按配置来源判断，不按文件是否存在 | 是（收紧） |
+| D-07 | session import 接受含换行的 mount 名并原样返回（DEC-D07-A） | Go 拒绝 mount 名中的控制字符，错误指明配置无效 | 是（安全收紧） |
+| D-08 | PROPFIND 忽略请求 body，固定返回完整属性集（含 getlastmodified/getetag）（DEC-D08-A） | 保持：Go 首版固定属性集合，不引入通用 WebDAV 库语义 | 否 |
+| D-09 | 超过 max_connections 的 TCP 连接在 accept 后被直接关闭，无任何 HTTP 状态（probe 收到 EOF，DEC-D09-A） | 保持：首个兼容版本维持并记录，后续再评估 503 | 否 |
+
+说明：D-01/02/03/04/05/06/07 的"先修 Python"步骤未在本轮执行（参照实现
+保持冻结，避免语言迁移与行为修正混在一个变更里）；Go 按上表"决定"列
+实现，B1302 对照时这些差异按"批准变更"归类，归类依据即本表与
+`contract_tests/results/`。
+
+安全检查：`results/` 与上游记录仅含 bench-* 占位值；未发现任何真实
+凭据/ID/签名 URL。
+
+回滚：仅新增 `contract_tests/` 与本记录；`git revert` 本提交即可。
+
+## B100 黑盒测试基础设施定稿
+
+日期：2026-09-05
+
+`contract_tests/` harness 定稿（B003 期间建立，本任务收尾）：
+
+- `harness.Service`：以子进程启动被测服务；预分配端口；0700 临时目录 +
+  0600 secret 文件；就绪信号为子进程 stdout 的 `listening=` 行（不做端口
+  探测，避免占用连接槽）；`stop()` 收集子进程 stderr 尾部用于诊断。
+- `python_service.py`：走真实 `wps_adapter.__main__.main` 生产入口；
+  仅注入 fake 传输层与测试用 web-settings 路径
+  （`CONTRACT_WEB_SETTINGS_FILE`，生产默认 `/etc/...` 无法在测试机写入）；
+  `CONTRACT_TRACEBACKS=1` 可输出未预期异常栈。
+- `fake_upstream.py`：scenario JSON 驱动（路由正则/状态码/延迟/barrier/
+  对象内容）；内置 islogin/grant_token/列表/上传/登记/文件夹/重命名/
+  任务轮询端点；全部请求写 JSONL 记录；计数原子写 stats。
+- `scenario()` 支持 listing/children/objects 覆盖。
+
+检查：`python -m unittest discover -s contract_tests` 与参照套件全绿。
+
+## B101 HTTP/auth/framing 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_http_auth.py`，23 项全部通过，证据在
+`results/HTTP-HEALTH-*.json`、`results/HTTP-AUTH-*.json`、
+`results/HTTP-FRAMING-*.json`。固定要点：
+
+- `/healthz` 无认证、不访问 upstream（upstream 记录为空）；带错误凭据仍 200。
+- Basic Auth：缺失/错误/非法 Base64/非 UTF-8/缺冒号/未知 scheme → 401，
+  `WWW-Authenticate: Basic realm="wps-adapter"`、`Connection: close`、
+  `Content-Length: 0`、空 body；scheme 大小写不敏感；正确凭据 200。
+- framing 检查先于认证：Transfer-Encoding、多个 Content-Length、
+  GET/HEAD/OPTIONS 带非零/负数/非法长度 body → 400；Content-Length: 0 放行。
+- PUT 无 Content-Length → 411；控制 body > 1 MiB → 413；session import
+  > 512 KiB → 413；LOCK body > 64 KiB → 413。
+- 声明 100 字节只发 10 字节并关闭 → 服务端返回 4xx/5xx（记录实际值），
+  绝不返回 201。
+- keep-alive 同连接两个请求均 200；401 响应带 `Connection: close`。
+
+## B102 REST 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_rest.py`，39 项全部通过，证据在
+`results/REST-*.json`。固定要点：
+
+- status schema 六字段；settings GET/PATCH（trim、非空、256 字符上限、
+  拒绝控制字符/非字符串/多余字段/非法 JSON）。
+- entries/list 别名等价；entry 固定 7 字段；缺失字段 → null
+  （fsize 非法 → size null）；path 默认 `/`、空值/多值/相对/穿越 → 400；
+  文件上 list → 409；未知路由 → 404 "unknown REST route"。
+- metadata/download；download 带 attachment Content-Disposition 与对象
+  字节（SHA-256 一致）。
+- upload：201 + {path, entry}；对象 PUT 字节 SHA-256 与请求一致；
+  已存在同名默认 409 且不发 pre_check；overwrite=true 继续
+  pre_check-403 → 201；新名 + pre_check 403 默认 → 502
+  （upstream_status=403）；布尔 1/true/yes/on/TRUE → 真，
+  0/false/no/off → 假，maybe/多值 → 400。
+- folders/folder 别名 201；同名 409。PATCH name/fname/destination/
+  parent_path 四种目标、冲突字段 400、空对象 400、改名撞名 409、
+  同父移动 no-op（无上游 move 调用）、移动进自身 400、跨目录改名 501。
+- delete 204 + 两个别名；根删除 400。
+- 上游 500 → 502 {"error","code":"wps_unavailable","upstream_status":500}
+  （上游正文不透传）；上游 401（auto_refresh 关闭）→ 503
+  code=wps_session_expired + Retry-After: 60。
+
+## B103 WebDAV 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_webdav.py`，37 项全部通过，证据在
+`results/DAV-*.json`。固定要点：
+
+- OPTIONS（含 DAV 前缀外路径）→ `DAV: 1,2` 与固定 Allow 列表。
+- PROPFIND：Depth 0/1/infinity/缺省(=1)；非法 Depth → 400；
+  合法值大小写不敏感；D: 命名空间、href 逐段编码、目录 href 以 `/` 结尾、
+  固定属性集（displayname/getcontentlength/getcontenttype/getetag/
+  getlastmodified/resourcetype）；请求 body 忽略；XML 转义正确；
+  前缀外 404。
+- GET/HEAD：文件 ETag 带引号、MIME 猜测、Accept-Ranges、no-store、
+  Connection: close；目录 GET 409、HEAD httpd/unix-directory + 长度 0。
+- PUT（默认 overwrite=true，撞 pre_check 403 继续 → 201）+ Location；
+  MKCOL 201/409；DELETE 204、根 400。
+- MOVE：Destination 校验（缺 header/query/fragment/userinfo/跨 host/
+  跨 port/前缀外 → 400，绝对 URL 同 host+port 允许）；目标存在时
+  默认 T → 501、F → 412、非法值 → 400；同路径 MOVE 允许（201）。
+- COPY 文件走下载+上传中继（对象字节 SHA-256 一致）；文件夹 Depth 0
+  仅建目标根、Depth 1 复制直接子项；目标存在 501/412。
+- LOCK：新建 200（已存在资源）/201（lock-null）；If token 刷新保号；
+  文件级兄弟锁互不冲突；祖先锁与已有后代锁冲突 → 423；目录 infinity
+  锁阻止后代写、带 token 放行；Depth 1 → 400；DOCTYPE/entity → 400；
+  Timeout Infinite/超大钳制到 86400（响应体可少 1 秒）、非法 → 400；
+  UNLOCK 错 token 409、缺 header 400、成功 204。
+- 跨源写保护：带非同源 Origin 的 PUT → 403；同源放行；读请求不受限。
+
+检查：`python -m unittest discover -s contract_tests` → 112 项全绿；
+参照套件 155 项全绿（release-manifest.txt 因新增文件重新生成）。
+
+回滚：`git revert` 相应提交即可；契约测试不进入发布产物。
+
+## B104 WPS fixture 契约
+
+日期：2026-09-05
+
+新增 `contract_tests/test_wps_fixtures.py`（7 项，client 级 fixture，全部
+通过），证据在 `results/WPS-FIXTURE-*.json`。fake upstream 升级为严格
+fixture：对每个请求校验 method、path、query 参数名与值、JSON 字段集合
+与类型（violation 记录在 stats，测试断言为零）；对象存储侧记录全部
+请求头，出现 Cookie/Authorization/CSRF 即 violation。
+
+- WPS-FIXTURE-001 普通上传：pre_check/create_update/register 各 1 次，
+  对象 PUT 只有 Content-Type/Length（无任何凭据），对象字节 SHA-256 与
+  请求一致；register 携带 40 位 sha1、64 位 sha256。
+- WPS-FIXTURE-002 multipart（2.5×分片）：init 1、part 3、merge 1、
+  register 1；每片对象 PUT 的 MD5 与该分片内容一致；分片大小符合
+  instruction；成功后 checkpoint 文件清理。
+- WPS-FIXTURE-003 download：download_url 解析带固定 support_checksums；
+  对象 GET 不带 Cookie/Authorization。
+- WPS-FIXTURE-004/005 401 刷新：SDK grant_token（Set-Cookie 轮换落盘，
+  旧凭据重试后仍 401）与外部刷新命令（命令执行、无 grant 调用）。
+- WPS-FIXTURE-006 状态注入：301/403/404/410/500 均映射为脱敏
+  WpsApiError（保留上游状态码，不含正文）。
+- WPS-FIXTURE-007 注入：畸形 JSON → invalid_response；超大响应 →
+  上限保护；上游延迟超过超时 → unavailable。
+
+阶段 1（语言无关契约）至此完成：黑盒 harness、HTTP/auth/framing、
+REST、WebDAV、WPS fixture 五组全部就绪，`python -m unittest discover
+-s contract_tests` 共 119 项全绿；参照套件 155 项全绿。允许差异记录：
+multipart merge 的 XML 命名空间由客户端按本地名匹配（fixture 用
+CompleteMultipartUploadResult 结构）；其余请求形状均为逐字段固定。
+
+回滚：`git revert` 本提交；fixture 不进入发布产物。
+
+## M2/F0 前端拆分基线冻结
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F0 与 §20 第 1 步执行：不改页面行为，
+只记录现状并补充特征测试。
+
+新增特征测试（tests/test_server.py）：
+- /、/web、/web/ 三个入口返回完全相同的字节，Content-Type
+  text/html; charset=utf-8，Cache-Control: no-store；并逐字符固定当前
+  CSP 头值（含 'unsafe-inline'，F4 收紧时更新该断言）。
+- Basic Auth 启用时三个入口未认证均 401 + Basic realm="wps-adapter" +
+  Connection: close + 空 body。
+- render_web_app 对 U+2028 行分隔符在内联脚本 JSON 位置转义为 \u2028。
+
+FE-01..FE-08 负责人决定（采纳 05-frontend-plan.md §8 推荐项，标注待追认）：
+- FE-01 改名后左上角品牌文字不更新：采纳“拆分前补测试并修正”，F3 中
+  settings 成功后同步更新品牌文字（批准变更候选）。
+- FE-02 前端写死 /api/v1/：采纳“第一版明确只保证默认前缀”，不新增
+  只读前端配置（待负责人追认）。
+- FE-03 迁移旧文档声称存在上传取消：本提交修正
+  docs/language-migration.md 措辞；等价阶段不新增取消功能。
+- FE-04 同名文件夹上传静默跳过：冻结现状，浏览器 E2E 冻结后再议。
+- FE-05 路径不进地址栏：保持，不引入前端路由。
+- FE-06 移动靠手写目标路径：保持。
+- FE-07 移动端 760px 表格横向滚动：保持。
+- FE-08 无浏览器 E2E：本环境无浏览器、Node 与 pip，无法执行 §17 E2E
+  与 §11 F0 的四张基线截图（桌面有文件/桌面空目录/移动端有文件/WPS
+  未配置）及焦点顺序记录。该项与 M203、M205 一并作为负责人侧门禁，
+  须在具备浏览器的环境补齐后才允许关闭 M2 里程碑。
+
+初始加载网络顺序（由 web.py 内联脚本静态读出，REST 契约测试互证）：
+渲染根面包屑 → GET /api/v1/status →（仅 connected 时）GET
+/api/v1/entries?path=/ → 按返回顺序后台预取直接子文件夹（≤24 个、
+并发 ≤2、TTL 30s，仅写浏览器内存缓存）。写操作请求形状已由
+contract_tests/test_rest.py 逐项固定：folders POST 空体、entries PATCH
+只含 name 或 parent_path、DELETE 204 空响应、upload PUT 原始字节、
+settings GET/PATCH。
+
+检查：python -m unittest discover -s tests 全绿；contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## M2/F1 提取 style.css
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F1 与 §20 第 3-5 步执行（CSS 机械提取，
+Python 参照服务白名单提供）。
+
+- 新增 go/web/style.css：从 WEB_APP_TEMPLATE 的 <style> 块逐字节复制，
+  不调整颜色、空格、选择器、断点或尺寸（197 行）。
+- web.py：模板 <style> 块替换为固定同源链接
+  <link rel="stylesheet" href="/assets/style.css">；新增白名单资源
+  装载器 load_web_asset/web_asset_content_type/web_assets_dir——
+  文件名必须先命中清单，才允许参与路径拼接；目录解析顺序为
+  WPS_ADAPTER_WEB_ASSETS_DIR 环境变量 → 仓库 go/web/。
+- server.py：GET/HEAD /assets/<清单名> 经 Basic Auth 后返回资源，
+  MIME text/css; charset=utf-8、Cache-Control: no-store；清单外名称
+  （含 ../ 穿越、百分号编码变体、子路径）一律 404 并关闭连接，与
+  未知 DAV 路由行为一致。
+- 桥接不注入任何运行时文本（FE-02 采用“只保证默认前缀”，不新增
+  前端配置）。
+
+新增/更新测试：静态资源 5 项（字节一致、MIME/no-store、页面外链、
+清单外 404、HEAD 仅元数据、未认证 401）+ 装载器 2 项（白名单拒绝、
+目录覆盖生效）。
+
+检查：tests 165 项全绿；contract_tests 119 项全绿；
+release-manifest.txt 已重新生成。
+
+回滚：git revert 本提交。
+
+## M2/F2 提取 app.js
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F2 执行：只机械提取脚本，不改函数名、
+调用顺序、状态字段或文案。
+
+- 新增 go/web/app.js（710 行）：内联 IIFE 逐字节复制，含
+  "use strict"、目录缓存/预取常量（TTL 30s、并发 2、上限 24）与
+  全部交互逻辑。
+- 临时保留 rootName 注入（§F2.4）：app.js 内的
+  __WPS_ROOT_NAME_JSON__ token 由 Python 桥在响应时用
+  _safe_root_name_json 转义替换（render_web_asset），HTML 模板的
+  JSON token 随脚本外移自然消失；F3 将删除该替换。
+- web.py 模板 <script> 块替换为
+  <script src="/assets/app.js" defer></script>；defer 与原“body 末尾
+  内联脚本”的执行时点等价（DOM 解析完成后、DOMContentLoaded 前）。
+- 白名单新增 app.js → text/javascript; charset=utf-8。
+- FE-03 顺带核对：docs/language-migration.md 已在 F0 修正“取消状态”
+  措辞；app.js 中无 XMLHttpRequest.abort 调用，等价性保持。
+
+新增/更新测试：原 GET / 字符串断言按 F5.5 拆为页面断言（外链
+link/script、无 <style>）与脚本断言（apiRoot、轮询、缓存/预取常量、
+连接文案）；新增 JS token 对恶意根名称的转义断言；U+2028 特征测试
+目标从 render_web_app 迁至 render_web_asset("app.js")。
+
+流程备注：contract_tests 的证据 JSON 含随机 lock token（DAV-LOCK-001
+等），每次运行契约测试后必须重新生成 release-manifest.txt 再提交。
+
+检查：tests 167 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## M2/F3 固定 index.html，根名称改走 settings API
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F3 与 §20 第 9-10 步执行，对应里程碑
+M200（三文件分离完成）与 M202。
+
+- 新增 go/web/index.html（102 行）：页面结构自模板迁出，
+  __WPS_ROOT_NAME_HTML__ 全部替换为固定占位文案 "WPS Enterprise
+  Drive"；brand-title 增加 id="brand-title"。
+- app.js：rootName 改为静态默认值；新增 applyRootName()（统一更新
+  document.title、左上角品牌文字、根面包屑/标题/说明——顺带修复
+  FE-01 品牌文字不随改名更新的缺口，属批准变更候选）；新增
+  initRootName()（GET /api/v1/settings，成功则更新名称，失败显示
+  可理解错误并继续用默认名称）；启动改为 boot()：await
+  initRootName() 后再首渲染与 load("/")，占位名不会先闪现再翻转。
+- web.py：删除 render_web_asset 与 JSON token 替换依赖；新增
+  load_web_page()（index.html 不参与 /assets/ 白名单路由，杜绝
+  /assets/index.html 旁路）。
+- server.py：_handle_web_app 改为直接返回 index.html 字节，不再调用
+  current_web_root_name()，页面服务完全不触碰设置文件与存储；CSP
+  暂保持不变（F4 收紧）。
+- WEB_APP_TEMPLATE/render_web_app 保留为待 F7 删除的遗留参照，仍有
+  单测覆盖其自身行为。
+
+新增/更新测试：GET / 与 index.html 字节全等；配置恶意根名称（HTML
+标签、引号、&、U+2028、尾随空格）后响应中任何形式均不出现该名称；
+app.js 与文件字节全等且无 token；settings PATCH 后 GET / 不再内嵌
+新名称（改由 GET /api/v1/settings 返回）。
+
+浏览器侧验证（无闪烁、settings→status→entries 请求顺序、改名后五处
+同步更新）依赖真实浏览器，与 M203/M205 一并列入负责人侧门禁。
+
+检查：tests 166 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## M2/F4 收紧内容安全策略
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F4 执行，对应里程碑 M204。
+
+- index.html 已确认无内联 style、无内联 script（仅
+  <script src="/assets/app.js" defer> 外链）。
+- CSP 从 script/style 的 'unsafe-inline' 收紧为纯 'self'；img-src
+  由 'self' data: 收紧为 'self'（页面不使用 data 图片）；显式
+  connect-src 'self'；保留 object-src 'none'、base-uri 'none'、
+  frame-ancestors 'none'。
+- 网页入口与静态资源响应新增 X-Content-Type-Options: nosniff。
+- 特征测试更新为新的逐字符 CSP 值；页面断言新增无 style= 属性、
+  无内联 <script>；HEAD 资源断言含 nosniff。
+
+浏览器控制台无 CSP 违规、Basic Auth 挑战页无资源依赖两项依赖真实
+浏览器，列入负责人侧门禁（M203/M204 汇总）。
+
+检查：tests 166 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交（安全改动独立成提交，便于单独回退）。
+
+## M2/F5 Python 静态桥收尾与 M2 里程碑状态
+
+日期：2026-09-05
+
+按 05-frontend-plan.md §11 阶段 F5 收尾（F6 Go 嵌入属 B1301 阶段）。
+
+- 桥接能力即最终形态：仅白名单 {style.css, app.js} 参与 /assets/ 路由，
+  index.html 仅经 /、/web、/web/ 三入口返回；文件名不参与路径拼接，
+  不接受用户输入转换磁盘路径。
+- 新增测试：资源响应 no-store 且 Content-Length 与 body 全等（两个
+  资源）；POST /assets/* 维持现有 404 兼容结果。
+- 发布清单已包含 go/web/index.html、go/web/style.css、go/web/app.js
+  三个文件（测试强制校验）。
+
+M2 里程碑状态（08-executor-checklist.md）：
+- [x] M200 三文件已从 Python 字符串分离（go/web/）。
+- [x] M201 Python 服务白名单提供拆分后的资源。
+- [x] M202 根名称经 GET /api/v1/settings 获取；响应 HTML 不含用户
+  名称（字节全等断言）；首渲染前 await settings 避免名称闪烁；
+  浏览器侧确认列入门禁。
+- [ ] M203 桌面/窄屏/键盘/拖放/上传 E2E —— 本环境无浏览器，待负责人
+  在具备浏览器的环境执行（§17 最小用例集 30 项）。
+- [x] M204 CSP 已移除 unsafe-inline（头级别已验证；控制台无违规待
+  浏览器确认）。
+- [ ] M205 预取/缓存验收（24 上限、2 并发、30s TTL、命中、失效、导航
+  竞态）—— 同样待浏览器环境。
+
+负责人侧待办汇总：四张基线截图（F0）、§17 最小用例集、§15 五视口、
+§16 可访问性、FE-02 决策追认、FE-01 修正确认。
+
+检查：tests 168 项全绿；contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B200 初始化 Go module
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B200 执行；目录与依赖方向遵循
+03-target-architecture.md §4/§5。
+
+- go.mod：module path 固定为 GitHub 仓库路径
+  github.com/galiandan/WPS_2_WebDAV/go（module 根即 go/ 目录）；go
+  指令 1.25.0（保守下限，本机工具链 1.27 构建，待负责人确认）。
+- cmd/wps-adapter/main.go：三命令形状——--version 输出 0.9.8；
+  check-config 输出 "config=ok group_id=pending-login auth=<enabled|
+  disabled> dav=<prefix> rest=<prefix>"（骨架不解析 workspace，
+  B201 接管真实语义）；serve 支持 --bind/--port（默认取
+  ADAPTER_BIND/ADAPTER_PORT 与 Python 相同的 127.0.0.1:54321），
+  非本地 bind 且未启用 Basic Auth 拒绝启动（错误文案与 Python 一致），
+  监听后输出与 Python 相同的 listening/webdav/rest 两行，SIGINT/
+  SIGTERM 优雅退出码 0，监听失败退出码 1。
+- 骨架 serve 仅提供 /healthz（JSON 字节与 Python 契约逐字符一致，
+  单测固定）与其余路由的 404 "unknown route" 文本回退；未认证挑战、
+  REST/DAV 路由属 B5xx 阶段，不提前实现。
+- internal/config：骨架级 Load（bind/port/认证四变量/双前缀），前缀
+  规范化对齐 _normalise_prefix；错误只含变量名与规则，不回显值。
+- internal/app：Application + healthPayload（struct 顺序即 JSON 键序，
+  与 Python json.dumps 键序一致）。
+- 版本注入位：main.version / main.commit 预留 ldflags -X，README 记录
+  fmt/vet/test/race/build/交叉构建命令。
+- go/web/ 已在 M2 阶段就位（三前端文件，Python 桥与未来 Go embed
+  共用）。
+
+检查：go fmt 无差异、go vet 通过、go test ./... 全绿（config 6 组表
+驱动用例 + app 2 项含 healthz 逐字节契约）；serve smoke（listening 行
++ healthz + 404 + 退出）通过；交叉构建 GOOS=windows/linux amd64/
+linux arm64 全部产出可执行文件；release-manifest.txt 已更新；Python
+参照套件保持全绿。
+
+回滚：git revert 本提交；go/ 内既有 MIGRATION-LOG、benchmarks、web
+不受影响。
+
+## B201 实现配置结构
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B201 执行；重写 go/internal/config，
+新增 go/internal/workspace（加载/校验子集，热加载归 M303）。
+
+- 全部 50 个环境变量建字段/默认值/类型/规则：WPS 客户端 17 项、
+  存储 10 项、应用限额 5 项、锁 1 项、适配器网络/认证 8 项、workspace
+  3 项、根名称 1 项、serve 专属 2 项。解析顺序与 Python 求值顺序一致
+  （刷新命令 → group/root → workspace 文件 → 凭据/URL/数值串 →
+  根名称与 web-settings 路径 → client 构造校验 → storage 选项 →
+  应用限额 → 网络）。
+- 规则分类（与 Python 逐条对齐）：
+  必须为正——list_count、max_list_entries、max_cached_folders、
+  max_uploads、max_downloads、transfer_wait_timeout、max_copy_entries、
+  max_copy_depth、max_propfind_entries、max_propfind_depth、
+  max_control_body、max_response_body_bytes、max_locks、
+  max_json_response_bytes（且仅当 group 已解析或存在 spaces 时才校验
+  storage 组——Python 此时不构造 WpsStorage）；
+  允许 0——cache_ttl、status_probe_ttl、status_failure_backoff、
+  upload_min_free_bytes、max_upload_bytes；
+  允许空——group_id、cookie/csrf 文件、referer/origin/cid、spool
+  目录、刷新命令、ADAPTER 四凭据项；
+  仅解析不校验——timeout、multipart/spool/chunk/retries/delay 等
+  （Python 加载期同样不校验，测试钉住该宽松语义）；
+  serve 专属——端口范围、ADAPTER_MAX_CONNECTIONS、
+  ADAPTER_REQUEST_TIMEOUT 在 ValidateRuntime/ParseServerRuntime 中
+  处理，check-config 不校验（Python 语义）；但 ADAPTER_PORT 的解析
+  错误全命令生效（Python 在 parser 构造期即失败）。
+- 布尔仅接受 1/true/yes/on、0/false/no/off（含大小写与空白）；空串
+  视为错误。浮点镜像 Python float()：空白可剥离、溢出得 ±Inf 而非
+  报错、NaN 照单全收（Python 的 NaN 比较恒假，"不为负"检查放行）。
+  整数镜像 Python：空白剥离；±Int64 溢出报"out of range"（Python
+  无界整数会照收——记录为已记录偏差）。
+- WPS_BASE_URL/WPS_OBJECT_STORAGE_HOST_SUFFIX 镜像
+  os.environ.get(name, default)：显式置空保留空值并照常校验失败。
+  base_url 规则：HTTPS、kdocs.cn 或 *.kdocs.cn（大小写/尾点归一）、
+  禁 userinfo/query/fragment/路径；对象 suffix 归一后必须落在
+  kdocs.cn。URL/凭据/文件内容永不进入错误文案。
+- workspace：标识符 ^[A-Za-z0-9._-]{1,256}$；文件缺失→默认值；仅当
+  group/root 为 auto 或文件存在时加载并校验（Python 同款条件，含
+  "显式 id + 无文件时不校验标识符"的怪癖测试）；路径必须绝对、父目
+  录/文件 0600/0700 且属主为 root 或本用户、拒绝符号链接父目录、
+  16KiB 上限；spaces 空/超 128/组重复/名重复/非法标识符/非法名均报
+  WorkspaceConfigError 同义错误。OwnedByService 按 unix/windows 拆
+  文件（windows 为开发平台跳过，B302 securefile 正式化）。
+- BasicAuth.enabled 修正为四者任一非空（B200 骨架曾误用"成对"语义，
+  本任务按 server.py BasicAuth.enabled 修正）。
+- check-config 输出与 Python 逐字符一致（group_id ready/pending-login
+  按 ResolvedGroupID 判定）。
+
+验证：
+- go test ./...（config 14 组、workspace 5 组、app 2 组）、
+  go test -race ./... 全绿；go fmt/go vet 无差异；三平台交叉构建
+  （windows/amd64、linux/amd64、linux/arm64）全部通过。
+- Python/Go check-config 同环境对比矩阵 18 场景（成功行逐字符一致、
+  失败退出码一致）0 差异，证据 contract_tests/results/
+  B201-CHECK-CONFIG-PARITY.json；Go 错误文案按 B201 规则只含变量名与
+  规则（Python 文案含字段名/值回显——如 BROKEN_PORT 的 traceback——
+  按规范有意不同）。
+- Python 参照套件 168 项、契约 119 项保持全绿；manifest 已更新。
+
+已记录偏差（待负责人追认）：整数溢出 Go 报错而 Python 接受无界整数；
+失败文案风格（变量名 vs Python 字段名/traceback）；web-settings 与
+workspace 的私有性校验在加载期执行（与 Python 一致，非偏差）。
+
+回滚：git revert 本提交。
+
+## B202 生命周期和信号
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B202 执行；服务仍是仅 /healthz 的空
+HTTP 服务，不访问 WPS。
+
+- 信号处理：SIGINT/SIGTERM 经 signal.NotifyContext 触发停止接收新
+  连接，shutdownServer(10s) 有期限优雅排空；期限到达时 server.Close()
+  强制关闭残留连接。信号触发的停止一律退出 0（对齐 Python
+  KeyboardInterrupt → 0），强制关闭仅向 stderr 打一行 "adapter
+  shutdown forced: ..."。
+- 启动失败（配置错误、公共 bind 拒绝、监听冲突/失败）退出 1 并输出
+  "adapter failed: ..."；启动成功保持两行非敏感监听输出
+  （listening=... 与 webdav=... rest=...）。
+- 非 loopback bind 且未启用 Basic Auth 拒绝启动（B201 的
+  CheckPublicBind，语义与 Python 相同）。
+- 关闭顺序：Shutdown/Close 返回后才退出进程，信号通知经 defer stop()
+  释放；无 package init 网络行为，check-config 全程无网络请求（配置
+  与 workspace 均为本地文件读取）。
+
+进程级测试（cmd/wps-adapter/main_test.go，TestMain 先构建真实二进制，
+7 项全绿）：
+- 启动输出两行监听地址 + SIGTERM 退出 0；
+- SIGINT 退出 0；
+- 存活期间 GET /healthz 返回契约 JSON；
+- 端口被占用 → 退出 1 + "adapter failed"；
+- 0.0.0.0 无凭据 → 退出 1 + "refusing a non-local bind"；
+- 0.0.0.0 + ADAPTER_USERNAME/PASSWORD → 正常启动并退出 0；
+- 半开连接挂在服务端 → SIGTERM 后在期限内强制关闭并退出 0
+  （超时强停路径）。
+
+检查：go fmt/go vet 无差异；go test ./... 与 -race 全绿（cmd 7 项、
+config 14 组、workspace 5 组、app 2 组）；Python 参照套件 168 项全绿；
+manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B300 领域模型与错误分类
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B300 执行；纯数据与错误类型，不依赖
+任何其他内部包（对齐 03-target-architecture.md 的 model 职责）。
+
+internal/model/entry.go：
+- EntryKind（file/folder/unknown）与 RemoteEntry：ID/Name/Kind/ParentID/
+  Size/ModifiedAt/Etag 公开字段 + LinkID/Raw 内部字段（Go 无包级私有
+  跨包可见性，隔离以序列化边界落实）。
+- 隔离保证：RemoteEntry.MarshalJSON 永远只输出 7 个公开字段（键序与
+  Python REST payload 一致：id,name,kind,parent_id,size,modified_at,
+  etag，None→null 保留）；即使误序列化也不可能泄漏 link ID/raw。
+  另有显式 PublicEntry 结构 + Public() 投影供 B500 REST 层使用。
+- ListPage/WpsStatus/UploadOptions 按 B300 必读移植：WpsStatus 的 JSON
+  键序锁定为 as_dict() 顺序，WithRetryAfter 保持 max(0, value) 语义与
+  值拷贝；UploadOptions 捕获形状经 DefaultUploadOptions() 固化
+  （successactionstatus=200、with_rapid=true，其余零值）。
+
+internal/model/errors.go：
+- ErrorKind 八类：invalid_path/not_found/not_folder/already_exists/
+  insufficient_storage/service_busy/ambiguous_path/unsupported_operation，
+  StorageError{Kind,Message} + AsStorageError；B500 的 HTTP 映射将按
+  Kind switch，不按错误文本。
+- WpsAPIError 只保存 Operation/Status/Category 三字段（Status 0=无 HTTP
+  状态；Category 含 upstream/disabled/http/invalid_response/
+  session_expired/unavailable 六类，与 client.py 用法一致）；不保存
+  body 或 URL。Error() 文案与 Python 逐字节一致
+  （"WPS operation failed: {op}" / "... (HTTP {n})"）。
+- 分类经 errors.As 在 fmt.Errorf("%w") 单层/双层/自定义 Unwrap 包装后
+  仍可达；并有反向测试：WpsAPIError 不被识别为 StorageError，反之亦然。
+- 反射测试锁定 WpsAPIError 字段集合，防止日后误加 body/URL 字段。
+
+顺带修复 B202 遗留：main_test.go 的 stderr 缓冲被 io.Copy goroutine
+写入时测试主 goroutine 直接读取，-race 下报 DATA RACE
+（TestServePortConflictExitsOne/TestServeRefusesPublicBindWithoutAuth）。
+改为 copier goroutine close(stderrDone) 后再读，读取方等 channel 建立
+happens-before；语义不变（两处读取都发生在进程退出后）。
+
+检查：go fmt/go vet 无差异；go test ./... 全绿（model 12 项新增）；
+-race 全绿并复跑 2 次稳定；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 全部通过；Python 参照套件 168 项全绿；contract_tests 119
+项全绿（证据 JSON 按惯例刷新后重建 release-manifest.txt）。
+
+回滚：git revert 本提交。
+
+## B301 安全文件读取
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B301 执行；必读 client.py:63-133、
+workspace.py:44-124、settings.py:29-114。新包 internal/securefile，
+目录对齐 03-target-architecture.md（read.go + securefile_unix.go +
+securefile_windows.go），不依赖其他内部包。workspace/config 里 B201 的
+临时实现暂不动，B303/B304 接入时统一替换。
+
+read.go（平台无关逻辑）：
+- ReadSecret：凭据文件纪律。父目录必须存在且私有（workspace 类文件则
+  允许缺失以支持"未登录可启动"）；打开用 O_RDONLY|O_CLOEXEC|O_NOFOLLOW
+  （ELOOP→open_failed，等价 Python O_NOFOLLOW 拒 symlink）；打开后
+  fstat 复核 regular/mode/owner（Python 凭据路径无 fstat 大小检查，靠
+  读取上限兜底，Go 保持一致）；按 4MiB+1 有界读取，UTF-8 校验先于
+  大小判定（对齐 Python 先解码后计数的顺序），最后 strip。
+- ReadJSONState：workspace/settings 共用。lstat 预检（symlink/非常规
+  文件、mode/owner）→ O_NOFOLLOW 打开（期间被删→视为文件不存在，
+  对齐 Python os.open FileNotFoundError → (None,None)）→ fstat 复核
+  含 size>max（"is unsafe"）→ 有界读取 → 空白文件返回 (nil, mtime) →
+  JSON 必须是对象；mtime 以纳秒 *int64 返回（nil=文件缺失）。
+- CheckCredentialValues：值级检查，控制字符（<0x20 或 0x7F）与大小
+  上限，防凭据值变成出站 HTTP 头。
+- 错误只有类别码（Code），Error() 固定文案，永不携带路径或内容；
+  调用方（B303/B304/B400）负责把码翻译成各自的 Python 对应文案
+  （workspace 与 settings 对同一条件的文案本就不同，码一一区分：
+  预检过宽 file_unsafe vs 打开后 post_open_unsafe 等共 17 类）。
+
+securefile_unix.go：
+- ownedByService 用 syscall.Stat_t（root 或服务用户）；openSecure 用
+  O_NOFOLLOW|O_CLOEXEC。
+- 父目录 symlink 检查按 os.path.realpath != abspath 语义逐组件模拟
+  （parentHasSymlinkComponent）：目录名用字符串级 dirname（保留 ..
+  不归一化，对齐 os.path.dirname），逐组件 lstat，任何一层是 symlink
+  即拒绝；缺尾段时 EvalSymlinks 无法解析，逐组件走查仍能发现（测试
+  覆盖"symlink 祖先 + 缺失尾部"场景）；lstat 失败的组件按 realpath
+  (strict=False) 的宽松语义继续走，由后续 stat 报可用性错误。
+- 打开前后双校验收窄检查-使用竞争窗口：测试证明打开后 chmod 0o644
+  会被 fstat 复核拒绝。与 Python 相同的 TOCTOU 窗口保留（未引入
+  openat2，保持行为对齐，属已知等价窗口）。
+
+securefile_windows.go：Windows 仅为开发 fixture 构建，读取一律
+unsupported_platform 失败关闭，不伪装 POSIX mode 检查通过（交叉构建
+仍可编译）。
+
+已知偏差（待负责人裁决）：CheckCredentialValues 按字节计数，多字节
+静态凭据值比 Python 的字符计数更严（文件来源的值两侧都 ≤4MiB 字节，
+行为一致）。
+
+检查：go fmt/go vet 无差异；securefile 16 项 + 全套 go test 全绿；
+-race 全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
+
+## B302 原子写
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B302 执行；必读 client.py:291-314、
+workspace.py:273-318、settings.py:169-196。write.go 并入
+internal/securefile，与 B301 读取共用 validateParent/错误码体系。
+
+- WriteAtomic（workspace/settings 纪律）：仅校验父目录（缺失允许，
+  与 Python _persist_locked 一致——缺目录在 mkstemp 阶段失败）；在同
+  目录建 .{name}. 前缀临时文件（os.CreateTemp 默认 0600）；写入全部
+  内容后追加单个 "\n"（三个 Python 调用点都写尾部换行，统一收敛到
+  原语里）；flush+fsync+close 后 os.Rename 原子替换；成功后 Lstat 返回
+  新 mtime 纳秒（供 B303/B304 刷新缓存）；失败时 defer 清理临时文件，
+  旧目标保持可读。
+- WriteCredentialAtomic（凭据纪律）：父目录必须已存在，写入前
+  chmod 0700 收紧（"protect credential directory" 阶段）。
+- WriteCredentialPair（Cookie/CSRF 成对更新原语）：先 ReadSecret 快照
+  两半（快照失败则不写任何文件——对齐 Python _snapshot 先行）；任一
+  半写失败时用快照回写两半（回滚错误吞掉，返回首个错误），保证成对
+  不出现半新半旧。
+- 错误码按写入阶段细分：chmod_dir/temp_create/temp_write/replace +
+  读取侧父目录码，调用方映射各自的 Python 文案；错误不携带路径或
+  内容。
+- rename 语义记录：Linux rename(2) 原子替换是生产验收标准；Windows
+  走 MoveFileEx(REPLACE_EXISTING) 属开发 fixture 级（且 securefile 在
+  Windows 整体 fail-closed）；两平台 rename 均直接替换目标目录项，
+  与 Python os.replace 一致（对 symlink 目标也是替换条目本身）。
+- 已知加强（待负责人知悉）：Go 侧凭据写入也执行 fsync；Python 凭据
+  写入只 close 不 fsync。行为只强不弱，观察面无差异。
+
+测试（write_test.go，11 项）：正常写（0600+尾换行+mtime）、原子替换
+旧目标、临时文件创建失败（只读目录）旧目标保持、写入中途失败（注入
+write seam）旧目标保持且无临时残留、rename 失败（目标是非空目录）清
+理临时、父目录过宽/缺失拒绝、凭据写收紧父目录到 0700、成对更新、成
+对失败回滚两半（csrf 父目录过宽 → cookie 回滚、csrf 原样、返回原错
+误）、快照失败不写任何文件。chmod 阶段失败作为非 root 无法确定性注
+入（属主总可 chmod），该阶段错误码与映射靠代码审查覆盖。
+
+顺带修正 B301 日志错别字（"对应文案"）。
+
+检查：go fmt/go vet 无差异；securefile 27 项 + 全套 go test 全绿；
+-race 全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
+
+## B303 workspace 状态
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B303 执行；workspace.py 全文对齐。
+internal/workspace 重写为真正的 WorkspaceState，文件读取/写入全部改走
+internal/securefile（B301/B302 原语），B201 的临时 validatePath/readFile
+实现删除；securefile 新增导出 ValidateStatePath（构造期路径校验，不读
+文件），ReadJSONState 重构共享同一 checkStatePath。
+
+- 双 schema：旧 {group_id,root_id} 与新 spaces 兼容；spaces 校验
+  （数量 ≤128 且非空列表、逐项对象、group/root 标识符、名称规则）与
+  Python 一致；重复 group 拒绝。
+- D-07（负责人决定）：空间名拒绝控制字符（<0x20 或 0x7F），错误
+  "space.name is invalid"（安全收紧）。Mount 构造（NewMount）与文件
+  解析共用同一校验。
+- 未登录待命态：文件或父目录缺失时 auto 解析为空 group，服务保持
+  可启动（读取返回 nil payload）。
+- 热重载：每次属性访问（GroupID/RootID/Spaces/Configured）先 Lstat
+  比较 mtime，变化才重读；重读用 securefile.ReadJSONState（含全部
+  安全校验）；解析失败不应用部分内容（全部验证后一次性赋值），缓存
+  mtime 不更新，后续访问按 Python 语义继续报错；文件被删除后 auto
+  回到未登录态（nil payload 应用，mtime 缓存清空）。
+- 写入（Update）：标识符/数量/名称校验后经 securefile.WriteAtomic
+  原子持久化（0600 临时文件、fsync、rename）；仅 auto/空的配置项
+  采纳新值，固定配置项不被覆盖（对齐 Python update）。
+- 字节级契约（golden）：pyjson.go 逐字符复刻 json.dumps
+  (ensure_ascii=True, separators=(",",":"))——短转义 \b\f\n\r\t\"\\、
+  0x20-0x7E 之外的字符 \uXXXX（小写十六进制）、星面字符代理对、紧凑
+  分隔、旧字段 {group_id,root_id} 恒写、spaces 元素含 name；测试固定
+  非 ASCII 名称的逐字节输出。Python 写出的文件（含 ensure_ascii 转义）
+  Go 可读，Go 写出的文件按 Python json.loads 可读（测试覆盖双向）。
+- 错误映射：securefile 码 → Python 固定文案（读取与写入两张表，
+  "workspace file ..." / "write workspace file failed"），错误不携带
+  路径或内容。
+
+对齐修正（记录差异）：
+- 文件解析不再拒绝重复空间名——Python 的 "WPS space names must be
+  unique" 属 storage.py MultiSpaceStorage._rebuild_spaces（挂载时），
+  workspace 文件解析只有重复 group 检查；B201 曾把该检查放在加载器，
+  现按参照实现移回后续 multi-space 任务，config/workspace 两处测试
+  同步改写（重复名加载成功用例）。
+- 文件中 group_id/root_id 为非字符串（含 null/数字）现在按 Python
+  报 "workspace.group_id/root_id is invalid"；B201 实现曾把非字符串
+  静默当作缺失（修复）。
+- 无效 UTF-8 现在报 "workspace file is not valid UTF-8"（B201 曾报
+  not valid JSON；Python 先解码后解析）。
+
+检查：go fmt/go vet 无差异；workspace 12 项 + 全套 go test 全绿
+（config 不回归）；-race 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 168 项、contract_tests 119
+项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B304 web settings
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B304 执行；settings.py 全文对齐。
+新文件 internal/workspace/settings.go（目录归属按 03-target-architecture
+workspace/settings.go），复用 securefile（读 B301/写 B302）与 pyjson
+的 ensure_ascii 转义。
+
+- WebSettings：filePath（""=仅内存，对应 Python file_path=None）+
+  fallbackName；名称热加载（mtime 变化才重读，语义与 B303 的
+  WorkspaceState 一致）；payload 为空/文件缺失 → fallback 名称；
+  payload 有 name 键但非法（缺失键/空/超长/控制字符）→ fail closed
+  （对齐 Python validate_root_name(payload.get("name"))，缺失键报
+  "root name must be a string"）。
+- ValidateRootName(value any)：trim、非空、字符数 ≤256、UTF-8 字节
+  ≤1024、控制字符（<0x20 或 0x7F）拒绝；保持 value 为 any 以对接
+  JSON payload。字节上限对合法 UTF-8 实际不可达（256 rune × 4 字节
+  = 恰 1024），与 Python 相同，测试固定该边界。
+- 错误双类型：SettingsError（值非法，对应 WebSettingsError）与
+  SettingsFileError（文件问题，对应 WebSettingsFileError），从
+  securefile 码映射的文案逐条对齐 Python（"stat web settings
+  directory failed" 仅 stat 失败；已存在但过宽目录是 "must be
+  private"）。
+- 写入：SetName 先校验（锁外）→ WriteAtomic 原子持久化 → 内存更新；
+  写失败时旧名保持；内存模式不落盘。全程无 WPS 访问。
+- 双向兼容：字节级 {"name":"\uXXXX"}+\n（测试固定）；Python 写出的
+  ensure_ascii 文件 Go 可读；重启（新实例）后名称一致（测试覆盖）。
+
+顺带修复 B202 遗留 flake：main.go 在打印两行监听地址之后才安装
+signal.NotifyContext，测试读到首行立即发 SIGTERM 时可能命中默认处置
+（进程被信号杀死、退出码 -1、stderr 为空）。现把 NotifyContext 提前
+到 net.Listen/打印之前（Python 参照本就无 SIGTERM 处理，该时序不属
+行为契约；-count=6 -race 复跑全绿验证）。
+
+检查：go fmt/go vet 无差异；workspace 18 项 + 全套 go test 全绿；
+-race 全绿（cmd 6 连跑）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 168 项、contract_tests 119 项全绿；
+manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B305 credential source
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B305 执行；必读 client.py:172-444。
+新包 internal/credentials（source.go/cookies.go/refresh.go，目录对齐
+03-target-architecture），依赖 securefile 与 model，无其他内部依赖。
+
+- Credentials 快照：String/GoString 一律输出 "credentials(redacted)"，
+  格式化输出（%v/%+v/%#v/%s）不可能泄漏会话值（测试固定）。
+- Source 接口：Get/Refresh/StoreSetCookieHeaders/ReplaceCredentials，
+  对齐 Python 协议；Go 侧增加 error 返回（Python 以异常表达，Go 惯例
+  显式化），Refresh 返回 (bool, error)（refresh_timeout 非正的
+  ValueError 保留原文案）。
+- FileCredentialSource：每次 Get 都从文件重读快照（"每次 WPS 控制请求
+  前读取当前文件快照"）；读取走 securefile.ReadSecret，任何失败折叠为
+  WpsApiError("read credential file")，不携带路径或内容（测试断言错误
+  文案不含目录）。
+- Set-Cookie 合并（cookies.go）：多条头逐条解析（Go http.ParseSetCookie，
+  解析失败跳过，对齐 CookieError continue）；Max-Age ≤0（Go 解析为
+  -1）或无效回落 Expires ≤ now → 过期删除；名字大小写不敏感合并
+  （首拼写进顺序、后值覆盖；casefold ≈ ASCII ToLower，Cookie 名为
+  ASCII token）；新增名追加到顺序尾部；渲染 "; " 连接。已知收窄：
+  一条 Set-Cookie 头只解析一个 cookie（Python SimpleCookie 可解析多
+  cookie 头；真实 WPS 响应一条头一个 cookie，不影响）。
+- CSRF 同步：csrf cookie 轮换时同步写 CSRF 文件（过期写空）；另提供
+  CSRFFromCookie（client 请求路径在 CSRF 文件为空时从 cookie 提取，
+  B400 接线）。
+- ReplaceCredentials：双路径+双值非空才执行；与当前快照相同则直接
+  成功；写入走 B302 的 WriteCredentialPair（第二步失败自动回滚旧
+  pair，错误映射 "write credential file"/"protect credential
+  directory"）。快照失败（如父目录过宽）在 Python 同样是 "read
+  credential file" 先行——测试固定该顺序。
+- Refresh（refresh.go）：可选外部命令经 exec 运行，stdout/stderr 一律
+  io.Discard（子进程输出永不进入适配器日志），context 超时杀进程
+  （对齐 subprocess.run timeout），非零退出/找不到/超时都视为未刷新；
+  命令执行后重读快照，cookie 非空且快照变化才返回 true；全局
+  refreshLock 串行。偏差：Go 对 last 快照的读写统一加锁（Python get()
+  无锁），行为只更严。
+- 并发测试（8 goroutine × 20 轮 Get/Refresh/Store/Replace 交错）在
+  -race 下通过；全部凭据测试仅使用虚构值（fake-session 等）。
+
+检查：go fmt/go vet 无差异；credentials 13 项 + 全套 go test 全绿；
+-race 全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
+
+## B400 两个严格分离的 HTTP client
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B400 执行；必读 client.py:139-169、
+738-787、1300-1374、1607-1769。新包 internal/wps（client.go/signed.go，
+对齐 03-target-architecture 的 wps/ 目录），依赖 credentials、workspace、
+model，无其他内部依赖；storage 尚未接入。
+
+- Config：镜像 WpsClientConfig 全部字段（凭据不在配置里，只在
+  CredentialSource 后面；cookie_file/csrf_token_file/refresh 命令已在
+  B305 移入 FileCredentialSource）；DefaultConfig(groupID) 提供与
+  Python dataclass 相同的默认值（布尔默认 true，逐字段测试固定）。
+  构造期校验与 WpsDriveClient.__init__ 逐条对齐、顺序一致：group/
+  workspace 必填、max_json_response_bytes 必须为正、base_url 必须是
+  无路径无凭据的 HTTPS kdocs.cn 主机（原始 EscapedPath 校验，"%2F"
+  拒绝与 Python urlsplit 原始 path 判断一致）、object 后缀归一化后
+  必须在 kdocs.cn 内、status_probe_ttl/backoff 不得为负；错误文案与
+  Python ValueError 逐字一致。
+- 空 userinfo 的 URL（"https://@host"）按 Python 的真值判断接受
+  （username/password 空串视为无凭据），测试固定该怪癖。
+- 控制面 transport：*http.Client，TLS 强制校验（MinVersion TLS1.2）、
+  CheckRedirect 返回 ErrUseLastResponse（3xx 响应原样返回给请求层，
+  由 B401 映射状态码，等价 Python 的 HTTPError 路径）、无 cookie
+  jar、超时同时限定连接各阶段与整个请求（控制响应都有界 8MiB，
+  整请求超时更严）。代理遵循环境变量（urllib 默认 opener 同样如此）。
+- signed 对象 transport：独立 *http.Transport（RoundTripper 契约天然
+  不跟随重定向，对齐 http.client 裸连接），Proxy 置空（Python 裸
+  HTTPSConnection 不走代理）、TLS 强制校验、连接/握手/响应头阶段
+  限时；不持有任何凭据字段或 jar——结构性隔离，不是约定。
+- ParseSignedTarget 镜像 _signed_target：先拒控制字符；scheme 必须
+  https、主机归一化后必须在对象后缀内、无 userinfo/fragment、端口
+  仅默认或 443（:0443 按 Python int 语义接受为 443，:0 拒绝）；
+  target 保留原始百分号编码 path+query；主机名小写化对齐
+  urlsplit().hostname。所有拒绝返回 WpsAPIError(operation, 0,
+  upstream)，错误文案永不回显签名 URL。
+- SignedObjectClient.Do：只发送调用方显式列出的头（下载 Accept/Range、
+  上传 Content-Type/Length、分片 Content-MD5 由后续任务传入）；拒绝
+  cookie/authorization/含 csrf 的头名（大小写不敏感，传输前拦截，
+  假 transport 也拦得住）；显式 :443 时 Host 头去掉端口（对齐
+  http.client 默认端口省略）；传输错误折叠为 WpsAPIError(operation,
+  0, unavailable)，net/url 的错误文本（含签名 query）不外泄（测试
+  固定）；响应体由调用方关闭（文档约定，B401+ 的请求helper落实）。
+- 完成条件 fixture：Client 持有真实凭据源（虚构值），signed 请求经
+  录制 transport 断言无 Cookie/Authorization/CSRF、仅显式头；控制面
+  与 signed transport 不同实例、控制面 jar 为 nil（结构测试固定）。
+- 响应字节上限常量（JSON 8MiB / 对象控制 1MiB / multipart XML 4MiB）
+  与 remote name/etag 上限在此定义并由测试固定；有界读取器在 B401
+  与各请求 helper 落实。
+- 测试 seam：WithOpener / WithSignedTransport 构造选项，镜像 Python
+  的 opener 与 https_connection_factory 注入点；全部测试只使用虚构
+  凭据与假 transport。
+- 偏差（待负责人追认）：控制面连接启用 keep-alive（urllib 每请求
+  短连接，属实现细节不影响协议）；控制面 User-Agent 为 Go 默认值
+  （Python 发 Python-urllib，同为非浏览器 UA，无 fixture 依赖）；
+  signed 传输错误的底层文案（如 x509 细节）不进入错误链（Python 的
+  OSError 文案同样只出现在未映射前的栈里）。
+
+检查：go fmt/go vet 无差异；wps 17 项 + 全套 go test 全绿；-race
+全绿（wps 包 -count=6）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 168 项、contract_tests 119 项
+全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B401 公共 WPS JSON 请求器
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B401 执行；必读 client.py:787-832、
+1193-1233、1255-1300（_credentials/_refresh_credentials/
+_persist_set_cookie_headers/_account_base_url/_refresh_wps_session/
+_refresh_json_body/_url/_request_json）。新增 wps/request.go 与
+wps/pyjson.go，无新依赖。
+
+- URL 构造（buildRequestURL）：rstrip("/") + "/" + lstrip("/")，
+  query 按传入顺序逐对 quote_plus 编码（Go url.QueryEscape 与 Python
+  quote_plus 同规则：空格→+、大写十六进制、UTF-8 百分号编码；Go 的
+  url.Values 会按键排序，故手工拼装保序，重复键允许）。
+- 请求头：Accept、Content-Type（仅 body 非 nil）、Cookie（非空才带）、
+  可选 Referer/Origin；不添加任何浏览器伪装头（测试固定无
+  User-Agent）。Go Config 不再携带静态 cookie/csrf 字段（B400 起
+  凭据只在 CredentialSource 后面），Python 里 "source 为空时回落
+  config.cookie" 的逐字段混合在 Go 由装配层组合 Source 表达。
+- 响应处理顺序：2xx 先 persist Set-Cookie 再有界读取；非 2xx 先
+  persist（对齐 exc.headers）再关体；错误只带 status + http 类别，
+  响应体永不进入错误文案（测试固定）。3xx 由 B400 的
+  ErrUseLastResponse 原样返回，此处按非 2xx 处理（等价 urllib 的
+  HTTPError 路径）。
+- 有界读取（readLimitedResponse）：声明的 Content-Length 超上限先拒；
+  逐块 64KiB、总量 max+1 判定；读取中途失败按调用方类别折叠
+  （JSON 路径 invalid_response，refresh 路径 upstream）。偏差：
+  "Content-Length: -5" 之类负值 Python 直接判错，Go 视为无声明长度
+  后靠有界读取兜底，安全等价。
+- JSON 解码：utf8.Valid 先行（Go json 会把非法 UTF-8 替换为 U+FFFD，
+  必须显式校验对齐 Python decode-then-parse）；UseNumber 保留原始
+  数字 token（Python int 不失真）；解码后要求单一 JSON 值且为 object
+  （数组/标量/null/空体/尾部数据 → invalid_response）。偏差：NaN/
+  Infinity Python 能解析，Go 判 invalid_response（响应不含此类值）。
+- 401 重试：仅一次，仅 RetryOn401；rotated（本次响应 Set-Cookie 落
+  盘成功）或 refreshCredentials() 成功才重试，重试前重新读取凭据并
+  用 _refresh_json_body 语义替换 body 中 csrfmiddlewaretoken。
+- refreshCredentials：全局锁串行（对齐 _credential_refresh_lock）；
+  source.Refresh()（B305 的文件变化检测/外部命令）→ auto_refresh →
+  refreshWPSSession；Refresh 的 ValueError 类错误向上传播。
+- refreshWPSSession：grant_token POST，体为定值
+  {"grant_type":"refresh_token"}，Accept/Content-Type application/json
+  + Cookie + 可选 Referer/Origin；传输失败一律视为未刷新；非 200 视
+  为未刷新；200 的有界读取失败按 Python 怪癖向上传播（令整个请求失
+  败）；成功以 Set-Cookie 落盘结果为准。
+- accountBaseURL：默认由 API 主机末两段推导（account.kdocs.cn），
+  配置值同样校验（HTTPS、kdocs.cn、无凭据/query/fragment、path 仅
+  根），错误文案 "resolve account refresh URL" 一致。
+- pyjson.go：有序 JSON 文档（pyObject 保序、重复键首位置末值，对齐
+  Python dict 语义）+ ensure_ascii/紧凑分隔符序列化（pyQuote 与
+  workspace.pyEscape 同逻辑；json.Number 原样输出）。已知收窄：
+  float 形数字 token（如 1e5）原样输出而 Python 会重排为 100000.0，
+  请求体均为我们自己构造的整数/字符串/布尔，不受影响。
+- 测试：17 项（请求头/URL/编码、非 object 响应 8 态、64 字节精确
+  边界、声明超限、403/302/500 文案且不泄漏响应体、传输失败
+  unavailable、401 文件轮换重试并逐字节固定重试体、401 grant 刷新
+  合并 cookie 并落盘、无重试/仅一次、Set-Cookie 先于读取失败落盘、
+  account URL 推导与校验、pyjson 保序/ensure_ascii/CSRF 替换边缘）。
+  凭据 fixture 全部虚构（sid=first 等），文件 0700/0600。
+
+检查：go fmt/go vet 无差异；wps 17 项 + 全套 go test 全绿；-race
+全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 168 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
+
+## B402 登录状态检查
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B402 执行；必读 client.py:832-1191。
+新增 wps/status.go 与 status_test.go。含 D-02 决策的 Python/Go 同步
+修正（见下）。
+
+- 未配置直接返回 not_configured 不发网：凭据读取失败且"凭据文件缺失"
+  （FileCredentialSource 任一非空路径 stat 失败，对齐 os.path.exists
+  的宽松语义）→ not_configured；凭据值校验失败（如控制字符）且文件
+  都在 → invalid_response；快照 cookie 为空 → not_configured；
+  group 未解析（503 WpsApiError）→ not_configured。workspace 文件
+  本身的 ConfigError 与 Python 一样向上抛出（CheckStatus 返回错误而
+  非状态值）。
+- 登录预检：account 主机 /api/v3/islogin（accountBaseURL 推导或配置
+  值，B401 已移植校验）；islogin 标记可判定时按其判定，不可判定视为
+  已登录（对齐 OpenList 兼容行为）；标记未知 → invalid_response，
+  false → session_expired(401)。粗粒度 account_type：布尔标记 →
+  business/personal；companyid 类字段（bool/数值/字符串语义逐条对齐
+  Python 的 ==0 与 strip 判断）→ business；否则 unknown。json.Number
+  Int64 失败（如 1.5）与 Python float → None 一致。
+- 根预检：对 /3rd/drive/api/v5/groups/{group}/files 发起
+  parentid/offset=0/count=1/orderby=mtime/order=desc 的只读列表，
+  group 段用 quote(safe='') 语义的 quotePathSegment 编码；响应校验
+  files 必须为 list、result 字符串非 ok 即错（与 list_entries 的
+  状态可观测分支一致；完整分页解析在 B404 接入）。
+- D-02 同步修正：决策表已批准"status 全流程不得刷新"。Go 全路径
+  RetryOn401=false；Python list_entries 增加 retry_on_401 参数
+  （默认 True 不变），_probe_status 传 False；契约特征测试
+  DEC-D02-A 从断言"会刷新"改为断言"绝不刷新"（该测试注释本就写明
+  修正后的契约方向）；CHANGELOG [Unreleased] 增加发布说明。Python
+  套件新增 1 项（169 项全绿）。
+- 六态映射：connected / session_expired / permission_denied（仅
+  workspace 阶段 403/404，wps 保持 connected）/ invalid_response /
+  not_configured / upstream_unavailable；只含固定脱敏字段
+  （status/wps/workspace/account_type/last_checked_at/retry_after）。
+- 缓存与退避：marker = cookie\x00csrf\x00group\x00root（凭据快照+
+  group+root；控制字符已在校验层拒绝，\x00 不会碰撞），marker 变化
+  即失效；成功缓存 StatusProbeTTL（默认 30s），失败缓存
+  StatusFailureBackoff（默认 5s）；命中时 connected 返回
+  retry_after=0，失败返回剩余秒（ceil）。
+- singleflight：进程内 inflight + done channel 广播；等待者 deadline
+  = max(timeout,1)+1s，超时返回 upstream_unavailable(retry_after=1)；
+  等待者醒来后重新走 marker/缓存/inflight 判定循环（修复 Python 中
+  两个等待者同时醒来可能互相覆盖 inflight 归属的竞态；行为只更严）。
+  偏差：Python 等待者醒来后即使 marker 已变也可能返回他人 marker 的
+  缓存，Go 重查 marker 后以自己的 marker 重新探测（无人钉住该怪癖，
+  Go 行为更正确）。
+- 测试 15 项：预检两次请求+缓存命中、未配置不发网、凭据文件缺失、
+  islogin 401 不刷新、workspace 403 → permission_denied、畸形 islogin
+  → invalid_response、失败退避复用（retry_after≥1、1 次请求）、并发
+  singleflight（2 goroutine 共享 2 次请求）、根列表 401 不触发 grant
+  （D-02）、marker 失效、传输失败/500 → upstream_unavailable、凭据值
+  控制字符 → invalid_response、root_id 必填、GroupID 三态解析、
+  quotePathSegment、statusTruth/accountType 表、等待者超时路径。全部
+  使用虚构值。
+
+检查：go fmt/go vet 无差异；wps 32 项 + 全套 go test 全绿；-race
+全绿（wps -count=4）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已更新。
+
+回滚：git revert 本提交；Python/契约侧同步回滚 client.py 的
+retry_on_401 参数、test_decisions.py 与 CHANGELOG 对应行。
+
+## B403 远端 entry 解析
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B403 执行；必读 client.py:1377-1421。
+新增 wps/entries.go 与 entries_test.go。
+
+- entryFromItem 镜像 _entry_from_item：id 缺失或 null → 固定错误
+  "normalize file metadata"（upstream，错误永不携带条目内容，测试
+  固定）；name（fname）必须是非空字符串、非 "."/".."、无 / \\ NUL、
+  无控制字符、UTF-8 字节 ≤4096（Go len 即字节数，与 Python
+  encode 后长度一致）；kind 只认 file/folder，缺失/未知/非字符串一律
+  unknown（未知 kind 不破坏整页解析的页级容忍在 B404 的跳过规则中
+  闭环）；size 只接受非负整数 token（json.Number Int64；"5.0"/负数/
+  布尔/字符串 → null）；mtime 非 null 即 str() 化；etag（fsha）仅
+  接受无控制字符且 ≤4096 字节的字符串，否则 null；parentid 非 null
+  即 str()；link_id 按 Python 真值判定（空串/0/False/null → null）。
+- pyStr 镜像 Python str()：数字保留原始 token、布尔输出 True/False
+  （Python repr 怪癖，测试固定）；pyTruthy 镜像真值（0/0.0/空串/
+  空容器假，NaN 真）。
+- raw 保存在 model.RemoteEntry.Raw（内部字段），序列化层由 B300 的
+  MarshalJSON/Public 排除——测试断言公开投影不含 link_id 与
+  signed_url。
+- 已知收窄：超出 int64 的 size token（Python 任意精度 int 可保留）
+  归为 null；id 为 list/dict 时 Go 以 %v 文本化（Python 为 repr 格式
+  且现实中不会出现）。其余字段逐一对齐。
+- 测试 9 项：完整形态（含 Raw 保留与公开投影隔离）、id 缺失/null、
+  id 字符串化（含布尔怪癖）、name 12 拒 3 收（含 4096 边界与多字节）、
+  kind 5 态、size 7 态、mtime 4 态、etag 6 态（4096 边界收）、
+  parent/link 真值 10 态、pyTruthy 12 态。全部虚构值。
+
+检查：go fmt/go vet 无差异；wps 41 项 + 全套 go test 全绿；-race
+全绿（wps -count=4）；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B404 列表与分页
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B404 执行；必读 client.py:1423-1541、
+storage.py:237-262。扩展 wps/entries.go，新增 list_test.go；B402 的
+probeList 改为复用同一实现（count=1 + retry 关闭，与 Python
+_probe_status → list_entries 的调用关系一致）。
+
+- v5 请求形状：GET /3rd/drive/api/v5/groups/{group}/files，query 严格
+  按 Python 顺序 parentid/offset/count/orderby/order → 可选
+  linkgroup/include/with_link/review_pic_thumbnail/
+  with_sharefolder_type → next_filter（仅非 None）；布尔用 "true"/
+  "false"（_bool）；group 段 quote(safe='') 语义；group_id 参数可
+  覆盖（发现验证用）。Go ListOptions 零值回落 Python 签名默认
+  （count=20/orderby=mtime/order=desc），记录为 Go 侧约定（显式传 0
+  不可表达）。
+- 页解析：files 缺省视为空、非 list 即 "list files" 错；无 id/非
+  object 条目跳过；单个畸形 name 使整页失败（与 Python 一致）；未知
+  kind 归 unknown 不破坏整页（B403 闭环）；next_offset 仅接受整数
+  token（非整数 token → None，浮点形式与 Python 一致为 None）；
+  next_filter/result 仅接受字符串；result 字符串非 ok → "list files"
+  错。
+- IterEntries（iter_entries）：count ≤0 / max_entries ≤0 → 原文案
+  ValueError；页上限 max_entries+1（无上限时 10000 页）→ 超限映射
+  InsufficientStorageError（model.StorageError/KindInsufficientStorage，
+  文案不变）；跨页按 entry id 去重（容忍 WPS 页边界自然重叠）；重复
+  cursor（offset+filter 元组）与不前进 cursor（offset 变小或 offset 与
+  filter 均不变）都作为成功提前返回；max_entries 恰好达界不算超限。
+- probeList 收敛后状态路径行为与 B402 测试完全兼容（请求形状逐字节
+  相同；状态 fixture 的空 files 页解析通过）。
+- 已知收窄：next_offset 为 JSON 布尔时 Python 的 isinstance(bool, int)
+  怪癖（会变成 cursor "True"）未复刻，Go 归 None（现实响应不含布尔
+  cursor）；IterOptions.Count 无默认（零值按校验错误拒绝，调用方显式
+  传值，与 Python 的显式实参要求一致）。
+- 测试 13 项：默认/可选 query 逐字节、三 kind 混合页、无 id 跳过、
+  畸形 name 整页失败、files/result 8 态、多页拼接（cursor/filter 传递）、
+  空目录、边界重叠去重、重复 cursor 停止、不前进 cursor 停止、
+  entry 上限→507、页上限→507、恰达上限成功、参数校验。
+
+阶段 4（B400–B404）至此全部完成：wps 包 54 项测试，全部门禁绿灯。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；-race 全绿（wps
+-count=4）；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 169 项、contract_tests 119 项全绿；manifest
+已更新。
+
+回滚：git revert 本提交。
+
+## B500 路径解析与 href 编码
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B500 执行；必读 storage.py:27-81、
+D-04 决策（MIGRATION-LOG B100 决策表 + DEC-D04-A 特征证据）。新建
+internal/storage 包（path.go），目标架构 4.3 规定的位置
+（storage/path.go 远端路径解析与编码）。
+
+- D-04 落地：Go 全入口只解码一次。SplitRemotePath 接收传输层已解码
+  的业务路径，内部绝不二次 percent-decode——含 '%' 的段保持字面。
+  与 Python 参照的差异（Python 在 WSGI 解码后 split_remote_path 又
+  unquote 一次，导致 %2F 名字 404、需 %25252F 才命中）按 D-04 决策
+  作为批准修正移植；golden 表用 DEC-D04-A 的反向用例固定（wire
+  %252F → 业务段 "%2F" 命中；wire %25252F → 业务段 "%252F"）。
+- SplitRemotePath 校验顺序与 Python 逐条对应：必须以 '/' 开头
+  （"remote paths must start with '/'"）→ utf8.ValidString
+  （"remote path is not valid UTF-8"，对应 Python unquote
+  errors=strict）→ 全路径禁止字符扫描（反斜线/NUL/C0/DEL →
+  "remote path contains a forbidden character"）→ 根返回空 → 弹出
+  恰好一个尾随空段 → 空/./.. 段（"…empty or traversal component"）
+  → 段内 NUL、'/'、>4096 字节（"…forbidden component"）。错误以
+  model.StorageError/KindInvalidPath 承载，文案与 Python 一致。
+- JoinRemotePath 镜像 join_remote_path：逐段拒绝空/./..//'/'/反斜线/
+  控制字符/超 4096 字节（"remote path contains an invalid
+  component"）。trailing_slash 参数保留以对齐 Python 调用点——实测
+  参照实现的 posixpath.normpath 总是吞掉尾斜杠（'/a/b/' → '/a/b'），
+  故两种取值结果相同；该 quirk 用 golden 固定（"trailing slash flag
+  is neutralized"用例），避免后续被静默"修复"。
+- href 编码：QuoteRemoteSegment 逐段镜像 urllib.parse.quote(part,
+  safe="")——仅 A-Za-z0-9-._~ 保留，其余字节（含 + @ / ; , : $ & =
+  ? 与空格）全部 %XX 大写。Go 的 url.PathEscape 会保留保留字符，
+  不满足参照字节形状，故自实现并加 golden 对比用例。EncodedPath
+  以 '/' + 逐段编码拼接（对应 _href 的 "/".join(quote(...))），
+  DAV 前缀由 HTTP 层拼接（Stage 7）。
+- 传输层契约测试（TestTransportDecodeContract）固定 HTTP 阶段必须
+  使用的原语：DAV 路径走 url.PathUnescape 语义（'+' 保持字面）、
+  REST query 走表单解析语义（'+' → 空格）、两者都恰好解码一次且
+  不递归、%FF 解码出的非法 UTF-8 由 SplitRemotePath 以
+  "remote path is not valid UTF-8" 拒绝、url.ParseRequestURI 的
+  Path 即单次解码结果（%2F 解码后与真实 '/' 不可区分）。
+  Stage 7 的 handler 必须直接把 r.URL.Path/解析后的 query 值交给
+  SplitRemotePath，且不得经 ServeMux（其自动路径清理会改写业务路径）。
+- 记录的行为差异（D-04 单次解码的连带结果）：wire 裸 %FF 在 Python
+  参照中经 latin-1 式解码可能变成 'ÿ' 段，Go 传输层解码为原始字节
+  后由业务层拒绝；该差异属于 D-04 批准的入口解码语义修正，端到端
+  golden 在 HTTP 阶段补齐。
+- 测试 10 组：split golden 15 收 + 24 拒（含校验顺序、4096 边界、
+  多字节边界、仅弹一个尾随空段、traversal 先于长度上报）、join
+  golden 9 收 + 9 拒、split↔join 往返 6 例、segment 编码 12 例
+  （含 url.PathEscape 对比）、单次解码往返、EncodedPath 4 例、
+  传输层契约 5 组。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿（新增 storage 包）；
+-race 全绿（wps+storage -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B501 全进程 ResourceBudget
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B501 执行；参照 storage.py 的
+BoundedSemaphore 上传/下载槽（WpsStorage.__init__、_upload_stream、
+open_path）、server.py 的连接槽（acquire(blocking=False)，拒绝即
+关连接，D-09 保持）、client.py 的 spool 预留（_reserve_spool_bytes
+/_release_spool_bytes/_check_upload_budget 的磁盘部分）。新建
+internal/budget 包（budget/budget.go，目标架构 4.3 规定位置）。
+
+- D-03 决策落地：budget 是全进程唯一实例、注入所有空间（app 装配
+  在 B503/HTTP 阶段接入；本任务交付类型与语义）。两个空间共享默认
+  2 上传/4 下载上限，不再随空间数翻倍；用 golden 测试固定（同一
+  Budget 实例上空间 A 占满后空间 B 等待并超时）。
+- 上传/下载槽：信号量语义（token 缓冲 channel），Acquire 等待受
+  transfer_wait_timeout（默认 30s，与 storage.py 相同）与调用方
+  context 双重约束，谁先到谁生效；超时与取消统一映射为
+  model.StorageError/KindServiceBusy，文案与 Python 一致
+  （"too many uploads are active"/"too many downloads are active"），
+  调用方无法区分等待失败原因（与参照行为一致）。
+- 释放函数幂等（sync.OnceFunc），适配所有返回路径（defer 即安全）；
+  与 Python BoundedSemaphore 的差异：重复 release 在参照里抛
+  ValueError，Go 侧因释放函数与获取一一配对，重复调用为 no-op，
+  已在测试中固定（幂等释放不得改变容量计数）。
+- 连接槽：TryAcquireConnection 非阻塞，拒绝即返回 false（调用方
+  直接关闭连接，不释放任何东西）——保持 D-09 行为；由 HTTP 阶段
+  在 accept/连接级接入。
+- Spool 预留进程内一致视图（client.py 语义上移到进程级）：
+  total ≤ upload_spool_memory（默认 8MiB）不预留也不查盘；否则
+  required = total + upload_min_free_bytes（默认 512MiB），锁内
+  读取真实磁盘可用空间（free − 其他预留 < required 拒绝），错误
+  文案与 Python 一致（"upload spool directory is unavailable"/
+  "not enough free space for concurrent upload spools"，均为
+  KindInsufficientStorage→507）；支持以 current 传旧预留原子改额；
+  Release 钳位到 0（max(0, ·) 同款）。磁盘可用空间按平台实现
+  （linux f_bavail*f_frsize、darwin f_bsize*f_bavail、windows
+  GetDiskFreeSpaceExW 用户可用），均镜像 shutil.disk_usage().free；
+  其他平台 fail-closed。spool 目录缺省回落 os.TempDir()
+  （upload_spool_dir or tempfile.gettempdir() 同款）。
+- 观测值 Stats 只含数量与字节（各池容量/活跃/等待、spool 已预留
+  字节），类型即保证不含路径或文件名。
+- 测试 13 组：默认值 pin、校验 6 态（文案与 Python 一致）、
+  N-1/N/N+1（第 N+1 个可观测为 waiting、可超时可取消）、跨空间
+  共享 2/4 上限（D-03 反向 golden）、下载槽同语义、连接槽 64 拒绝
+  与幂等释放、Stats 全零基线、spool 基线（≤阈值不查盘/预留=total+
+  余量/改额/释放/钳位）、并发预留共享磁盘视图、free==required 恰好
+  通过（严格 < 与 Python 一致）、磁盘不可用、24 goroutine spool
+  竞争恰好 1 个成功、8 goroutine 全池竞争后归零。合成时钟测试固定
+  30s 等待全耗时不依赖真实睡眠。
+- 交叉构建补丁：windows 的 syscall 无 GetDiskFreeSpaceEx，改用
+  kernel32 LazyDLL（stdlib 内实现，不引入新模块依赖）。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿（新增 budget 包）；
+-race 全绿（budget+wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B502 元数据缓存
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B502 与 03-target-architecture.md
+（4.3 cache/metadata.go、"缓存键至少包含 group ID + root generation
++ parent ID"、epoch/generation 防迟到污染）执行；参照 storage.py
+的 _children 缓存体（TTL 2.0s、max_cached_folders 1024、最旧条目
+淘汰、读检查 cached[0] >= now）、_sync_workspace_root/invalidate
+/set_root_id 的清理时机。新建 internal/cache 包（cache/metadata.go）。
+
+- 缓存键 Key{GroupID, Generation, ParentID}：group 与 root generation
+  双重隔离，切空间/切根后旧 entry 绝不可能被新键命中（Python 用
+  整体 clear 达成同一目的；Go 的 generation 键控额外保证迟到加载
+  无法写入新代）。
+- GetOrLoad：冷 miss 同键合并（per-key inflight + done channel，
+  leader 在锁外加载，waiter 等待后取同一结果）；不同键天然并行
+  （加载不持有全局锁）。完成条件达成：并发冷目录恰好一次完整上游
+  分页（8 并发调用者 loader 计数 =1 的测试）。
+- 只缓存"完整且成功"的结果：loader 返回 error → 传播给该次全部
+  调用者且绝不入库（连续 3 次都重新加载的测试）；空目录是合法完整
+  结果，正常缓存。"部分分页"由 B503 的 loader 契约保证（要么完整
+  iter_entries 结果要么错误），缓存层结构上只收 (结果, nil)。
+- 淘汰：仅在新键插入且达到 max 时驱逐；按 expireAt 最早优先，
+  同刻并列按插入序（seq 单调）——Python min() 在插入序 dict 上
+  的行为等价复现（Go map 无序，必须显式 seq 才能确定性并列），
+  并列驱逐有确定性测试。过期条目占位不删、驱逐时最先出局
+  （Python 同款行为）测试固定。TTL 读检查 now.After(expireAt)
+  取反，恰好等于过期时刻仍有效（与 Python >= 一致）。
+- Invalidate：清空全部条目并 bump generation。成功 mutation 与
+  workspace 重映射共用（storage 侧调用点在 B503 接线）。迟到加载
+  的 leader 用捕获的 generation 与当前值比较，不一致则丢弃结果
+  不入库（"迟到请求不污染新 workspace"，严格强于 Python 的
+  锁外写回竞态），测试固定：阻断式 loader + Invalidate + 放行，
+  断言新代 Get 必 miss。
+- 默认值 TTL 2s / 1024 目录（Python storage.py 默认），零值回落
+  默认（沿用此前记录的 Go 侧约定）；TTL 为负/目录数非正的校验
+  文案与 Python 一致（"cache_ttl must not be negative"/
+  "max_cached_folders must be positive"）。
+- 测试 12 组：校验与默认值、成功结果缓存（含空目录）、错误不缓存、
+  同键合并（8 caller 恰 1 次加载）、异键并行（双 loader 屏障）、
+  键三分量隔离、TTL 过期与重载、确定性并列驱逐（两阶段）、
+  过期条目优先驱逐、迟到加载不污染 + generation 递增 + 新代重建、
+  全清、6 goroutine 加载/失效混合 race。
+- cache 包对 wps/storage 无反向依赖，仅依赖 model（符合依赖方向
+  第 4/5 条）；B503 单空间 Storage 将注入该缓存并接线清理点。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿（新增 cache 包）；
+-race 全绿（cache+budget+wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+回滚：git revert 本提交。
+
+## B503 单空间 Storage
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B503 执行；必读 storage.py:127-510。
+storage 包新增 storage.go（单空间 WpsStorage 移植）；新增
+workspace.ConfiguredRootID() 访问器（镜像 Python
+workspace.configured_root_id 属性，构造后不变，无锁）。
+
+- 路径解析：resolveParts 从虚拟 root 起逐层按父 ID+精确名称解析；
+  child 匹配规则与 _child 一致（name 全等 + unknown kind 永不匹配；
+  0 匹配 → EntryNotFound "entry not found: {name}"；多匹配 →
+  AmbiguousPath "multiple entries have the name: {name}"；parent_id
+  非空且不等于父 ID → EntryNotFound；文件下钻 → NotFolder
+  "not a folder: {name}"）。Root() 返回 id/root_name/kind=folder/
+  parent_id=None/size=0 的虚拟根。
+- list/metadata 全部走 B502 缓存：children() 以 Key{group,
+  generation, parentID} GetOrLoad，loader 调 IterEntries 且参数与
+  Python _children 完全一致（count=list_count、max_entries、
+  linkgroup=True、include="acl,pic_thumbnail"、with_link=True、
+  review_pic_thumbnail=True、with_sharefolder_type=True）；缓存键
+  的 group 来自 syncWorkspaceRoot 选定值。
+- syncWorkspaceRoot 与 _sync_workspace_root 一致：仅 configured
+  root == "auto" 时跟随登录选择（固定根绝不跟随，测试固定）；
+  group 变化 → 清缓存并更新；root 变化 → 更新并清缓存。workspace
+  以 WorkspaceSelection 函数注入（返回 group/root/autoRoot/err），
+  避免 storage 直接依赖 workspace 包（依赖方向第 4 条）；nil 即
+  Python 的 client.config.workspace 缺省，不同步。选择错误沿读取
+  路径传播。
+- 写操作（upload/create_folder/rename/move/delete）按任务要求只
+  定义接口与冲突检查，不接写 API：定义 Writer 接口（Upload/
+  CreateFolder/Delete/Rename/Move，形状对齐 client.py 的调用面，
+  UploadRequest 镜像 upload 关键字参数），conflict 检查全部按
+  Python 实现并在调用 Writer 前完成——upload_path 的
+  "overwrite is not enabled for: {path}"（非 overwrite/多于一个
+  同名/目标非 file）、create_folder*"entry already exists"、
+  rename_path 同名提前返回不调 writer、同父同名 move 短路、
+  move_to_parent_path 的 move-into-self 前缀检查与
+  "not a destination folder"、move_path 的同父改名转 rename_path、
+  跨目录改名 → UnsupportedOperation "cross-folder move with
+  rename is not supported"。Writer 未接线时统一返回固定
+  UnsupportedOperation 错误（阶段内临时路径，写阶段替换）。
+  move_to_parent_path 返回值按 Python 重建（保留
+  size/modified_at/etag/link_id，丢弃 raw）。
+- 下载：OpenPath 绑定全局下载槽——resolve → 非 file → NotFolder
+  "not a downloadable file: {path}" → budget.AcquireDownload(ctx)
+  → 打开失败/Downloader 缺失即释放 → managedDownloadStream 在
+  首次 Close 时关流并释放槽（幂等，适配所有返回路径）；cid 传
+  entry.LinkID，offset/length 透传。OpenDownload(entryID, offset)
+  与 Python open_download 一致，不占槽。上传槽在 writer 调用期间
+  持有，错误路径经 defer 释放（测试断言槽计数归零）。
+- 新增 workspace 侧小访问器后无其他行为改动；wps 包未动。
+- 测试 24 组（internal 20 + workspace 同步外部 4）：默认值 pin、
+  构造校验 9 态（文案与 Python 一致）+ nil lister/budget、嵌套
+  解析与缓存命中计数、child 匹配 4 规则、文件下钻、缓存目录数
+  上限（1 槽时调用序列 [root docs root docs] 证明 docs 占槽且
+  root 先被驱逐——root-walk 解析下逐次重取，与 Python 行为一致）、
+  上传新路径/冲突拒绝/overwrite 透传/文件夹不可覆盖、上传槽全
+  返回路径释放、改名/ID 改名/非法名/同名短路、删除/根拒绝/成功
+  后缓存失效、移动/自移入拒绝/move_path 三分派（同名父内改名/
+  跨目录改名 unsupported/同名跨目录移动/原地短路）、link_id 作
+  cid、下载槽开-关绑定/关闭幂等/打开失败释放/文件夹拒绝、
+  Writer/Downloader 缺省拒绝、CreateFolder(nil)=root 与名字校验、
+  ListByID(nil)=root、等待超时→busy、auto 根跟随登录选择、group
+  变化清缓存（root 不变）、固定根不跟随、选择错误传播。fake
+  client 完整实现 Lister+Writer+Downloader（镜像
+  tests/test_storage.py 的 FakeClient），等价测试全绿。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；-race 全绿
+（storage/cache/budget/wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+阶段 5（B500–B503）至此全部完成：storage 包 37 项测试、cache 12 项、
+budget 13 项，全部门禁绿灯。
+
+回滚：git revert 本提交。
+
+## B504 MultiSpaceStorage
+
+日期：2026-09-05
+
+按 04-backend-migration-steps.md B504 执行；必读 storage.py:671-857
+与 workspace schema。storage 包新增 multispace.go；storage.go 补
+RootID()/SetRootID()/SetRootName()（镜像 Python
+set_root_id/set_root_name 与 status_root_id 对 single.root_id 字段
+的读取）。copy_path 未在 Go 侧定义（属后续 COPY 阶段），跨空间
+COPY 的 unsupported 规则随 COPY 阶段补齐；跨空间 MOVE 的规则本
+阶段已固定。
+
+- 虚拟 ID 兼容：多空间根 ID 固定 "multi-space-root"；空间虚拟条目
+  ID "space:{group_id}"、name=mount 名、kind=folder、
+  parent=multi-space-root、size=0——与 Python 逐字段一致。
+- 根列表：无路径时返回 single 列表或全部 mounts 的虚拟条目，
+  构造 spaces 不发起任何 WPS 请求（测试断言 factory 建出全部
+  space 而 lister 调用为 0）。
+- 路由：首段名称选空间，其余 JoinRemotePath 后交给该空间 storage；
+  空名/未知空间 → EntryNotFound "WPS space not found: {首段或空}"；
+  空间虚拟条目由 mount 表查得，不访问 WPS。无 mounts 时整条路径
+  原样交给 single storage（与 Python 的一致语义：全路径不解首段）。
+- 热更新原子替换：MountsSource 返回 (mounts, groupID)；mounts 与
+  当前不同、或（空 mounts 且 single 为空且 groupID 就绪）→ 重建。
+  重建在锁内先构建完整新表再原子换入（Go 地图替换），重复名
+  （"WPS space names must be unique"）或 factory 失败时保留旧路由
+  并报错、下次调用自动重试——Python 在失败时会留下
+  "mounts 已更新、spaces 已清空"的破损状态且不再重试，Go 收紧为
+  原子失败回退（记录为行为增强）。
+- 单空间回退（D-01）：无 mounts 时按 groupID 是否非空决定是否构建
+  single storage；构建时 root 取 workspace 当前 root（经
+  SingleSelection），single storage 自带热同步跟随后续 root 变化
+  （等价 Python 把带 workspace 的完整 client 交给 WpsStorage）。
+  未配置时：根列表返回空（参照行为：静默空元组），非根路径与写
+  路径报 "WPS workspace is not configured"。
+- 跨空间 MOVE 不支持：MovePath/MoveToParentPath 先对源与目标各自
+  route，再比较 *Storage 指针身份，不同 → UnsupportedOperation
+  "cross-space move is not supported"（目标路径先路由后比较，与
+  Python 相同）。
+- 根写入拒绝：根路径在多空间模式被路由拒绝（space not found），
+  单空间模式由 single 的父路径规则拒绝（root cannot be used/
+  deleted/renamed/moved）——测试覆盖两种模式的上传/建目录/删除/
+  改名/移动。
+- 共享资源：全部空间 Storage 注入同一个 *budget.Budget（测试断言
+  指针同一 + A 空间占满槽后 B 空间上传得到 busy）；凭据刷新协调
+  点为共享的 credentials.Source（热加载文件语义在 source 层），
+  factory 闭包按 Python 的 replace(config, group_id=mount.group_id,
+  workspace=None) 语义为每个 mount 构建独立 WPS 面（Go 侧由 app
+  装配层用 wps.NewClient 按 mount group 派生，本任务交付路由与
+  装配契约）。
+- SetRootID/SetRootName 委托：single 存在时转发；多空间模式
+  SetRootID 为 no-op、SetRootName 更新虚拟根显示名；空名校验与
+  Python 一致（"root_id is required"/"root_name is required"）。
+  Python set_root_id 会重置 _cache_group_id 促使下次同步再清一次
+  缓存；Go 以 generation 键控 + Invalidate 达成同一效果（旧键不可
+  达），不保留该内部簿记字段。
+- 测试 13 组：单空间回退全路径语义（含缓存命中计数）、pending 组
+  静默空根 + 未配置错误、根列表仅 mounts 不触 WPS、首段路由与
+  空间虚拟条目、未知空间、两种模式的根写入拒绝、写操作按空间
+  分账（上传/建目录/删除/下载各自落账到对应 fake）、同空间移动
+  成功与跨空间 MOVE unsupported（两种形态）、热更新换路由（增/
+  删空间、旧路由消失）、热更新 pending group 构建single、重复名
+  构造拒绝、热更新失败保留旧路由并可恢复、StatusRootID 三态、
+  1/128 空间路由与顺序、共享预算、SetRoot 委托。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；-race 全绿
+（storage/cache/budget/wps -count=4）；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已更新。
+
+阶段 5（B500–B504）至此全部完成：storage 包 53 项测试、cache 12 项、
+budget 13 项、wps 54 项，全部门禁绿灯。
+
+回滚：git revert 本提交。
+
+## B600 显式路由器
+
+日期：2026-09-05
+参照：`server.py`（AdapterHTTPServer/AdapterRequestHandler 全部 do_* 方法、
+_dav_path、_rest_route、_is_health、_is_web_app、_web_asset_name、
+_send_bytes/_send_error）；contract_tests/test_webdav.py DAV-OPTIONS-001/002；
+contract_tests/test_rest.py REST-LIST-010。
+
+新增 `go/internal/httpserver` 包（依赖方向：暂无内部依赖，仅标准库），
+三个文件：
+
+- `router.go`：显式路由器。方法表 + 每方法路由顺序逐条镜像 Python 的
+  do_* 分发；不使用 http.ServeMux（其自动 path 清理/重定向会改写业务
+  路径，违反 D-04），http.Server 直接挂 Router。
+- `target.go`：request-target 解析与解码原语（urlsplit 镜像、
+  parse_qs 镜像、unquote、CPython UTF-8 replace 语义）。
+- `response.go`：响应原语 `_send_bytes`/`_send_error` 的 Go 对应
+  （writeResponse/sendError/marshalPythonJSON）。完整领域错误状态表
+  留给 B602。
+
+路由语义（关键决策）：
+- Python 在原始（未解码）request-target 上做全部路由判断
+  （urlsplit(self.path).path）。Go 侧对应实现为 SplitRequestTarget
+  （r.RequestURI 镜像）：剥 scheme（"http://host/dav/x" 与协议相对
+  "//host/dav/x" 都归约为 "/dav/x"，Python netloc 语义）→ 剥 fragment →
+  剥 query；路径保持 percent-encoded。绝不用 r.URL.Path 路由——
+  Go net/url 已解码一次，"/dav%2Fx" 会在解码后错误匹配 "/dav/" 前缀，
+  Python（原始匹配）则 404；已在路由表测试中钉死该差异方向。
+- DAV 业务路径：原始路径摘出前缀余部后用 unquotePercent 解码恰好一次
+  （合法 %XX → 字节，畸形 escape 保持字面，同 urllib unquote；不校验
+  UTF-8，交给 storage 的 SplitRemotePath 以 Python 的同款报错拒绝
+  ——"/dav/%FF" → 400 "remote path is not valid UTF-8"）。整个链路
+  对 wire 字节只解码一次，符合 D-04；storage 层零改动。
+- REST：suffix 在原始路径上按 Python strip("/") 语义裁剪
+  （"/api/v1//metadata" → "metadata"、"/api/v1/metadata/" →
+  "metadata"），字面比较，编码拼法不匹配；query 用 parseQueryValues
+  一次解码，语义对齐 parse_qs(keep_blank_values=True)：按 "&" 切、
+  空对丢弃、首 "=" 切键值、缺值记空串、"+" 视作空格、畸形 escape
+  保持字面（parse_qs 从不报错，故 Go 不引入自定义 400）。
+- 静态资源："/assets/" 前缀（GET/HEAD），名称保持 percent-encoded
+  （Python load_web_asset 收原始串，编码拼法同样 miss）；"/assets"
+  （无尾斜杠）不匹配。
+- 网页入口：三个固定值 {"/", "/web", "/web/"} 原始路径精确匹配，
+  仅 GET（HEAD 不服务网页，也不服务 REST——镜像 do_HEAD）。
+- health：固定 "/healthz"（不受前缀配置影响），仅 GET 在路由表内
+  特判；query 允许、尾斜杠不允许（"/healthz/" → 404 unknown route，
+  与 Python 一致）。IsHealthPath 导出给 B601 的认证前特例复用。
+- OPTIONS：不限路径（契约 DAV-OPTIONS-002），任何目标（含 "*"）
+  固定 200 + DAV: 1,2 + Allow 全集 + 空体 + no-store。
+- 未知路由：各方法落到 Dav/REST 之外 → 404 text "unknown route\n" +
+  Connection: close（Python close_connection 语义）。REST 前缀内
+  未知名（404 JSON "unknown REST route"）属于 REST 分发器（后续
+  阶段），路由器只把 suffix+query 交给 REST handler。
+- PATCH 特例：REST 前缀外 → 501 text "WPS rename/move is not
+  available" + close（不是 404，镜像 do_PATCH）。
+- 未知方法（无 do_* 的方法）：501 + stdlib 形状 HTML 错误页 +
+  Connection: close、无 Cache-Control、HEAD 无体。状态行 reason
+  Go 恒为标准短语（Python 把 message 放进 reason phrase）——无测试
+  钉死该字节，记录为可接受偏差。
+- 前缀规范化镜像 _normalise_prefix（补 "/"、去尾 "/"、空值 → "/"）；
+  保留 "/" 退化前缀的 Python 怪癖：urlsplit 把 "//x" 当 netloc，
+  因此 "/" 前缀只能命中裸根，任何子路径都 404（测试钉死）。
+
+响应原语（B602 复用）：
+- writeResponse：Content-Type/Content-Length/Cache-Control: no-store/
+  extra 头/Connection: close（显式 Connection 头不重复，大小写
+  不敏感判定）/HEAD 无体但保留 Content-Length。
+- sendError：rest=false → text/plain "message\n"；rest=true → 紧凑
+  JSON {"error": ...}。
+- marshalPythonJSON：字节级对齐 json.dumps(ensure_ascii=True,
+  separators=(",",":"))——紧凑、不转义 <>&（Go Encoder 关闭 HTML
+  escape）、非 ASCII 全部 \uXXXX 小写四位（含代理对）、DEL(0x7F)
+  转义（Python 的 ESCAPE_ASCII 范围）。REST 错误体与 Python 逐字节
+  可比，契约证据不受影响。
+
+CPython UTF-8 replace 语义（parse_qs errors='replace' 的对齐物）：
+decodeUTF8Replace 按 maximal-subpart 规则每个失效子部分写一个
+U+FFFD（C3 28 → "\ufffd("；ED A0 80 → 3 个；F4 90 80 80 → 4 个；
+截断 F0 9F → 1 个），与 python3 逐例对照钉死。strings.ToValidUTF8
+是按 run 替换、数量不同，故直接实现子部分表。DAV 路径不走 replace
+（Python errors='strict' → 报错 → 400），只有 REST query 走。
+
+记录的传输层偏差（无法在 handler 层消除，无测试覆盖）：
+1. 畸形 percent-escape（如 "/dav/%2G"）：Go net/http 在请求行解析时
+   直接 400（text/plain "400 Bad Request"）；Python 会把字面
+   "%2G" 传入 storage 得到 404 "entry not found"。状态类不同但
+   请求本身非法，浏览器/客户端不可见差异。
+2. 未编码的原始非 ASCII 字节直接出现在 request-target：Python 以
+   latin-1 解码请求行产生 mojibake 字符，Go 保留原始字节并按
+   UTF-8 处理（正确行为）。规范客户端 percent-encode，两者对
+   编码形式完全一致。
+3. 未知方法状态行的 reason phrase（见上）。
+
+测试（router_test/target_test/response_test 共 12 组）：
+- 路由表 47 例：尾斜线（DAV 保留 "/docs/"、REST 裁剪）、encoded
+  slash（"/dav/a%2Fb" → 业务路径 "/a/b" 双组件；"/dav/a%252Fb" →
+  字面 "/a%2Fb"；"/dav%2Fx" 与 "/api%2Fv1%2Fmetadata" 原始匹配
+  失败 404）、自定义前缀（规范化 + 默认前缀不误匹配）、未知路由、
+  每方法空间（HEAD 无网页/REST、POST 仅 REST、PATCH 501）、
+  health query/尾斜线、assets 嵌套名与空名。
+- OPTIONS 任意路径（含 "*"）固定能力头；未知方法 501 HTML 三例；
+  未知路由 404 全头断言（含 Connection: close、Content-Length: 14）。
+- 经真实 net/http 传输层的端到端测试：encoded slash 存活、未知路由
+  关连接、畸形 escape 传输层 400（钉死偏差 1）、FOO 方法 501。
+- SplitRequestTarget 15 例（urlsplit 探针对照）、parseQueryValues
+  19 例（parse_qs 探针对照，含 UTF-8 replace 全部 golden）、
+  unquotePercent 9 例、marshalPythonJSON 9 例 + 往返健全性。
+- NewRouter 五个 handler 槽位缺失拒绝（构造期校验，Go 结构性约束）。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。
+
+## B601 中间件顺序
+
+日期：2026-09-05
+参照：`server.py`（BasicAuth 类、AdapterHTTPServer 连接槽位、
+parse_request framing、log_message、_authorise、
+_origin_matches_request_host/_allow_mutation_origin）；
+contract_tests/test_decisions.py TestD05BasicAuthHalfConfigured。
+
+新增 `middleware.go`（中间件链）与 `server.go`（net/http Server 参数与
+连接槽位监听器）。链路按计划的固定顺序装配（NewChain）：
+
+panic recovery → 连接/请求边界 → 请求 ID → 安全日志 → health 特例 →
+Basic Auth → mutation 同源检查 → 路由（B600 Router）。
+错误映射（B602）在路由内层按 REST/DAV 语境实施。
+
+各环节语义：
+- panic recovery：recover → 固定 500 text "internal server error\n"
+  （不回显栈；可选 PanicLog 回调在服务端记录 panic 值与 goroutine 栈，
+  不含任何请求数据）。Python 的兜底 500 依 rest 语境选格式；链路
+  最外层无该语境，统一 text（记录为偏差，B602 错误映射仍会在路由
+  内层按语境处理模型错误）。不设 close（Python 兜底同样不关）。
+- 连接/请求边界：镜像 parse_request——(1) 任何 Transfer-Encoding
+  → 400 "Transfer-Encoding is not supported" + close（Go 已在传输层
+  解码 chunked 并把它放进 r.TransferEncoding，头本身已从 Header 移除，
+  故以 r.TransferEncoding 判定，"显式拒绝 Go 已解码的 TE"）；(2)
+  多个 Content-Length → 400（Go 传输层先行 400，此检查不可达但保留
+  自洽）；(3) GET/HEAD/OPTIONS 携带非零 Content-Length → 400
+  "request body is not supported for this method"（int() 容忍空白/
+  符号，解析失败按非零处理）；(4) 未知方法（无 do_* 的方法）→
+  501 stdlib 形状 HTML + close——Python 的方法分发发生在 parse 之后的
+  handle_one_request，两步都在认证之前，故边界承担同序职责。B600
+  路由器内的方法检查保留作纵深防御（路由器单独使用时仍自洽）。
+- 请求 ID：每请求 16 字节随机 hex，注入 context（RequestIDFrom 供
+  handler/日志取用）。仅服务端可见——不添加响应头（Python 无此
+  可观测行为）。可注入生成器供测试。
+- 安全日志：镜像 log_message——method + 去 query 路径，控制字符替换
+  为 "?"，不落任何 header/query/凭据。计划把日志固定在边界之后，
+  故边界拒绝的请求不产生日志（Python 会记录，行为非契约，偏差
+  记录）。每请求恰好一行。
+- health 特例：GET 且原始路径 == /healthz → 直达注入的 health
+  handler（app 装配层提供、不触碰 storage），跳过认证与其后全部
+  中间件。其余方法对 /healthz 仅享受认证豁免（Basic Auth 中间件
+  同样以 IsHealthPath 判定），继续按普通路由走向（OPTIONS /healthz →
+  能力头、POST /healthz → 404 unknown route，与 Python 一致）。
+- Basic Auth：镜像 BasicAuth 类——enabled 为静态判定（任一字段非空
+  即启用，D-05 半配置恒 401）；values 每请求热读文件（ReadSecret
+  注入，读取失败 → 空凭据，等价 Python 捕获 WpsApiError）；accepts
+  镜像解析规则（首空格切 scheme、大小写不敏感、encoded strip、
+  b64decode(validate=True) 的字母表预检、UTF-8 校验、首 ":" 切
+  用户名密码、两个 subtle.ConstantTimeCompare 按序短路）。401 响应
+  逐头镜像：WWW-Authenticate: Basic realm="wps-adapter"、
+  Connection: close、Content-Length: 0，无 Content-Type、无
+  Cache-Control（Python 直接 send_response，不经 _send_bytes）。
+  ReadSecret 由装配层注入 securefile.ReadSecret——httpserver 依赖
+  规则不包含 securefile。
+- mutation 同源检查：仅对 PUT/POST/DELETE/PATCH/MKCOL/MOVE/COPY/
+  LOCK/UNLOCK（与 Python 各 do_* 调用点一致）。Origin 存在即只看
+  Origin；缺失才看 Referer；两者都无 → 放行。校验镜像
+  _origin_matches_request_host：控制字符拒绝、scheme 必须 http/https、
+  必须 hostname、拒绝 userinfo/query/fragment、Origin 的 path 只许
+  ""或 "/"（Referer 不限）、hostname rstrip(".") + casefold 相等、
+  端口规则（任一侧缺省即放行，反代省端口兼容）。失败 → 403 text
+  "cross-origin mutation is not allowed\n" + Connection: close + 关
+  连接（Python 的 _send_error rest=False，即便 REST 请求也是 text）。
+
+server.go（连接层边界）：
+- Listen 镜像 create_server 校验：port 1..65535（"port must be
+  between 1 and 65535"）、request_timeout > 0
+  （"request_timeout must be positive"）、budget/handler 必填；
+  只监听不 Serve。
+- 连接槽位：包一层 net.Listener，Accept 时
+  budget.TryAcquireConnection（非阻塞）；超限连接立即 close 且不占
+  槽（D-09），成功则连接关闭时一次性释放（sync.Once）。槽位上限
+  即 budget 的 MaxConnections（64，D-03 全进程共享），等价 Python
+  的 BoundedSemaphore。
+- 超时：ReadHeaderTimeout = IdleTimeout = RequestTimeout。Python 的
+  socket 逐操作超时无法在 Go 传输层等价表达——WriteTimeout 会杀死
+  长下载、ReadTimeout 会杀死长上传，故整体读写超时留给各 handler
+  （Go ResponseController 可按请求设置，后续上传/下载阶段落实）；
+  记录为偏差。
+
+测试（middleware_test 10 组 + 框架搭建）：
+- 顺序闸门（完成条件）：未认证 GET、跨源 PUT、带体 GET、未知方法
+  四类请求路由调用数为 0；优先级对——framing 胜认证（400 非 401）、
+  未知方法胜认证（501 非 401）、认证胜同源（错凭据 + 跨源 → 401
+  非 403）、health 先于认证、授权同源请求路由且安全方法不受同源
+  约束。
+- 真实传输层 framing：chunked TE → 400 + close（复刻
+  test_server.py 的 framing 测试）；GET+CL:5 → 400；GET+CL:0 带凭据
+  → 路由；重复 CL → 传输层 400（钉死偏差）。
+- Basic Auth：文件热读（改文件后旧密码立即失效）、读取失败 → 401、
+  D-05 半配置、九种畸形 Authorization 头。
+- 同源：Origin/Referer 决策表 28 例（含尾点、大小写、端口省略、
+  userinfo/query/fragment/path 拒绝、Origin 优先、全部 9 个 mutation
+  方法受控、GET/PROPFIND 不受控）。
+- panic recovery：固定 500 体、无栈回显、服务端 sink 收到值与栈。
+- 安全日志：query 剥离、控制字符替换、请求 ID 前缀、ID 对 handler
+  可见。
+- NewChain 构造校验三项；Listen 校验五项；连接槽位（2 槽占满 →
+  第三连接被立即关闭无响应 → 释放后恢复）。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver/budget
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。
+
+## B602 响应与错误映射
+
+日期：2026-09-05
+参照：`server.py:522-613`（_send_bytes/_send_json/_send_error/
+_handle_exception）、`server.py:725-760`（_json_body/_entry_json）、
+`server.py:792-930`（_send_download 流式路径）。
+
+响应原语（writeResponse/sendError/marshalPythonJSON）已在 B600 落地；
+本任务补齐错误映射与上限：
+
+- Handlers 签名调整：REST/DAV handler 改为返回 error，路由器在分发点
+  调 mapError 并按语境选择框架（REST → rest=True 紧凑 JSON；DAV →
+  rest=False 文本"message\n"）——精确镜像 Python 各 do_* 方法把
+  _handle_exception(exc, rest=...) 的语境决定权放在分发层。Health/
+  WebApp/WebAsset 不触碰 storage、无领域错误，保持 HandlerFunc。
+- mapError 完整状态表（镜像 _handle_exception）：
+  requestBodyTooLarge → 413 + close + 空 message（Python 的
+  _RequestBodyTooLarge 无参数，str() == ""，JSON 体为 {"error":""}、
+  文本体仅一个换行——怪癖原样保留）；controlRequestError → 400
+  （镜像 Python 在读体辅助函数里裸抛的 ValueError/TypeError，
+  "request body is shorter than Content-Length" 类会关连接、
+  "request body must be valid JSON" 类不关）；StorageError 按 Kind：
+  InvalidPath 400 / EntryNotFound 404 / NotFolder+AlreadyExists+
+  AmbiguousPath 409 / InsufficientStorage 507 / ServiceBusy 503 +
+  Retry-After: 5 / UnsupportedOperation 501；WpsAPIError 见下；
+  其余未知错误 → 500 固定 "internal server error"。
+- WPS 上游错误固定脱敏（镜像 _handle_exception 的 WpsApiError 分支）：
+  status==401 → 503 + "WPS session expired; refresh the configured
+  credentials" + code=wps_session_expired + Retry-After: 60；其余 →
+  502 + "upstream WPS request failed" + code=wps_unavailable。REST
+  语境下 payload 再带 upstream_status（Status!=0 时），key 顺序
+  error, code, upstream_status 与 Python 逐字节一致（专用结构体保序，
+  Go map 会按字母序打乱）；DAV 语境纯文本、不带 code。
+- 控制响应字节上限：sendJSON 镜像 _send_json——先紧凑序列化再检查
+  max_response_body，超限抛 KindInsufficientStorage
+  "response exceeds the configured size limit"，经 mapError → 507，
+  头部不先写出。ControlLimits{MaxControlBody:1MiB,
+  MaxResponseBody:16MiB} 为 AdapterApplication 默认值；零值回退默认。
+- 流式下载独立路径的契约已固化（实现归下载/range 阶段）：下载响应
+  不得走 writeResponse 控制面——它的头集不同（Cache-Control:
+  "no-store, no-transform"、Accept-Ranges、X-Content-Type-Options:
+  nosniff、ETag、Content-Range、REST 附 Content-Disposition、
+  Connection: close 收尾框架），错误在头写出前映射、头写出后断流
+  即止。writeResponse 注释标明仅限控制响应。
+- requestBodyTooLarge/controlRequestError 类型定义于 httpserver（协议
+  层错误），供后续阶段的读体辅助函数（_json_body 镜像）与 session
+  import（B604）使用；model 错误仍由 storage/层产生。
+
+测试（errors_test.go 4 组）：
+- REST golden 14 例：InvalidPath/NotFound/NotFolder/AlreadyExists/
+  Ambiguous/InsufficientStorage/Busy(Retry-After 5)/Unsupported/
+  413 空 message+close/control 400/WPS 401→503(code+upstream_status)/
+  WPS 502/WPS 无 status（无 upstream_status 键）/未知 500。全部断言
+  状态、体、Content-Type: application/json、no-store、Retry-After、
+  Connection、Content-Length。
+- DAV golden 11 例：每个类别至少一条文本框架（"message\n"、
+  Content-Type text/plain、no-store）——完成条件"每个错误类别至少
+  一个 REST 和一个 DAV golden"达成。
+- controlRequestError 的 close/不 close 两态；sendJSON 上限：超限
+  返回 InsufficientStorage 且头/体零写出、映射后 507、限内原样通过；
+  默认上限值与 1MiB 体在不传 limits 时通过。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项、contract_tests 119 项
+全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。
+
+## B603 settings 接口
+
+日期：2026-09-05
+参照：`server.py`（_do_rest_get settings 分支、_do_rest_patch、
+_json_body、_content_length、_discard_body、_query_path、
+AdapterApplication.current_web_root_name/set_web_root_name）、
+`settings.py`（WebSettings 已在 B303 落地为 workspace.WebSettings）、
+tests/test_settings.py。
+
+新增 `rest.go`（REST 路由分发骨架）：
+
+- RootNameController 镜像 AdapterApplication 的 web root 名字胶水层：
+  settings 存储为热源（每次 GET 都经 WebSettings.Name() 触发 mtime
+  热载），名字实际变化时向注入的 RootNameSetter（storage）传播
+  SetRootName——虚拟 root 更新无需重启、不访问 WPS；storage 可为 nil
+  （Python 的 getattr(set_root_name, None) 容忍）。构造时以 settings
+  当前值播种并传播一次（__post_init__ 顺序）。current 字段全部在
+  mutex 内读写——并发读写测试曾在 -race 下抓到 Current 锁外读的
+  真实数据竞争，已修复；WebSettings 自身锁独立，无锁序交叉。
+- RESTDispatcher 按 method 分发 REST suffix：B603 交付 settings 对
+  （GET/PATCH）；status/entries/metadata/download（只读阶段）与
+  upload/folders/entries/session import（写阶段）未落地期间一律按
+  Python 未知路由分支应答——GET 直接 404 JSON "unknown REST route"
+  （但 _query_path 先于路由分发执行，畸形 path 参数 400 优先），
+  PUT/POST/DELETE/PATCH 未知路由先 _discard_body 再 404（超大体
+  413 优先）。
+- GET settings：_discard_body → current_web_root_name → 200
+  {"status":"ok","name":...}（key 顺序 status,name 与 Python 一致，
+  ensure_ascii 由 marshalPythonJSON 保证）。名字热读失败（文件安全
+  检查类）→ SettingsFileError → 502 固定文案。
+- PATCH settings：readJSONBody → 恰好 {"name"} 一个键
+  （"JSON field 'name' is required"）→ validate_root_name
+  （SettingsError → 400，四种文案逐字对齐）→ WebSettings.SetName
+  （原子 0600 持久化；文件错误 → 502 "local or upstream I/O
+  failed"，Python 的 OSError 分支固定文案，不回显底层细节）→
+  storage 传播 → 200 {"status":"ok","name":...}。
+- 读体辅助函数（后续阶段复用）：contentLength 镜像 _content_length
+  （TE/重复 CL 检查保留（边界已拒、保持自洽）、int() 空白容忍、
+  缺失时 411 "Content-Length is required" 直接以文本应答并返回
+  None——镜像 Python 直接 _send_error 的混合风格）；discardBody
+  镜像 _discard_body（超限先 413 再读，64KiB 分块，EOF 即止）；
+  readJSONBody 镜像 _json_body（411 None 语义、512KiB/1MiB 上限、
+  io.ReadFull 短体 → close + "request body is shorter than
+  Content-Length"、合法 JSON 但非对象 → "request body must be a
+  JSON object"）；queryPath 镜像 _query_path（缺省 "/"、多值或空值
+  → InvalidPathError 400）。
+- mapError 增补两个分支：workspace.SettingsError → 400 带消息
+  （Python ValueError 子类）；workspace.SettingsFileError → 502
+  固定 "local or upstream I/O failed"（Python OSError 子类）。
+
+已知微偏差（无测试覆盖）：Python json.loads 接受 NaN/Infinity 字面
+量，Go encoding/json 拒绝——两者都以 400 结束，错误文案不同
+（"must be a JSON object" vs "must be valid JSON"）。
+
+测试（settings_test.go 6 组）：
+- GET 热名：初始默认名 → 外部改写 fixture 后下一次 GET 热载新名且
+  storage 收到传播（两次 SetRootName 记录）；响应头
+  application/json + no-store。
+- GET 体容忍/拒绝：小体被 discard 后正常 200；超控制体上限 → 413
+  {"error":""}。
+- PATCH 生命周期：改名 → 200、fixture 落盘为 Python 的 ensure_ascii
+  紧凑格式 {"name":"\uXXXX"}\n、storage 传播、随后 GET 报新名。
+- PATCH 校验 10 例：多键/缺键/空对象/非字符串/空白名/超长/控制字符
+  （\u0001 转义载体）/非法 JSON/JSON 数组/短体（close）。
+- PATCH 无 Content-Length → 411 文本 + close（非 JSON）。
+- 完成条件测试 TestSettingsNameInteroperatesWithPython：python3 子
+  进程（PYTHONPATH=src）与 Go 轮流读写同一 fixture——Python 写 → Go
+  热读"来自 Python"；Go 写 → Python 读"来自 Go"；fixture 保持
+  Python 持久化格式逐字节一致（python3 缺席或源树缺失时 skip）。
+- 并发 8 goroutine × 20 轮 GET/PATCH 混合（-race -count=4 全绿），
+  结束后 fixture 仍为合法 JSON 对象。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver -race
+-count=4 全绿（修复一处真实数据竞争后）；交叉构建 linux amd64/
+arm64、windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已按门禁顺序重建。
+
+回滚：git revert 本提交。
+
+## B604 session import
+
+日期：2026-09-05
+参照：`server.py`（_do_rest_session_import，位于 1414-1490）、
+`login.py:181-286`（_select_cookies/credentials_from_cookies/
+_safe_cookie_part/_host_from_url）、`workspace.py`
+（validate_workspace_identifier/WorkspaceMount）、
+tests/test_server.py 824-905、contract_tests/test_decisions.py
+TestD06SessionImportAuto。
+
+新增 `credentials/login_cookies.go`（Cookie 重验证与选择，httpserver
+按依赖规则不直接导入 credentials，由装配层注入）与
+`httpserver/session_import.go`（POST /api/v1/session/import）：
+
+- CredentialsFromCookies 镜像 credentials_from_cookies：
+  _host_from_url（HTTPS + 无 userinfo + kdocs.cn 或子域 + 端口仅
+  443/缺省 + 去尾点 casefold；坏端口单独文案）→ _select_cookies
+  （逐 cookie 重验：非对象丢弃、domain 必须匹配 host 且属于
+  kdocs.cn 后缀、name/value 安装 _safe_cookie_part 检查——非空、
+  ≤64KiB、无控制字符、无 ";"、name 额外禁分隔符与空格/制表；按
+  casefold 名去重，_cookie_rank 元组序（精确 host > 长 domain >
+  长 path）取最优；按 casefold 名排序输出）→ csrf 必须存在、rtk
+  必须存在（require_refresh_cookie=True 默认）→ 拼对
+  "name=value; ..." ≤4MiB。LoginError 保留 Python 的中文文案，
+  但 HTTP 层只回答固定 500（Python 的 RuntimeError 落入兜底分支，
+  消息不回显——防枚举）。value/name 的 str() 强转仅对字符串忠实，
+  其余 JSON 类型按 fmt.Sprint 降级后照常过安全检查（与 Python 的
+  str() 结果在 bool/null 上不同，无测试覆盖、记录偏差）。
+- 路由流程（镜像 _do_rest_session_import 的"先验证后写"次序）：
+  1) readJSONBodyLimit 512KiB（独立于 1MiB 控制体上限）；
+  2) cookies 必须为非空数组（"JSON field 'cookies' must be a
+     non-empty array"）、≤256（"too many cookies"）；
+  3) workspace 字段（可空 = 缺席）：非对象 → 400；无 workspace
+     状态面（D-06：仅 auto 配置或已有 workspace 文件的装配提供
+     WorkspaceImporter）→ 400 "workspace import requires
+     WPS_GROUP_ID=auto or WPS_ROOT_ID=auto"；group_id/root_id 经
+     validate_workspace_identifier 语义（"workspace.group_id is
+     invalid"，root_id 缺省 "0"）；spaces 可选：非数组/空/超 128 →
+     "JSON field 'workspace.spaces' is invalid"；逐项
+     WorkspaceMount 语义（group_id 必需、root_id 缺省 "0"、name
+     缺省取 group_id、非字符串名 → "space.name is invalid"）、
+     重复名 → "workspace spaces contain duplicate names"——全部
+     在任何写盘前完成；
+  4) CookieSelector 选择 + 校验（LoginError → 固定 500）；
+  5) ReplaceCredentials(cookie, csrf)——false 或 error →
+     WpsApiError("store imported credentials") → 502 JSON
+     {"error":"upstream WPS request failed","code":
+     "wps_unavailable"}（Python 侧 replace_credentials 吞异常仅
+     返回 bool，Go 以同一 WpsApiError 归并）；
+  6) WorkspaceImporter.Update（WorkspaceConfigError →
+     WpsApiError("store imported workspace")）→ RootIDSetter.
+     SetRootID（Python 的 storage.set_root_id，虚拟 root 即时
+     切换）→ 200 {"status":"ok","cookie_count":N[,"workspace":
+     "updated"}，key 顺序与 Python 一致（struct 保序 +
+     omitempty）。凭据先写、workspace 后写、无回滚——精确镜像
+     Python 次序（workspace 失败时新凭据保留，测试钉死）。
+- RESTDispatcher：POST session/import 接入；其余 POST 路由保持
+  discard + 404。NewRESTDispatcher 增加必填的 SessionImporter
+  （"a session importer is required"），SessionImporter 构造校验
+  CookieSelector/CredentialReplacer 必填、workspace 面必须成对
+  提供、baseURL 缺省 "https://365.kdocs.cn"。
+- readJSONBodyLimit 拆分：readJSONBody 走控制体上限，import 用
+  512KiB 显式上限。
+
+测试（session_import_test.go 10 组 + credentials 侧）：
+- 凭据对替换：rtk 保留 /passport/secure 路径、cookie_count=2、
+  cookie 头含 "rtk=refresh"、csrf 正确（复刻
+  test_session_import_uses_basic_auth_and_replaces_credentials）。
+- workspace 持久化 + root 切换（复刻
+  test_session_import_persists_workspace_and_switches_root）：状态
+  文件落盘 group-2/root-3、storage root 收到 root-3、响应带
+  "workspace":"updated"。
+- spaces：缺省名 = group_id、缺省 root "0"、显式名；重复名 400 且
+  凭据零写出（验证先验证后写）。
+- 校验表 13 例 + 257 cookie 越界 + 512KiB 体上限（413 空 message）。
+- 固定错误：LoginError（无 WPS cookie/缺 csrf）→ 500 固定体；
+  凭据存储失败 → 502 wps_unavailable；workspace 写失败 → 凭据已
+  替换 + 502（顺序钉死）。
+- Cookie 选择直测：跨域丢弃、分隔符名丢弃、";" 值丢弃、控制字符
+  丢弃、非对象项跳过、精确 host 胜过宽 domain、casefold 去重保留
+  最优、rtk 深路径保留、缺 rtk 报 LoginError、非 https/非 kdocs
+  base URL 拒绝。
+- 全链路：认证外 401、认证内 200（复刻 Basic Auth 组合）。
+- 未知 POST 路由 discard + 404、超大 discard → 413。
+
+检查：go fmt/go vet 无差异；全套 go test 全绿；httpserver/
+credentials -race -count=4 全绿；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 已按门禁顺序重建。
+
+阶段 6（B600–B604）至此全部完成：httpserver 包 46 项测试
+（router/target/response/errors/settings/session_import/middleware/
+server），credentials 26 项，全部门禁绿灯。
+
+回滚：git revert 本提交。
+
+## B700 REST status/list/metadata
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：server.py `_do_rest_get`（status/settings 先于
+`_query_path`，entries/list/metadata/download 在其后）、
+`_entry_json`（固定 7 字段）、`_query_path`、Application.
+`current_wps_status`、client.py `WpsStatus.as_dict`；契约 goldens
+REST-STATUS-001、REST-LIST-001..010、REST-META-001、
+REST-ERROR-001/002。
+
+路由语义（全部按 Python 顺序）：
+
+- GET /api/v1/status：先 `_discard_body` 再回答，**先于** path
+  query 解析——`?path=relative` 也不会 400。响应为
+  current_wps_status().as_dict() 的六键顺序（status、wps、
+  workspace、account_type、last_checked_at、retry_after），
+  model.WpsStatus 结构体 tag 顺序即 Python 插入顺序。
+- current_wps_status 映射（httpserver.StatusController）：无
+  checker → not_configured（wps/workspace=not_configured、
+  account_type=unknown、last_checked_at=int(time.time())）；
+  root 解析或 probe 的**形状错误**（Python except 列表
+  AttributeError/OSError/TypeError/ValueError 的对应物）→
+  invalid_response（wps/workspace=unknown）；WpsApiError 不在
+  except 列表 → 原样传播给错误表（502/503）。依赖注入：接口
+  StatusRootIDSource/StatusChecker，httpserver 不 import wps
+  （依赖规则：仅 storage/workspace/davlock/model/budget）。
+- GET /api/v1/entries 与 /api/v1/list（别名）：先
+  storage.metadata(path)，kind != folder → 409
+  {"error":"the requested path is not a folder"}
+  （server.py 层的 NotFolderError 固定文案，与 storage 内部
+  "not a folder: X" 不同）且不再调 list_path（测试断言调用
+  序列）；随后 list_path(path) → {"path": <原样回显>,
+  "entries": [7 字段]}。空目录序列化为 "entries":[]（非 null）。
+- GET /api/v1/metadata：无 kind 检查 → {"path":…, "entry":{…}}。
+- entries/list/metadata **不** discard 请求体（Python 仅
+  status/settings 调 _discard_body）——GET 带体属病态输入，
+  行为差异仅见于悬挂体，不读即镜像。
+- path 回显 = query 解码后的原输入（未规范化），
+  "%2Fbench-folder%2F" 回显 "/bench-folder/"，以 golden 为准。
+- entry 投影：model.PublicEntry（既有，7 字段 id/name/kind/
+  parent_id/size/modified_at/etag 按此序），nil → null；
+  LinkID/Raw 永不出现在响应中。
+- 下载路由（route=="download"）按阶段划分留给阶段 8；此前的
+  过渡行为 = 未知路由 404（路径校验已先行），文档化于此。
+- RESTDispatcher 构造签名扩展为 (limits, rootName, session,
+  read RESTReadStorage, status *StatusController)：storage 必填
+  （"a storage is required"），status 为 nil 时等价
+  NewStatusController(nil, nil)（not_configured）。
+- 错误映射复用 B602 表：InvalidPath 400、EntryNotFound 404
+  （"entry not found: <name>"）、NotFolder 409、上游 500 →
+  502 wps_unavailable + upstream_status、上游 401 → 503
+  wps_session_expired + Retry-After: 60。
+
+测试（httpserver 包新增 rest_read_test.go、
+contract_parity_test.go）：
+
+- status：connected 全键序 golden、无 checker not_configured
+  （注入时钟 1234）、probe/root/无 roots 三种形状错误 →
+  invalid_response（时钟 4321）、WpsApiError(500) → 502
+  带码、path query 被忽略、请求体被 discard。
+- entries/list：成功体逐字节（含 ensure_ascii \u62a5\u8868 转义、
+  null 位形）、空目录 []、list 别名字节相等、对文件 409 且
+  list_path 未被调用、not found 404、空/多值 path 400（含别名
+  与未知后缀）、缺 path 缺省 "/"、上游 500→502/401→503+60
+  （metadata 阶段与 list 阶段各自触发）、path 原样回显 +
+  解码一次传递给 storage。
+- metadata：文件/目录成功 golden、folder 无 kind 检查、
+  not found、相对路径由 storage 层拒绝（400 规则文案）、上游
+  401 映射。
+- 过渡钉扎：/api/v1/download?path=%2Fx → 404 unknown route、
+  /api/v1/download?path= → 400（校验先于未知路由）、/api/v1/nope
+  缺 path 仍 404；NewRESTDispatcher 拒绝 nil storage。
+- 全链路：Basic Auth 外 401 / 内 200（entries 经 NewChain），
+  Content-Length 与体一致。
+- 契约 golden 重放（contract_parity_test.go）：直接读取
+  contract_tests/results/REST-*.json（Python 观测记录）与 Go
+  响应比对——STATUS-001 逐键、LIST-001 逐项（含 null 位形与
+  folder size=11 直传）、LIST-002 别名等体、LIST-003/004/006/
+  007/008/010 原始 body 字节相等、LIST-009 三种 traversal 形状、
+  LIST-005 缺省 path、META-001 载荷 + missing 404、ERROR-001/
+  002 错误载荷与 Retry-After。LIST-008/009 的规则文案由
+  storage/path.go（SplitRemotePath，B501 已对 Python 钉扎）
+  产生；重放 fake 携带同一文案以钉 REST 框架层。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 169 项、
+contract_tests 119 项全绿；manifest 按门禁顺序重建（契约记录
+中 lock token UUID、last_checked_at、上传 sha256 为每次运行
+的非确定值，随本提交更新）。
+
+回滚：git revert 本提交。
+
+## B701 WebDAV OPTIONS/HEAD
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：server.py `do_HEAD`（目录/文件分支）、
+`_send_download(head=True)`（792-876）、`do_OPTIONS`（1637，
+B600 已钉）、`mimetypes.guess_type`；契约 goldens
+DAV-HEAD-001/002、DAV-OPTIONS-001/002（B600 已重放）、
+DAV-GET-002 的 409 文案。
+
+实现（go/internal/httpserver/dav.go、mimetypes.go）：
+
+- DAVDispatcher（ServeDAV 适配 Handlers.DAV）：B701 只交付
+  HEAD；PROPFIND/GET/写方法在各自阶段落地前的过渡行为 =
+  未知路由 404 文本 + close。
+- HEAD 目录：metadata → kind=="folder" → 裸 send_response：
+  Content-Type "httpd/unix-directory"、Content-Length 0，
+  **无** Cache-Control/ETag/Accept-Ranges/Connection，连接
+  保持（Python 未置 close_connection）。
+- HEAD 文件：metadata → kind!="file" → 409 "the requested
+  path is not a file"（server 层固定文案）；文件走
+  _send_download head 分支的完整头集：Content-Type（MIME
+  猜测）、Accept-Ranges: bytes、Cache-Control "no-store,
+  no-transform"（区别于控制响应的 no-store）、
+  X-Content-Type-Options: nosniff、ETag（存在且非空时）、
+  Content-Length（size 非 nil 且 >= 0 时）、Connection: close
+  （Python close_connection=True，每次下载/HEAD 都关）。
+- HEAD **只用 metadata，不打开对象正文**（B801/B802 之前
+  也不解析 Range/If-Range——Range 头暂时忽略、恒 200 全量
+  头，文档化过渡；B802 按 golden 补 206/416）。
+- ETag 引号：f'"{etag.strip(chr(34))}"' —— 先剥掉全部首尾
+  双引号再包恰好一层；空串/缺失不发 ETag。
+- MIME：guessMimeType 逐行移植 CPython 3.14
+  mimetypes.guess_type(strict) 算法——posixpath.splitext 语义
+  （前导点不成扩展名）、suffix_map 复合后缀改写（.tgz →
+  .tar.gz…）、大小写敏感的 encodings_map 剥壳（x.gz → 编码
+  gzip + 无扩展名 → octet-stream 兜底）、扩展名 lower 后查
+  严格表、未命中 → application/octet-stream。Go mime 包差异
+  大（charset 参数、.ico、.wav 等）不可用；mimeTypesTable 由
+  Python 的有效严格库机械生成（CPython 3.14 内置表 + 门禁机
+  /etc/mime.types 合并结果，1419 行数据文件），算法测试含
+  大小写/复合后缀/编码剥壳/前导点/未知扩展名。
+- 头名大小写钉扎：Go 的 Set 会把 ETag→Etag、DAV→Dav、
+  WWW-Authenticate→Www-Authenticate 规范化，而 Python 原样
+  发送 ETag/DAV/WWW-Authenticate。三处改为原始 map 赋值
+  （dav.go ETag、router.go OPTIONS DAV、middleware.go 401
+  WWW-Authenticate），raw-socket 测试按 wire 字节断言
+  "ETag:"/"DAV:" 拼写。
+- 服务器自动头差异（延续 B600 既定偏差）：Python
+  send_response 自动附加 "Server: BaseHTTP/… Python/…"，Go
+  net/http 不发送；Date 两边都有（RFC1123 GMT）。无 golden
+  钉 Server。
+
+测试（dav_test.go）：
+
+- 文件 HEAD 全头集 golden（含 text/plain 无 charset、空体、
+  storage 恰好调用一次 metadata）。
+- ETag 五变体：裸值、预引号、多重引号剥到单引号、空串不发、
+  nil 不发。
+- 目录 HEAD：类型/长度正确 + 四个下载头缺席。
+- 错误表：404/409/502/503+Retry-After 60，HEAD 下错误体为
+  空（Python _send_bytes 对 HEAD 同样跳过正文——文本框架由
+  B602 DAV goldens 钉）。
+- 契约 golden 重放：DAV-HEAD-001（200、body 0、CL 11、
+  ETag 带引号）、DAV-HEAD-002（httpd/unix-directory、CL 0）。
+- live 框架（raw socket）：文件 HEAD 关连接 + wire 级 ETag
+  拼写；目录 HEAD 保活（同连接第二个请求成功后随文件 HEAD
+  关闭）；OPTIONS 能力探测 wire 级 DAV/Allow 头（curl 完成条
+  件的等价探针，WebDAV 客户端能力探测由 OPTIONS+PROPFIND 组
+  合在 B702 后完整）。
+- guessMimeType 20 例 + pythonSplitExt 7 例（含 "..dots"、
+  "...a.txt" 等 Python 源码行为探针）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 169 项（manifest
+重建后全绿）、contract_tests 119 项全绿；manifest 按门禁顺序
+重建。
+
+回滚：git revert 本提交。
+
+## B702 PROPFIND Depth 0/1
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：server.py `_do_propfind`、`_webdav_entries`、
+`_propfind_body`、`_href`、`_http_date`、
+`join_remote_path`；契约 goldens DAV-PROPFIND-001..009。
+
+实现（go/internal/httpserver/propfind.go）：
+
+- 流程：`_discard_body`（不解析 prop 选择——固定属性集）→
+  Depth 校验（缺省 "1"、strip+lower；0/1/infinity 之外 400
+  "Depth must be 0, 1 or infinity"；显式空头 = 空 ≠ 缺省）→
+  遍历 → 207 multistatus（Content-Type "application/xml;
+  charset=utf-8"、DAV: 1,2、Cache-Control no-store ——
+  _send_bytes 语义）。
+- 遍历（webdavEntries）：split_remote_path 先行（相对路径/
+  非法组件 → 400），metadata 一次；Depth 0 只答自身，
+  Depth 1 加直接子项（仅对请求根 list_path 一次，目录 href
+  由 join 的 trailing_slash 语义 + kind 检查补 "/"），infinity
+  继续递归。重复 entry ID → WpsApiError（502 固定文案）；
+  max_propfind_entries=10000 / max_propfind_depth=64 越界 →
+  507 固定文案；响应体超过 max_response_body → 507（写头
+  前计账，与 Python 逐 chunk 计账一致）。
+- href（buildHref + pythonQuote）：urllib quote(part,
+  safe="") 逐字节移植 —— 保留 [A-Za-z0-9_.~-]，其余（含
+  UTF-8 各字节）→ 大写 %XX；每段编码后以 / 连接，目录以 /
+  结尾；请求根的 parts 来自请求路径（D-04 已一次解码）。
+- XML（propfindBody + propfindResponseChunk）：逐字节复刻
+  ElementTree.tostring(encoding="utf-8") 输出 —— 前缀
+  `<?xml version="1.0" encoding="utf-8"?><D:multistatus
+  xmlns:D="DAV:">`；每个 <D:response> 块自带
+  xmlns:D="DAV:" 重声明；空元素 `<D:resourcetype />`（带
+  空格斜杠）；目录 `<D:resourcetype><D:collection /></
+  D:resourcetype>`；文本仅转义 &amp;/&lt;/&gt;（引号、CR/LF、
+  中文原样 UTF-8）。固定属性集与顺序：resourcetype、
+  displayname、getcontentlength（size or 0）、getcontenttype
+  （httpd/unix-directory 或 guessMimeType）、getetag（引用
+  剥引号再包一层）、getlastmodified（`_http_date`）、
+  status "HTTP/1.1 200 OK"。
+- `_http_date`（httpDate）：float() 解析（含周边空白）→
+  floor → formatdate(usegmt=True) 等价格式 "Mon, 02 Jan 2006
+  15:04:05 GMT"；NaN/Inf/溢出/非法 → 无该属性。
+- Python 列表 path 参数形状核实：join_remote_path 的
+  trailing_slash 在 normpath 后**无尾随斜杠**（Python 与 Go
+  相同），请求根的 list_path 用原始请求路径（带斜杠）——
+  测试 fake 的 map 键据此区分。
+- writeResponse 的 extra 头改为原始 map 赋值：保持调用方拼
+  写上线（DAV 不再被 Go 规范化为 Dav）；既有调用方均为规范
+  键，行为不变。PROPFIND-007（前缀外 404 unknown route）由
+  路由层既有行为满足。
+
+测试（propfind_test.go）：
+
+- Depth 0 文件/目录逐字节 golden（含无 etag/无 mtime 时属
+  性缺席）、Depth 1 根目录逐字节（顺序 + 目录尾斜杠 +
+  folder 的 getcontentlength 直传 11）、缺省 Depth=1 字节
+  相等、Depth 1 子目录逐字节 + 仅 list 一次且参数带原始斜
+  杠、Depth 2/空头 400、INFINITY/带空白 → 207。
+- 契约 href 重放：DAV-PROPFIND-002/003/004/005（004 =
+  infinity 小树全等；B703 仍负责队列化遍历与断连检查的加
+  固）；DAV-PROPFIND-001/009 以完整字节 golden 等价覆盖。
+- 特殊字符：`a&b<c>"d'.txt` → href 逐段大写百分号编码 +
+  displayname 原样引号仅实体化 & < >；中文 → displayname
+  原样 UTF-8、href %E6%8A%A5…；错误表 404/400/502/前缀外
+  404。
+- 限制：entry 507、depth 507（infinity 触发）、响应 507、
+  重复 ID → 502 固定文案。
+- 体处理：prop 选择 XML 体被丢弃且不影响固定属性集；超大
+  声明体 → 413 空消息（"\n" 文本框架）。
+- pythonQuote 8 例、httpDate 9 例（分数取整/负纪元/空白/
+  nan/inf/溢出）。
+- live wire：207 + wire 级 "DAV: 1,2" 拼写 + XML 类型。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows
+amd64、darwin arm64 通过；Python 参照套件 169 项（manifest
+重建后全绿）、contract_tests 119 项全绿；manifest 按门禁顺
+序重建。
+
+回滚：git revert 本提交。
+
+## B703 PROPFIND infinity
+
+日期：2026-09-06。任务来源：04-backend-migration-steps.md 阶段 7。
+Python 参照：`_webdav_entries` 的 visit 顺序与限制、
+`_ClientDisconnected` 处理；契约 golden DAV-PROPFIND-004
+（infinity 小树）与 006（INFINITY 大小写）。
+
+实现：
+
+- 遍历改为显式栈（webdavEntries 重写）：请求根只 resolve/list
+  一次（ListPath 走请求路径，保留 multi-space 虚拟根路由）；
+  更深层级经新增的 storage.ListChildren(scopePath, entry) 按
+  **parent ID** 列子项——每个文件夹恰好列一次，任何 deeper 节
+  点都不再从根重解析（"避免每个节点从根重复解析"）。
+  Storage.ListChildren = ListByID(&entry.ID)（缓存的按父 ID
+  listing，upstream 请求模式与 Python 的 list_path 等同）；
+  MultiSpace.ListChildren：单空间后备直接按 ID；虚拟 space 项
+  （"space:<group>" ID）降入对应 mount 的当前根（ListByID(nil)）；
+  真实项经 route(scopePath) 一次路由后按 ID（scopePath 为帧携带
+  的 join 路径，首个分片即 space 名）。
+- 可观察顺序不变：栈反向压入保持 Python 的 DFS 前序
+  （root → children 按列表顺序）；重复 entry ID 仍是上游完整性
+  错误（502 固定文案）；entry/depth/响应字节三重 507 限制不变
+  （响应体仍在写头前整体成型，"中途超限"天然正确）。
+- 取消：每帧弹出与每次 listing 前检查 r.Context()；取消 →
+  clientDisconnectedError 哨兵 → dispatchDAV 不写任何响应直接
+  返回（Python _ClientDisconnected：close_connection=True 且
+  不发送）。
+- JoinRemotePath 仍对每个子项名做校验（非法组件 → 400），与
+  Python join_remote_path 的校验副作用一致；join 结果兼作子帧
+  的 scopePath。
+
+测试（httpserver propfind_infinity_test.go + storage
+multispace_test.go）：
+
+- 1 条目：infinity 单文件 → 1 个 href。
+- 1000 条目：1001 href，前序保持（首/第二/末 href 断言）。
+- 10000 边界：root+9999 → 207 恰 10000 href；root+10000 →
+  507 "PROPFIND exceeds the configured entry limit"。
+- 深树：65 级文件夹链（depth 限制 64）→ 507 depth limit。
+- 循环：A↔B 互列 → 502 固定文案。
+- 断连：预取消的 context → 响应零字节零头；子 listing 回调中
+  取消 → 同样无响应（两例都断言 recorder 无体无头）。
+- 超限响应字节 507 由 B702 套件持续覆盖。
+- storage 层：space 项降入 mount 根（lister 恰收到 root-a 一
+  次）、scoped 按 ID 降入（root-a → doc-1 两次）、未知 space
+  → "WPS space not found: missing"、单空间后备按 ID。
+- 既有 B702 套件全部保持绿（顺序与语义未变）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver 与
+storage -race -count=4 全绿；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项
+（manifest 重建后全绿）、contract_tests 119 项全绿；manifest
+按门禁顺序重建。
+
+阶段 7（B700–B703）至此全部完成：REST 只读组（status/
+entries/list/metadata）与 WebDAV OPTIONS/HEAD/PROPFIND
+Depth 0/1/infinity 语义全等，全部门禁绿灯。
+
+回滚：git revert 本提交。
+
+## B800 签名下载地址解析（2026-09-06）
+
+提交主题：B800 Implement signed download URL resolution with the observed 403 fallback
+
+新文件 go/internal/wps/download.go：完整移植 client.py open_download
+（client.py:2479-2574），签名 object 请求走独立无凭据通道：
+
+- 参数门：offset<0 / length<=0 → ValueError 等价普通 error；
+  (offset≠0 或 length!=nil) 且 EnableRange=false → WpsApiError
+  "range download is disabled until independently verified"。
+- 控制端点：GET /api/v3/office/file/{quote(file_id, safe='')}/download，
+  query 固定首参 support_checksums=md5,sha1,sha224,sha256,sha384,sha512
+  （quote_plus 全等，逗号 → %2C）；cid 链：显式参数 → config.cid → 省略。
+- 403 回退：仅当缺省请求（direct 标志省略）遇 WpsApiError status 403
+  时，追加 get_direct_external_download_url=true 重试一次；其余状态
+  （401/404/500…）不重试（401 仍走 _request_json 的既有单次刷新重试）。
+- 载荷提取：payload.get("download_url") or payload.get("url") 的 Python
+  or 短路语义（falsy 才回退，truthy 非字符串不回退）；只接受
+  startswith("https://") 的 str，否则 WpsApiError "resolve download URL"。
+- 签名校验前置：ParseSignedTarget（复用 B400 signed.go，等价
+  _signed_target）在发任何 object 请求前完成 control chars/HTTPS/
+  host 后缀/userinfo/fragment/port∈{None,443} 校验；错误文案只含
+  operation 名，绝不含 URL。
+- object GET：经 SignedObjectClient（无 Cookie/Authorization/CSRF，
+  传输层无 cookie jar），头仅 Accept: */* 与（请求 Range 时）
+  bytes={offset}-{end}；>=400 → WpsApiError("object download", status)
+  （urllib HTTPError 语义）；传输失败 → unavailable 类别。
+- Range 响应核对（client.py:1657-1674 _range_response_matches 全等移植，
+  含 Python 无界整数的溢出行为：超 int64 的 start/end 恒不匹配、超界
+  total 恒大于 end、end-start+1 溢出局判 False）：206 强制 + bytes
+  Content-Range 严格核对 start==offset、covered==Content-Length、有限
+  length 时 covered==length、total=="*" 或 total>end；不匹配 →
+  "range download was not honored" / "range response metadata was not
+  honored"，全部先关响应体。
+- DownloadStream：等价 Python dataclass（status/content_type/
+  content_length/http_status/content_range），指针访问器对应 None；
+  Close 经 sync.Once 幂等；Content-Length 解析等价
+  int(headers.get(...))（容忍空白与符号，失败降级 None）。
+
+新文件 go/internal/storage/download.go：wpsDownloader 适配器把
+*wps.Client 的 OpenDownload 接到 storage.Downloader 接口（wps 与
+storage 的接口返回类型不同，需薄适配；download_test.go 编译期断言
+方法集持续兼容）。
+
+测试（wps download_test.go，镜像 tests/test_smoke.py 的 fixture）：
+
+- 不转发 Cookie：控制请求带 Cookie-secret、object 请求零 Cookie、
+  Accept */*；payload status "finished" 透传；query 逐字节断言。
+- 403 回退：两次控制请求 query 全等
+  （support_checksums[,cid] → +get_direct_external_download_url=true），
+  恰一次重试；401/404/500 不触发回退（401 走既有刷新路径）。
+- Range：请求头 bytes=6-10 精确；206 + Content-Range 匹配 → 流内容
+  "world"/206/Content-Range 透传；错配（bytes 0-4/11）→ 502 类
+  WpsApiError 且响应体已关闭；200 应答 → "range download was not
+  honored"。
+- host 白名单/拒绝表驱动 12 例：object-host、子域、:443 显式端口、
+  裸后缀域允许；attacker.example、后缀伪装、http、userinfo、:8443、
+  fragment、CRLF 控制字符（JSON 转义后到达校验器）拒绝；拒绝路径
+  零 object 请求、错误不含 URL。
+- download_url/url 提取表驱动 9 例：空串/None 回退、数字 truthy 不
+  回退、缺失拒绝。
+- EnableRange=false 门、参数 ValueError、file_id quote 转义
+  （a/b c?d → a%2Fb%20c%3Fd）、cid 链 4 例、object 传输失败/403、
+  _range_response_matches 22 例全等表（含无界整数溢出行为）、
+  header int 解析 7 例。
+
+偏差：无。client.download_to 便捷包装延后到 B801（Go 侧流式写出
+在 HTTP 层实现）；SignedObjectClient 传输失败沿用 established 的
+unavailable 类别（Python URLError 为 upstream 默认，B400 已记录）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps 与 storage
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项（manifest 重建后全绿）、
+contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B801 完整流式 GET（2026-09-06）
+
+提交主题：B801 Stream file downloads through the DAV GET and REST download routes
+
+新文件 go/internal/httpserver/download.go：完整移植 server.py
+_send_download 的非 Range GET 分支（server.py:792-924），DAV GET 与
+REST download 两条路由共享：
+
+- Dispatch：do_GET 的 DAV 分支（REST 路由之后）→ sendDownload(rest=
+  false)；_do_rest_get 的 "download" 后缀 → sendDownload(rest=true，
+  走既有 queryPath 先行校验)。路由器无需改动。
+- metadata 先确认 file：Kind != file → NotFolderError "the requested
+  path is not a file"（409，DAV 文本/REST JSON 帧）；此时不申请槽。
+- 槽与上游：storage.OpenPath(ctx, path, 0, nil) 内部申请全局下载槽并
+  包装 managedDownloadStream；defer Close 同时关上游 body 与释放槽，
+  对齐 Python finally: stream.close() 的全部退出路径。
+- 响应头（B801 范围，Range 解析与 206/416 属 B802，Range 头暂时忽
+  略，延续 B701 HEAD 的既录偏差）：Accept-Ranges、Cache-Control
+  "no-store, no-transform"、X-Content-Type-Options nosniff、ETag
+  f'"{etag.strip(chr(34))}"'（raw map 写入保 "ETag" 大小写）、REST 加
+  Content-Disposition attachment; filename="{_ascii_download_name}";
+  filename*=UTF-8''{quote(name, safe='')}。
+- 长度帧：以 object-store 的 stream.content_length 为准（元数据尺寸
+  被丢弃），已知且 >=0 时精确设置 Content-Length + 单个 Connection:
+  close；未知/负值时按契约改用关闭帧——Python 线上有两个 Connection:
+  close 头且无 Transfer-Encoding。Go net/http 需要设置
+  "Transfer-Encoding: identity" 才会放弃 chunked；该值被 Go 从线上删
+  除，行为等价（raw-socket 测试证实：无 Content-Length、无
+  Transfer-Encoding、恰两个 Connection: close、EOF 终帧）。
+- chunk 写出：按配置 stream_chunk_size（默认 1 MiB）循环
+  read+write+Flush，不缓存完整内容；已知长度时每轮
+  min(chunk, remaining+1)，多出的 1 字节用于识别"流超过声明长度"——
+  恰好写出声明的字节数后停止（Python 的 truncated 分支）；空读即
+  break（短读路径：net/http 检测到未写满声明的 Content-Length 自动关
+  连接，等价 Python close_connection=True 警告分支）；每轮循环顶端检
+  查请求 context（等价 _client_disconnected 的 MSG_PEEK），取消即静
+  默停止；读写错误静默停止（Python OSError 家族捕获）。
+- 完成后 TCP 层收尾：Python flush + shutdown(SHUT_WR)；Go 因
+  Connection: close 由 net/http 在 handler 返回后关闭连接，客户端可
+  观察行为一致（body 之后 EOF）。
+
+接线：NewDAVDispatcher 增加 download DownloadLimits 与 downloads
+DownloadStorage 参数、NewRESTDispatcher 尾追同样两个参数；nil 下载
+存储在构造期拒绝（"a download storage is required"）。两个真实现
+（Storage/MultiSpace 的 OpenPath）已满足 DownloadStorage 接口，无需
+改动。TestDAVUnknownDAVMethods 移除 GET、TestRESTDeferredRoutes 改为
+驱动真实 download 路由。
+
+测试（httpserver download_test.go）：
+
+- 精确流式：头全集 + body 字节比对 + SHA-256 固定值；chunk size 4
+  时读取尺寸 [4,4,4]（remaining+1 截顶）；OpenPath 恰一次、offset 0、
+  stream Close 恰一次；DAV 不带 Content-Disposition。
+- 关闭帧（raw socket）：未知长度 → 无 CL/无 TE、两个 Connection:
+  close、EOF 终帧；已知长度 → CL 11、单个 Connection: close。
+- 短读：声明 10 实给 5 → 客户端收 5 字节后 EOF，槽释放。
+- 超长流：声明 5 实给更多 → 客户端恰收 "01234" 后 EOF。
+- 断连：client 中途断开 + 上游 EOF → 循环退出，stream 恰关一次
+  （轮询断言无泄漏）。
+- 错误表：文件夹 409 文本帧且不开流、缺失 404、打开时 503 +
+  Retry-After 5。
+- REST 路由：Content-Disposition 全串、body/SHA-256、错误 JSON 帧；
+  缺 path 仍由 queryPath 400。
+- asciiDownloadName 表驱动 8 例（点尾、.hidden、非法字符、32 字符
+  截断、大小写保留）；DownloadLimits 默认 1 MiB/负值回退/自定义。
+- 契约 golden 回放：DAV-GET-001（头+body 全等）、DAV-GET-002（409
+  文本）、DAV-GET-003（404）、REST-DOWNLOAD-001（含 sha256）。
+
+偏差：无新增。Python 完成后的 connection.shutdown(SHUT_WR) 半关闭
+由 Connection: close 的全关闭等价（客户端观察一致）；未知长度帧的
+"identity" TE 技巧只存在于 handler→net/http 交界，线上字节与 Python
+一致。client.download_to 便捷包装仍延后（Go 流式拷贝在 HTTP 层完
+成，无 Go 调用方）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver 与 storage
+-race -count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿、contract_tests 119
+项全绿（manifest 按门禁顺序重建）。
+
+回滚：git revert 本提交。
+
+## B802 Range 与 If-Range（2026-09-06）
+
+提交主题：B802 Implement Range and If-Range download semantics with 416 framing
+
+新文件 go/internal/httpserver/range.go：完整移植 server.py 的
+_parse_range（948-973）、_if_range_matches（938-945）与
+_send_download 的 Range 前奏（798-823），按细纲先写 parser 表驱动测
+试再接线：
+
+- _parse_range 全等：bytes= 单位（大小写/空白容忍）、逗号多范围拒
+  绝、缺 = / 缺 - 拒绝、closed/open/suffix 三形态、end 钳制到
+  size-1、suffix 钳制 start=max(size-suffix,0)、start>=size 拒绝、
+  end<start 拒绝、suffix<=0 拒绝。Python 无界 int 的大数字行为对齐：
+  ParseInt ErrRange 按符号钳到 ±MaxInt64——巨大 start>=size 拒绝、
+  巨大 end 钳制、巨大 suffix 钳到全范围、负向溢出（end_text 以
+  "-" 开头，如 bytes=5--999…）拒绝；注意 bytes=-999… 的前导减号是
+  分隔符，Python 与 Go 同样解析为巨大正 suffix → 全范围（测试固定）。
+- 零尺寸文件：closed/open → 416（start>=0>=size）；suffix →
+  Python 的 (0,0) 解析继续走 206，产生 "bytes 0--1/0" + Content-
+  Length: 0 的帧（实测 golden 固定）；未知尺寸（None）→ 416
+  "bytes */*"，负尺寸同拒。
+- _if_range_matches 全等：头缺席恒匹配；entry 无 ETag 恒不匹配；
+  仅当前 ETag（带引号/裸值，strip('"') 两侧）匹配；日期形态不自行
+  扩展（实测 200 全量）；值先 strip 再比较，头 "   "（truthy）不匹
+  配。
+- If-Range 不匹配 → Range 整体忽略 → 200 全量；匹配但解析失败 →
+  416（_send_error：rest 帧 JSON/文本帧 "requested byte range cannot
+  be satisfied\n"，Content-Range "bytes */N" 或 "bytes */*"，无
+  ETag，无 Connection: close——close_connection 未置位，实测固定）。
+  416 不申请下载槽、不开流。
+- 接线：sendDownload 与 doHead 共用 resolveRange 前奏。GET：
+  range_requested 时头加 Content-Range f"bytes {offset}-{offset+
+  length-1}/{size}" 与 Content-Length=length，open_path 传
+  offset/length；206/200 按请求选择。上游核对（_send_download
+  851-857）：stream.content_length != length → 关流、释放槽、
+  WpsApiError "range download length was not honored"（502 帧上游
+  映射）；非 Range 路径维持 B801 的 object-store 长度优先。HEAD：
+  206 + Content-Range + Content-Length + Connection: close，零 body，
+  不开流（实测 golden 固定）；If-Range 不匹配 → 200 全量头。
+- 下载循环的 expected_length：range 时为请求 length，否则流长度
+  （B801 逻辑不变）。
+
+B800 已完成的 client 层（_range_response_matches、206 强制）不变，
+Server 层新增的上游长度复核与其互补。
+
+测试（httpserver range_test.go + download_test.go fakes 扩展）：
+
+- parseRangeHeader 表驱动 36 例：三形态/钳制/空白/大小写/单位/多范
+  围/缺分隔/超界/逆序/suffix<=0/字母/空 spec/零文件/未知尺寸/负尺
+  寸/±MaxInt64 溢出/前导减号分隔符语义。
+- ifRangeMatches 表驱动 12 例：引号/裸值/trim/日期/弱 ETag/空值/
+  无 ETag。
+- 实测 golden 回放：本任务以 tests/test_server.py 的 FakeStorage 模
+  式驱动真实 Python 参考服务器，捕获 18 个场景的线上行为（closed/
+  open/suffix/clamp、If-Range 引号/裸值/失配/日期、416 文本帧、
+  HEAD+Range 206、空文件 suffix 的 "bytes 0--1/0"、未知尺寸的
+  "bytes */*"、未知尺寸全量 200 走流长度），Go 测试逐项对齐（状态、
+  Content-Range、Content-Length、ETag、body、Cache-Control、无
+  Connection 的 416、Content-Disposition 存续）。
+- 上游长度失配：502 + "upstream WPS request failed"，流恰关一次
+  （fake Close 幂等化对齐 DownloadStream.close 语义）、槽释放。
+- REST download 路由：Range 206 保留 Content-Disposition；416 JSON
+  帧 + Content-Range。
+
+fakes 变更：downloadStorageFake 增加 payload 字段（OpenPath 按
+offset/length 切片并报告切片长度，等价 Python RangeStorage）；
+newDownloadRouter 拆出 newDownloadRouterWithDAV 允许测试接线独立
+的 DAV 元数据面；fakeDownloadStream.Close 经 sync.Once 幂等（对齐
+DownloadStream._closed 守卫）。
+
+偏差：无。Python 完成后 connection.shutdown(SHUT_WR) 由 Connection:
+close 全关闭等价（B801 已记录）；416 不带 Connection: close 的
+keep-alive 语义在 Go 端以 closeConn=false 保持一致。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；httpserver -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B900 创建文件夹（2026-09-06）
+
+提交主题：B900 Implement confirmed create-folder endpoint and writer adapter
+
+新文件 go/internal/wps/writes.go：移植 client.py create_folder
+（1784-1811）与 _json_id（1382-1384）：
+
+- 请求面全等：POST /3rd/drive/api/v5/files/folder；body 按
+  groupid,parentid,name,owner,parsed,csrfmiddlewaretoken 顺序
+  json.dumps(ensure_ascii=True, separators=(",",":"))——Go 以
+  pyObject+dumpPYValue 逐字节复刻（测试比对完整 body 字符串）。
+  非 ASCII 名称经 pyQuote 以 \uXXXX 转义（中文用例固定）。
+- pyJSONID：全 ASCII 十进制 → JSON number 且前导零归一（Python
+  int("007")=7；"0"/"000"→0；超长数字按 json.Number 原样保留精度，
+  与 Python 无界 int 同帧）；其余一律字符串。
+- 校验顺序对齐 Python 求值顺序：name 非法（空/含 / 或 \）先抛
+  ValueError 等价 "name must be one remote folder name"（零请求）；
+  随后 _csrf —— currentCredentials() 快照 + 空 token 抛
+  "csrf_token is required for write operation"；最后 group_id 解析。
+  任一失败都不发请求（测试断言 opener 零调用）。
+- 响应面：payload["result"] 存在且非 nil 非 "ok"（任意 JSON 类型均
+  视为失败，含 bool/number——与 Python not in {None,"ok"} 同构）→
+  WpsApiError("create folder")（status None→0，upstream，正文脱敏）；
+  result 缺席容忍；成功走 entryFromItem（"normalize file metadata"
+  拒畸形）。HTTP 4xx/5xx、transport 失败沿用 RequestJSON 的既有
+  映射（403 http / unavailable）。
+- 401 一次重试：RequestJSON 以 refreshJSONBody 只重写 body 中的
+  csrfmiddlewaretoken 字段，其余字节不变；轮换 Cookie + csrf 文件
+  fixture 复刻 smoke 测试（重试帧断言 cookie=sid=second、
+  csrf-second、groupid 仍为数字）。
+
+新文件 go/internal/storage/writer.go：wpsWriter 适配器 +
+NewWriter(client *wps.Client) Writer，CreateFolder 一行委托；
+Upload/Delete/Rename/Move 尚未移植，固定拒绝
+"write operation is not implemented in this stage"（独立于
+errWritesNotWired——那是完全未接 Writer 的 Storage）。storage 层
+的父目录解析、同名冲突拒绝（"entry already exists: N"）、非法名
+拒绝、成功后 invalidate 与返回 entry 均为 B503 既有实现与既有测试。
+
+测试：wps writes_test.go 12 项——逐字节 body golden（数字 ID）、
+非十进制 ID 保持字符串、前导零归一、非 ASCII 名转义、非法名零请
+求、缺 csrf 零请求、result 失败/缺席、403 与 transport 映射、401
+轮换重试重写 csrf、畸形 entry、pyJSONID 表驱动 8 例。storage
+writer_test.go：Writer 接口编译断言 + 未移植方法固定拒绝。
+
+偏差：一、pyJSONID 仅识别 ASCII 十进制；Python isdecimal() 另接
+受全角等 Unicode Nd 数字并转 int——WPS ID 实际取值不可能出现，
+偏差影响面为零。二、Go CreateFolder 不带 Python 的显式
+csrf_token 关键字：storage 调用从不传，token 一律来自凭据源快照
+（与 Python storage→client 路径一致）；上传阶段需要显式 token 时
+经 UploadRequest.CSRFToken。三、Python client 构造不校验 group、
+写时才 503；Go NewClient 在构造期即拒绝（B300 既有校验），故
+"workspace 未配置"路径在 Go 端由构造期覆盖。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B901 重命名（2026-09-06）
+
+提交主题：B901 Implement confirmed v3 rename endpoint and wire the writer
+
+go/internal/wps/writes.go 新增 Rename（client.py rename 1813-1839）：
+
+- 请求面全等：PUT /3rd/drive/api/v3/groups/{quote(group_id,
+  safe='')}/files/{quote(str(file_id), safe='')}——复用 B400 的
+  quotePathSegment（safe=''，大写百分号转义，%2F 等以 EscapedPath
+  断言）；body 按 fname,csrfmiddlewaretoken 顺序 ensure_ascii 紧凑
+  序列化，测试逐字节比对 `{"fname":...,"csrfmiddlewaretoken":...}`。
+- 校验顺序对齐：file_id 空抛 "file_id is required"；name 空或含
+  / \ 抛 "name must be one remote entry name"；随后 currentCredentials
+  + 空 token 抛 "csrf_token is required for write operation"；最后
+  group_id 解析——与 Python 的 ValueError/求值顺序逐条对应，任一
+  失败零请求（测试固定）。
+- 响应面：result 存在且非 nil 非 "ok" → WpsApiError("rename file")
+  （status 0 upstream，operation-only 文案固定）；result 缺席容忍
+  （Python golden 的响应即无 result）；成功走 entryFromItem。
+  403/transport 沿用 RequestJSON 既有映射；401 一次重试 + csrf 字段
+  重写由 RequestJSON/refreshJSONBody 承接。
+
+storage 层不变：Rename/RenamePath 的根拒绝、同名 no-op 返回原
+entry、目标冲突不发 WPS 写请求（"entry already exists: N"）、
+validateEntryName（./..//\\/\x00/控制字符/4096B）、成功清缓存均为
+B503 既有实现与既有测试（TestRenamesPathAndRejectsCollision、
+TestRenamesByID）。REST/DAV 源与目标的 LOCK 接入按细纲留到
+COPY/LOCK 阶段验证。wpsWriter.Rename 改为一行委托并更新适配层
+拒绝测试（Upload/Delete/Move）。
+
+测试：writes_test.go 新增 5 项——PUT v3 body 逐字节 golden（含
+mtime 归一）、group/file ID 路径转义、空 file_id/非法名零请求、
+result 失败 operation-only、403 与 transport 映射表。
+
+偏差：与 B900 相同的两条既录偏差（pyJSONID 不涉本任务；无显式
+csrf_token 关键字；构造期 group 校验）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B902 异步任务轮询（2026-09-06）
+
+提交主题：B902 Implement shared async task progress poller with context cancellation
+
+新文件 go/internal/wps/task.go：移植 client.py _wait_for_task
+（1841-1869），独立于 move/delete 共用：
+
+- 轮询面全等：GET /3rd/drive/api/v5/files/batch/task/progress?
+  taskuuid=...（urlencode 顺序一致）；result 非 {None,"ok"} →
+  WpsApiError(f"{operation} progress")（status 0 upstream）。
+- 成功字段对齐：finish==1 或 status=="success" 即终态，随后
+  failed_list not in (None, []) → WpsApiError(operation, status=409)。
+  finish 的 Python 比较语义完整复刻：bool true 与 1.0 均视为 1
+  （True==1、1.0==1），字符串 "1" 不算；failed_list 仅 null/缺
+  席/空数组算干净，其余任何 JSON 类型（含字符串、false）都走 409。
+  status failed/error → WpsApiError(f"{operation} task")；deadline
+  （monotonic+poll_timeout，请求后判断）→
+  WpsApiError(f"{operation} task timeout")。四类错误全部 operation-
+  only 脱敏文案，测试逐一固定。
+- 参数校验对齐 move/delete：poll_interval<0 → "poll_interval must
+  not be negative"；poll_timeout<=0 → "poll_timeout must be
+  positive"。默认常量 DefaultTaskPollInterval=500ms、
+  DefaultTaskPollTimeout=60s 与 Python 关键字默认一致（测试固定），
+  供 B903/B904 公开方法使用；poll_interval=0 保持 Python 的禁眠
+  紧轮询语义。
+- context 取消（Go 增强，细纲要求）：循环顶 ctx.Err() 立即返回
+  ctx 错误（预取消零请求，测试固定）；sleep 改 select ctx.Done，
+  取消即刻返回不再等满间隔；RequestJSON 拆出 RequestJSONContext，
+  请求挂 ctx（生产 opener 为 http.Client，在途请求随取消中止），
+  仅当 Do 失败且 ctx.Err() 非空时透传 ctx 错误，其余 transport 失
+  败维持 unavailable 脱敏映射。RequestJSON 原签名不变，既有调用
+  与测试零改动。
+
+测试：task_test.go 12 项——finish golden 两轮轮询（query/path/
+method 断言）、status success 终态、failed_list 三形态 409、
+failed/error 两形态 task 错误、result 失败 progress 错误、
+constant-opener 超时（<2 轮失败即判错）、sleep 中取消及时返回、
+预取消零请求、参数校验三例零请求、默认常量对齐、finishEqualsOne
+表驱动 10 例。
+
+偏差：无行为偏差；ctx 支持为 Go 平台增强（Python 无取消语义，
+轮询错误文案与顺序完全一致）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps -race -count=4
+全绿；交叉构建 linux amd64/arm64、windows amd64、darwin arm64
+通过；Python 参照套件 169 项全绿（manifest 按门禁顺序重建）、
+contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B903 移动（2026-09-06）
+
+提交主题：B903 Implement confirmed v5 move task endpoint with observed completion
+
+go/internal/wps/writes.go 新增 Move（client.py move 1870-1946）：
+
+- 请求面全等：POST /3rd/drive/api/v5/files/batch/task/move；body 按
+  groupid,parentid,dst_groupid,dst_parentid,fileids,option,
+  csrfmiddlewaretoken 顺序 ensure_ascii 紧凑序列化，golden 逐字节
+  比对 `{"groupid":1,"parentid":3,"dst_groupid":1,"dst_parentid":8,`
+  `"fileids":[7],"option":{},"csrfmiddlewaretoken":"csrf-secret"}`——
+  option 为空 dict 的 {}、数字 ID 列表 [7] 均与 Python 捕获一致。
+- 参数校验对齐：file_id 空抛 "file_id is required"；源或目标父 ID
+  空抛 "source and destination parent IDs are required"；随后
+  currentCredentials + 空 token ValueError；group_id 解析——任一失
+  败零请求（测试固定）。
+- 任务面：result 非 {None,"ok"} → WpsApiError("move file")；
+  taskuuid 缺席/空/非字符串（数字也算）→ WpsApiError("move file
+  task")；随后 WaitForTask（B902）以 "move file" operation 轮询，
+  默认间隔 0.5s / 超时 60s；observed task 失败（failed 状态）→
+  "move file task" 错误——task 未成功绝不返回成功（测试固定两帧
+  请求后失败路径）。
+- dst_groupid 与 option 关键字在 Go 面保持 Python 默认值（同组、空
+  dict）：storage 调用路径（storage.py move_to_parent_path）从不传
+  自定义值；csrf_token 关键字同 B900 既录处理。
+
+storage 层不变：MoveToParentPath/MovePath 的根拒绝、自身后代拒绝、
+目标非目录、同父 no-op、目标同名冲突不发 WPS 写请求、跨目录同时
+改名 unsupported、成功后清缓存均为 B503 既有实现与测试；
+wpsWriter.Move 改为一行委托，适配层拒绝测试相应收缩（剩
+Upload/Delete）。
+
+测试：writes_test.go 新增 5 项——body 逐字节 golden + 进度帧断言、
+非法参数三例零请求、task result 失败、taskuuid 三形态、observed
+task 失败传播。
+
+偏差：无新偏差；ctx 由 WaitForTask 内部以 Background 承接（Writer
+接口无 ctx 参数，REST/DAV 层 ctx 贯通留待整合阶段），行为同
+Python。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B904 删除（2026-09-06）
+
+提交主题：B904 Implement confirmed v5 delete task endpoint with observed completion
+
+go/internal/wps/writes.go 新增 Delete（client.py delete 1950-1990）：
+
+- 请求面全等：POST /3rd/drive/api/v5/files/batch/task/delete；body
+  按 fileids,groupid,csrfmiddlewaretoken 顺序 ensure_ascii 紧凑序列
+  化，golden 逐字节比对 `{"fileids":[7],"groupid":1,` `"csrfmiddlewaretoken":"csrf-secret"}`（数字 ID 列表与 Python 捕获一致）。
+- 参数校验对齐：file_id 空抛 "file_id is required"，随后
+  currentCredentials + 空 token ValueError、group_id 解析——空 ID
+  零请求（测试固定）。
+- 任务面：result 非 {None,"ok"} → WpsApiError("delete file")；
+  taskuuid 缺席/空/非字符串 → WpsApiError("delete file task")；
+  WaitForTask（B902）以 "delete file" operation 轮询，默认 0.5s /
+  60s；observed task 失败 → "delete file task"——task 未成功绝不
+  返回删除成功（两帧失败路径测试固定）。
+- 401 一次重试与 csrf 字段重写由 RequestJSON 承接；403/transport
+  沿用既有映射。
+
+storage 层不变：Delete/DeletePath 的根拒绝（"the root cannot be
+deleted"，空间挂载根经 MultiSpace 路由落到同一空路径拒绝）、成功
+后清缓存、失败不假装成功均为 B503/B504 既有实现与测试；
+wpsWriter.Delete 改为一行委托，适配层拒绝测试仅剩 Upload。
+
+测试：writes_test.go 新增 5 项——body 逐字节 golden + 进度帧断言、
+空 file_id 零请求、result 失败、taskuuid 三形态、observed task 失
+败传播。
+
+偏差：无新偏差；ctx 与 B903 同注（Background 承接）。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage -race
+-count=4 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺
+序重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B1000 请求正文与 spool（2026-09-06）
+
+提交主题：B1000 Implement upload request-body framing with spooled checksummed buffering
+
+必读 client.py:1553-1605,2258-2375 全部核对。新建
+internal/wps/upload.go、spool.go（镜像 SpooledTemporaryFile）与
+internal/httpserver/upload.go：
+
+- HTTP 帧序（REST upload/files 路由与 DAV PUT）：
+  _content_length(required=True) 先行——缺 Content-Length → 411 文本
+  帧 "Content-Length is required\n" + Connection: close（B7xx 已建
+  helper）；新增 checkDeclaredUploadLength 镜像
+  _check_declared_upload_length：声明超过 max_upload_bytes 时在读第
+  一个 body 字节前回答 507 "upload exceeds the configured size
+  limit" + close（Python 经 storage.client.config 读取，Go 由装配传
+  静态值，0 关闭检查与 getattr 回退一致）。REST 顺序
+  length→507→queryPath→queryBool(overwrite)→uploads；DAV 顺序
+  length→507→uploads（overwrite 恒 true）。queryBool 镜像
+  _query_bool（"must contain one value"/"must be boolean"，400）。
+  未知 REST PUT 后缀先 discardBody 再 404。
+- 上传核心（wps.Client.Upload→spoolUpload）：名称守卫
+  "name must be one remote file name"（空/含 / 或 \）、8 项配置守卫
+  （逐字与 Python 2292-2307 对齐）、声明尺寸 _check_upload_budget
+  （负值、超 max → 507、>upload_spool_memory 才查盘：目录不可用 /
+  空间不足两条 507，free==total+min_free 恰好通过）、_csrf
+  （显式 token 或凭据，缺失 → "csrf_token is required for write
+  operation"）、content_type 缺省 application/octet-stream。
+- spool 循环：逐块单次 read(stream_chunk_size)（镜像 Python 的单次
+  read 语义，(0,nil) 视为流结束）；每块先 _check_upload_budget
+  （total+len）再 ReserveSpool（进程级协调预留，随流增长、原子改
+  额）后写入；MD5/SHA-1/SHA-256 流式同算。SpooledTemporaryFile 镜
+  像：内存 ≤ 阈值（恰好等于不落盘，> 才 rollover），rollover 用
+  os.CreateTemp(0600) 写入 upload_spool_dir（缺省 TempDir），close
+  恒 remove——每个错误注入点（预算失败/读失败/rollover 失败/长度
+  失配/阶段边界）断言 spool 目录清空 + 预留归零。声明尺寸与实际
+  不符 → "source size mismatch: expected N, read M"。
+- 存储接线：writer.go 的 Upload 由本地桩改为转发
+  wps.Client.Upload（wps.UploadRequest 字段一一对应）；
+  budget 导出 DiskFree（平台实现复用），wps.Client 增加 diskFree
+  seam（对应 Python 测试 monkeypatch shutil.disk_usage）与
+  WithDiskFree 选项。
+- 错误表补两 Kind（加法，不改既有映射）：KindBadRequest→400 逐字
+  文案（Python 的裸 ValueError/TypeError 分支）、KindIOFailure→502
+  固定文案 "local or upstream I/O failed"（Python 的 OSError 分
+  支）；源读失败与 spool 写失败归入 IOFailure，磁盘类归入
+  InsufficientStorage→507。httpserver/upload.go 增加 UploadStorage
+  接口（*Storage/*MultiSpace 满足），两个 dispatcher 构造签名新增
+  uploads 与 maxUploadBytes 参数（必填，缺失即 errChainConfig）。
+- 阶段边界：spool 完成后（pre_check 之前）固定回答
+  KindUnsupportedOperation "upload is not implemented in this
+  stage"——pre_check/create_update/对象 PUT/登记分别在
+  B1001/B1002/B1003 接入；预留释放在 spoolUpload 成功路径暂不
+  执行，由整条上传流程结束时的 close 统一释放（对齐 Python
+  with 块生命周期，B1002 起覆盖对象 PUT 全程）。
+
+偏差：①SpoolLimiter 为 nil 的客户端拒绝上传（"upload spool
+limiter is required"）——Python 的预留计数器内建在客户端；Go 侧按
+B501 决策上移到进程级 Budget，客户端缺协调器时宁拒不静默跳过。
+②REST/DAV 未接 _check_locks：LOCK 落地前的恒真等价，B901 已记录同
+款延后，阶段 12 验证。③源流直接用 r.Body：Python _LimitedReader 是
+为 socket 级 framing 防护而生，Go net/http 自带 Content-Length 分
+帧，读取上限由传输层保证；异常路径的 drain 同理由 net/http 收尾
+（未读尽则连接关闭，不产生 Python 需防的串流风险）。④HTTP 501 边
+界为 Go 中间态，Python 无对应（其 upload 全流程可用）；B1003 完成后
+自然消失。
+
+测试：wps 新增 18 组（名称/配置/limiter/声明预算 5 面/CSRF、
+spool+哈希 pinned、空文件哈希、逐块预留与边界释放、预算中途失败/
+读失败/rollover 失败/长度失配的临时文件+预留双释放、411、507 帧序
+与"未读 body"断言、路由顺序）；spool 6 组（阈值恰好/越界/0 阈值/
+rollover 失败/重读/close 清理）；httpserver 9 组黑盒经 Router 全帧
+断言；storage 2 组证明转发真实客户端。Python 逐串核对 16 条消息全
+等。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps/storage/httpserver
+-race -count=2 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿（manifest 按门禁顺序
+重建）、contract_tests 119 项全绿。
+
+回滚：git revert 本提交。
+
+## B1001 pre_check 与冲突语义（2026-09-06）
+
+提交主题：B1001 Implement upload pre_check with conflict semantics
+
+必读 client.py:2340-2374（pre_check 调用与结果门）与 storage.py
+upload_path 348-371、server.py _do_rest_put/_do_webdav_put 全部核对：
+
+- wps.Client.Upload 在 spool 完成后执行 preCheckUpload：GET
+  /3rd/drive/api/v5/files/upload/pre_check，query 按序恰好
+  file_name/group_id/parent_id，值走 str(_json_id(...)) 语义（新增
+  pyJSONIDString，pyJSONID 重构复用之，行为不变）；group_id 由
+  c.GroupID() 解析（失败先于任何请求，503 文案与 Python 属性一致）。
+- 冲突继续条件：仅当 overwrite 且已观察 WpsAPIError.status==403 时以
+  {"result":"ok"} 继续并直接进入 create_update——测试断言不出现任何
+  delete 类请求（不用先删后传）；其余错误（500、传输失败、非
+  WpsAPIError）原样传播。结果门：result 缺失/null/"ok" 均通过，其他
+  → WpsAPIError("upload pre-check")，与 `get("result") not in
+  {None,"ok"}` 逐字等价（True/0/"" 等一律拒绝）。
+- 冲突语义其余两半在先前任务已落地，本任务补测：
+  storage.Storage.UploadPath 的"恰好一个同名 file 才允许
+  overwrite"（新增双同名条目用例，拒绝且 writer 零调用）；
+  httpserver REST queryBool 缺省不覆盖（新增默认值用例）与 DAV PUT
+  恒覆盖（fakeUploadStorage 补记 overwrite 并断言）。
+- 每个 pre_check 失败注入点断言 spool 目录清空 + 预留释放（对齐
+  Python with 块生命周期）。
+
+偏差：无。测试中 WpsAPIError 文案断言修正为实际 Error() 格式
+（status==0 不带 "(HTTP 0)" 后缀）。
+
+测试：wps 新增 6 组（精确 query 与边界、缺失/null result、异值
+result、403×overwrite 四面、十进制 id 归一化、无 group 先拒绝）；
+storage 1 组（双同名拒绝）；httpserver 2 组（REST 默认、DAV 恒覆盖
+断言）。Python 参照逐串核对。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps/storage/httpserver
+-race -count=2 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿；contract_tests 119
+项全绿。
+
+回滚：git revert 本提交（阶段内任务同文件叠加，见 B1003 提交说明）。
+
+## B1002 create_update 与对象 PUT（2026-09-06）
+
+提交主题：B1002 Implement create_update instruction and signed object PUT
+
+必读 client.py:2375-2459（create_body、create_upload_instruction、
+重试循环）与 _put_signed_object 1679-1704、_signed_target 1620-1655、
+_retry_delay 1616-1618 全部核对：
+
+- UploadOptions 镜像 frozen dataclass：parent_path/req_by_internal/
+  client_stores/startswithfilename/successactionstatus=200/file_id=0/
+  with_rapid=True/tried_store/is_up_new_ver；overwrite 时按
+  client.upload 的重建逻辑替换（client_stores/startswithfilename/
+  tried_store 的 or 回退、successactionstatus=201），wps.UploadRequest
+  增加 Options（nil→默认；storage 层不传，与 Python upload_path 不收
+  options 关键字一致）。
+- create_update：PUT /3rd/drive/api/v5/files/upload/create_update，
+  pyObject 精确 17 字段序 + overwrite 时末尾追加 md5；compact
+  ensure_ascii 序列化复用 dumpPYValue；RetryOn401=true。
+- 指令校验：url 必须 str（否则 "create upload URL"）；response 为
+  Mapping 时取 expect_code[0]（缺省/空表/非列表 → 200），非 200 →
+  "unsupported object upload status"；整数比较含 int/float 两面
+  （Python 200.0==200 亦通过）。
+- 对象 PUT：putSignedObject 经 SignedObjectClient（无 Cookie/
+  Authorization，头仅 Content-Type: application/octet-stream，
+  Content-Length=spool 总长；size==0 时 nil body 使 Go 发送
+  Content-Length: 0 而非分块，对齐 http.client）；响应体先按
+  MAX_OBJECT_RESPONSE_BYTES=1 MiB 有界读取再查状态码（顺序与 Python
+  一致），非 200 → WpsAPIError("object upload", status)。
+- 重试循环：每次失败后 _retry_delay(attempt+1)=delay*2^attempt 指数
+  退避，重新调用 create_upload_instruction 取新签名 URL（指令失败
+  立即传播不重试）；可重试面 = WpsAPIError ∪ StorageError（后者的
+  IOFailure 对应 Python spool.seek 的 OSError）；重试前 reopen spool
+  从头读，测试断言第二次 PUT 仍是完整正文且指令体逐字节相同。
+  for-else 的 last_error 兜底为不可达死代码，Go 省略。
+- 成功后取原始 ETag 头，缺失 → "object upload response missing ETag"
+  （不重试）；x-obs-save-key 在普通上传路径未被 Python 使用，不返回。
+- 阶段边界移至对象 PUT 之后（登记前），B1003 移除。
+
+偏差：①"校验指令 method/store"：捕获形状与 Python 均不含 method
+字段、不校验 store（仅作 str 直传登记体），故无可镜像项，据实记录；
+②"规范化 ETag"：Python 普通上传路径 _put_signed_object 返回原始
+etag 头（strip 引号仅存在于 multipart 的 _put_signed_part，B1102），
+本任务保持原样直传登记体；③对象响应体读失败（截断）在 Go 归入
+WpsAPIError 而可重试，Python http.client 的 IncompleteRead 不在
+(OSError, WpsApiError) 内不重试——对象 PUT 幂等且每次新签名，多一次
+重试无语义影响；④create_update 指令体跨重试复用同一编码字节（值不
+变，Python 每次 json.dumps 结果相同）。
+
+测试：wps 新增 7 组（create_update 精确体逐字节 pinned、overwrite
+重建体逐字节 pinned、指令校验五面 + 缺省 expect_code、退避重试换新
+URL、重试耗尽传播、缺 ETag 不重试、空文件零长 PUT）；既有测试按
+B1003 完成后流程更新断言。Python 参照逐串核对。
+
+门禁：同 B1001（全绿）。
+
+回滚：git revert 本提交。
+
+## B1003 文件登记（2026-09-06）
+
+提交主题：B1003 Implement file registration with sanitized orphan warning
+
+必读 client.py:2434-2456（file_body 与 /files/file POST）全部核对：
+
+- registerUpload：POST /3rd/drive/api/v5/files/file，pyObject 精确
+  12 字段序（key=sha1、store 取 create_result.get("store","")——缺失
+  回退空串、present-null 保持 null，etag 为对象 PUT 原始值，
+  isUpNewVer/apiErrorInfo 按捕获形状，RetryOn401=true）。
+- 成功门：result ∈ {缺失,null,"ok"} 且 entryFromItem 可解析（缺 id
+  等 → "normalize file metadata"）才向客户端返回成功；两条路都失败
+  于登记，Upload 返回错误。
+- 登记失败告警：新增 warnUpload seam（默认 log.Printf 落标准错误，
+  WithUploadWarning 可注入捕获），文案 "uploaded object may be left
+  unregistered in WPS, manual cleanup may be needed: <error>"；error
+  为 operation-only 文案，测试断言不含文件名/签名 URL/Cookie/CSRF/
+  store；不尝试任何未知删除 API（测试枚举控制面路径仅 pre_check/
+  create_update/register，对象面零请求）。
+- 资源清理：defer spool.close() 覆盖登记成功/失败全部路径（预留释放
+  + 临时文件删除），测试逐点断言。Python 侧无对应日志调用，此告警
+  为细纲对本任务的明确要求（架构 §16 有界脱敏日志的首个落点）。
+- 阶段边界（B1000 引入的 501 中态）随之完全移除，上传全流程贯通。
+
+偏差：无。
+
+测试：wps 新增 5 组（登记体逐字节 pinned + 返回 entry、失败结果告警
++脱敏断言+零删除、登记请求失败告警、entry 不可解析告警、store 缺省
+回退）；B1000/B1001 既有用例随全流程贯通改为成功断言；storage
+writer 转发测试改走真实客户端全链路（自建脚本化 Opener/签名传输），
+继续证明字段转发。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps/storage/httpserver
+-race -count=2 全绿；交叉构建 linux amd64/arm64、windows amd64、
+darwin arm64 通过；Python 参照套件 169 项全绿；contract_tests 119
+项全绿。
+
+回滚：git revert 本提交。
+
+本阶段（B1001–B1003）因三次任务叠加于同一 upload.go 且用户将推进与
+提交节奏定义为阶段级，三个任务以单次提交落地；各任务证据仍按任务
+分立如上。
+
+## B1100 检查点格式（2026-09-06）
+
+提交主题：B1100-B1104 Implement multipart upload with checkpoint resume and merge
+
+必读 client.py:1996-2075（resume_path 派生、检查点读取验证、save_state
+原子写）全部核对：
+
+- resumePathFor：绝对目录校验（"upload_resume_dir must be absolute"，
+  拒绝点在 multipart 入口、pre_check 之后，与 Python 一致）；文件名
+  只由 sha256(identity).json 决定，identity =
+  group:parent:name:total:sha1（id 取 str(_json_id) 十进制串形式），
+  上传名不落入文件名。
+- loadResumeCheckpoint：经 securefile.ReadJSONState（0600、私有父目录、
+  属主 root/本用户、Lstat 拒符号链接、有界读）；version==1、identity
+  全等、parts 为「ASCII 数字键→字符串」映射，任一不满足整体视为
+  不存在→全新 init（Python except (OSError, UnicodeError,
+  JSONDecodeError) 同语义）。形状有效但 upload_id/key/store 缺失或空
+  →全新 init；part_size 不可 int() 解析→硬错误 "invalid multipart
+  resume checkpoint"（不复用，与 Python 一致）。
+- saveResumeCheckpoint：细纲明确要求 securefile 原子写（0600 临时文件
+  + fsync + rename；Python 为 "."+name+".tmp" 写入+chmod+replace，无
+  fsync）；目录 MkdirAll 0700。检查点只含 identity/key/part_size/
+  parts/store/upload_id/version 七键，无正文无凭据（测试断言不含
+  csrf/Cookie/URL/store 之外的敏感面）。
+- removeResumeCheckpoint：登记成功且 entry 可解析后才删；仅容忍
+  ErrNotExist，其余删除失败照 Python unlink 一样在登记成功后上抛。
+- 同 identity 互斥锁：细纲 B1103 明确要求，按 checkpoint 路径
+  （即 identity hash）加包级互斥，覆盖整个 multipartUpload；Python
+  无对应保护。
+
+偏差：①检查点内容为客户端自读自写，Go 用 encoding/json 紧凑编码
+（Python json.dumps sort_keys=True 默认 ", "/": " 分隔、ensure_ascii），
+仅字节形状不同；②Python 检查点读取 stat() 跟随符号链接且不限大小，
+Go 一律拒符号链接并限 4 MiB（超限视为不存在→全新 init）；③
+version 为 true（bool）在 Python ==1 通过，Go 要求数值；④父目录
+须私有（securefile 纪律）——已存在的 0755 resume dir 下 Go 拒写、
+Python 照写（文件本身仍 0600）；⑤parts 键须 ASCII 数字（Python
+str.isdigit() 接受 unicode 数字键，但它们永不匹配，等效忽略）。
+
+测试：wps 新增（checkpoint 哈希文件名+0600+七键+无凭据泄漏+无临时
+残留、相对 resume dir 在 pre_check 后拒绝、7 面畸形/异主/越权检查点
+全部全新 init、part_size 坏检查点硬错误且零 init）。
+
+## B1101 初始化与分片大小（2026-09-06）
+
+必读 client.py:1990-2008（_multipart_part_size）、2007-2079（block
+init 请求与响应验证）全部核对：
+
+- 进入条件：total >= multipart_threshold，位于 pre_check 之后、
+  create_update 之前；overwrite 在此处拒绝
+  "multipart overwrite is disabled until independently verified"
+  （测试断言此时仅发出 pre_check、零 block 请求；更早拒绝需契约
+  决定，按细纲暂不优化）。
+- init 体 pyObject 精确 8 字段序（with_rapid/hash=sha1/size/
+  group_id/name/parent_id 均为字符串形式/tried_store/csrf），
+  逐字节 pinned；响应门 result ∈ {缺失,null,"ok"}，upload_id/key/
+  store 为非空串、limit 为映射，否则 "multipart initialization
+  response is incomplete"；RetryOn401=true。
+- multipartPartSize 镜像 int() 语义（json.Number/int/float/十进制
+  串/bool）→ "parse multipart limits"；min<=0 / max<min /
+  max_parts<=0 → "invalid multipart limits"；part_size =
+  max(配置, min, ceil(total/max_parts))；> max → "file exceeds
+  multipart size limits"；> 64 MiB 常量 → InsufficientStorage
+  "multipart part exceeds the memory safety limit"。
+
+偏差：无（配置 part_size<=0 守卫镜像 Python ValueError，实际不可达，
+因 upload() 前置校验先行）。
+
+测试：wps 新增（init 体逐字节 pinned、min_part_size 抬升、max_parts
+抬升、超限拒绝、内存上限拒绝、invalid/parse limits 四面、overwrite
+拒绝点）。
+
+## B1102 单片上传（2026-09-06）
+
+必读 client.py:2081-2160（分片循环与指令校验）、1707-1741
+（_put_signed_part）全部核对：
+
+- readPart：spool.seek(offset)+read(part_size) 等价实现，短尾片与
+  越界空读均无错返回；单片至多 64 MiB 入内存，不整文件驻留。
+- 同片同时生成 hex MD5（block 体）与 Base64 Content-MD5（校验与
+  签名 PUT 头）。
+- block PUT 体 pyObject 精确 8 字段序逐字节 pinned（part_size 取
+  实际片长）；指令校验按 Python 顺序：result 门 → method/url →
+  body_type=file → response 映射 → expect_code 首元素==200（缺失
+  缺省 200、present-null/空表/非 200 拒）→ headers 映射 →
+  Content-MD5（大小写两个键位、Python `or` 真值链）与
+  Content-Type==application/octet-stream 一致性。
+- putSignedPart：Content-MD5 + Content-Type 两头、无 Cookie/
+  Authorization，有界响应读（1 MiB）先于状态门，200 后取 ETag，
+  缺失/空 → "multipart part response missing ETag"；ETag 在此路径
+  归一化（strip 空白+引号，_normalise_etag，仅 multipart 用）。
+- 每片确认后原子更新检查点；重试仅重发同一片（测试断言重试前后
+  block 体逐字节相同、merge 无重复项）；本地 IO 错误（spool）在
+  重试环外直接上抛，与 Python seek/read 的 OSError 一致。
+
+偏差：片响应体读失败（截断）在 Go 归入 WpsAPIError 而可重试，
+Python http.client 的 IncompleteRead 不在 (OSError, WpsApiError)
+内不重试——与 B1002 对象 PUT 的既录偏差③同源同结论。
+
+测试：wps 新增（两片体+merge 体+登记体逐字节 pinned、签名 PUT
+头与 Content-Length、零凭据面、指令校验 12 面、小写头接受、
+ETag 引号剥离/缺失、重试同片、单片 500 耗尽后检查点仅含已确认
+片、断连重试不跳片）。
+
+## B1103 session 失效恢复（2026-09-06）
+
+必读 client.py:2160-2205（400/404/410 重建分支）全部核对：
+
+- 触发条件：仅 WpsAPIError 且 status ∈ {400,404,410}、配置了
+  resume dir、本片未重建过；未配置 resume dir 时不重建、按普通
+  重试耗尽上抛（测试断言 init 只发一次）。
+- 重建体与首次 init 逐字节相同（测试断言）；失败门
+  "reinitialize multipart upload" / "reinitialize multipart
+  response is incomplete"；part_size 重新计算可上抛 parse/
+  invalid/exceeds/memory 四类错误；completed 与 part_infos 清空，
+  新 upload_id/key/store/part_size 立即落检查点；片号回 1，
+  绝不混用旧 upload_id（测试断言重建后片体与 merge 均用新 id）。
+- 重建期间 reinit 自身的错误立即上抛，不被重试环吞掉。
+- 细纲强化的两点（Python 无）：①重建次数上限
+  maxMultipartSessionResets=3——Python 每片重置一次且可无限循环，
+  达到上限后让触发错误原样上抛（测试断言 init 恰好 4 次后返回
+  404 错误）；②同 identity 并发互斥（见 B1100），测试用门控签名
+  传输证明第二个上传在对方持锁期间只能发出 pre_check。
+
+偏差：上限 3 为细纲要求的 Go 侧加固，Python 行为是无界重试。
+
+测试：wps 新增（重建全链、无 resume dir 不重建、上限恰好 3 次、
+并发同 identity 互斥）。
+
+## B1104 merge 与登记（2026-09-06）
+
+必读 client.py:2207-2297（merge 体/指令校验/_post_signed_data/
+_multipart_etag/file_body 登记）全部核对：
+
+- merge 体 pyObject 精确 6 字段序（key 为块会话 key、part_infos
+  为 {etag,part_number} 有序对）逐字节 pinned；指令校验按 Python
+  顺序：result 门 "prepare multipart merge" → method==POST/url →
+  body_type=data → body_data 串+headers 映射 → Content-Type==
+  application/xml（大小写两个键位）→ response 映射 → expect_code
+  首元素==200。
+- postSignedData：签名 POST 无凭据，XML 有界读 4 MiB 先于状态门；
+  multipartEtag 拒 <!doctype/<!entity（字节级、大小写不敏感），
+  再以 encoding/xml 复刻 ElementTree 严格性（未闭合元素、双根、
+  根外垃圾、空文档、非法 XML 全部 "parse multipart merge
+  response"），取首个局部名为 ETag 的元素的前导文本并归一化；
+  纯空白文本归一为空串与 Python 真值语义一致。
+- 登记体 12 字段序逐字节 pinned——注意此处 groupid/parentid 为
+  字符串（group_text/parent_text），与普通上传的 JSON 数字不同，
+  是 Python 原样；etag 为归一化后的合并 ETag；key 为块会话 key。
+- 只有 result 门通过且 entryFromItem 可解析才成功，随后才删
+  检查点；merge 失败/登记失败/entry 不可解析均保留检查点
+  （测试逐一断言 parts 完整、无临时残留）。
+
+偏差：multipart 登记失败未接 B1003 的孤儿告警——细纲 §12 无此
+要求（保留的检查点即恢复面），与阶段 10 的显式清单项不同。
+
+测试：wps 新增（merge/登记体 pinned、merge 指令校验 10 面+小写
+content-type、ETag 解析 11 面、merge/登记失败保留检查点、
+100 MiB/10 MiB fixture：10 片 framing+片体重组 sha256==源+真实
+下载 hash 一致+检查点清理）。
+
+本阶段（B1100–B1104）沿用阶段 10 的节奏：五个任务叠加于同一
+multipart.go 且用户将推进与提交节奏定义为阶段级，以单次提交落地；
+各任务证据仍按任务分立如上。阶段完成条件逐项覆盖：100 MiB 的
+10 MiB 分片 fixture ✓、重启续点 ✓、单片失败 ✓、session 失效 ✓、
+merge 失败 ✓、登记失败 ✓、断连 ✓、上传下载 hash 一致 ✓。
+
+## B1200 原生单文件 COPY（2026-09-06）
+
+提交主题：B1200-B1204 Implement COPY relay and DAV LOCK protocol with route lock checks
+
+go/internal/wps/writes.go 新增 Copy（client.py copy 1919-1948）：
+
+- 请求面全等：POST /3rd/drive/api/v3/groups/{quote(group_id,
+  safe='')}/files/batch/copy（复用 B400 的 quotePathSegment）；
+  body 按 fileids,groupid,target_groupid,target_parentid,
+  duplicated_name_model,csrfmiddlewaretoken 顺序 ensure_ascii 紧凑
+  序列化，golden 逐字节比对 `{"fileids":[7],"groupid":1,`
+  `"target_groupid":1,"target_parentid":3,"duplicated_name_model":1,`
+  `"csrfmiddlewaretoken":"csrf-secret"}`（数字 ID 列表与常量 1 与
+  Python json.dumps 同帧）。
+- 参数校验对齐：file_id 或 target_parent_id 空抛 "file and target
+  parent IDs are required"；随后 currentCredentials + 空 token
+  ValueError、group_id 解析——任一失败零请求（测试固定）。
+- 响应面：result 非 {None,"ok"} → WpsAPIError("copy file")；
+  fileids 非 list 或 len≠1 → "copy response missing file ID"；
+  fileids[0] 逐型复刻 isinstance 门（bool 先排除；str 原样；
+  Python int 即 JSON 整数字面量经 str(int()) 归一，"-0"→"0"，巨数
+  按字面保留；float(1.5/1e3)/null/容器 → "copy response contains
+  invalid file ID"），pyJSONIntLiteral 逐字实现 JSON int 文法。
+- 401 一次重试与 csrf 字段重写由 RequestJSON 承接。
+
+## B1201+B1202 COPY 中继与文件夹复制（2026-09-06）
+
+新文件 go/internal/storage/copy.go：移植 storage.py copy_path
+（512-663）全部验证顺序与递归结构：
+
+- 验证顺序对齐：depth strip+lower ∈ {0,1,infinity} → "COPY Depth
+  must be 0, 1 or infinity"；源/目标 split → 根拒绝 "the root
+  cannot be copied"；同路径 → "an entry cannot be copied onto
+  itself"；文件夹进入自身（目标前缀==源 parts）→ "a folder cannot
+  be copied into itself"；目标父解析非目录 → NotFolderError 等价
+  "the COPY destination parent is not a folder"；目标名再过
+  validateEntryName；目标已存在：!overwrite → AlreadyExistsError
+  "entry already exists: <path>"，overwrite → UnsupportedOperation
+  "COPY overwrite is disabled because the relay is not atomic"——
+  两分支均零 WPS 调用，绝不先删目标（测试固定 deleteCalls 为空）。
+- native 分支：writer 经可选接口 Copier（对应 Python
+  getattr(self.client,"copy",None)，无 Copy 的 Writer 自动落到中
+  继）；仅源为 file 且目标 basename==源名时触发；成功
+  invalidate 后以 copied id + 源 size/modified/etag/link + 目标父
+  合成 entry（与 Python RemoteEntry 构造同形）。
+- 中继文件分支（B1201）：OpenPath 持下载槽 → uploadStream 镜像
+  _upload_stream（AcquireUpload→writer.Upload→释放，slot 释放与
+  defer 语义同 Python try/finally），再 invalidate。两槽池不相交
+  且等待受 transfer_wait 约束，先下载后上传的获取顺序无环可死锁
+  （与 Python open_path→_upload_stream 同序）。取消面：ctx 观察者
+  强制关闭源流（managed close 幂等），读失败即时中断上传并经
+  defer 释放两侧槽位（测试用阻塞流验证 cancel 后返回且流已关）。
+  源流不整体入内存：字节经 spool/hash 流程（B1000 全链路）；
+  content_type 用 mimetypes guess_type(name)[0] or octet-stream
+  ——将 httpserver/mimetypes.go 原样上移为 internal/mimetypes 包
+  （GuessMimeType），storage/httpserver 共享同一 Python 表，
+  httpserver 三处调用点与测试迁移（无行为差异，原表逐字节保留）。
+- 文件夹分支（B1202）：writer.CreateFolder 直连（无碰撞检查——
+  Python 此处即 client.create_folder，顶层已拒绝既有目标）；depth
+  ==0 或 (1 且 level≥1) 停止；子列表用缓存 children；每级
+  copied 计数超 max_copy_entries / level 超 max_copy_depth →
+  InsufficientStorageError 两条固定文案。任一子步骤失败对本级
+  新建文件夹 best-effort delete（失败吞掉）+ invalidate 后向上抛
+  ——级联清理与 Python except 块同构；"目标根是本请求新建"由顶
+  层 existing 门保证，不会误删旧目标；非事务性：成功已创建的
+  兄弟子项不回滚（与 Python 一致，不承诺完全回滚）。
+- Python copy_entry 的 existing_item 删除分支为不可达死代码
+  （顶层 existing 非 None 必然提前抛错，递归调用从不传
+  existing_item），Go 未移植该分支；行为面完全一致。
+- MultiSpace.CopyPath：syncMounts → 无挂载走 single → 双端路由，
+  跨空间 → "cross-space copy is not supported"（指针同体比较，
+  Python `is not` 同构）。
+
+测试：storage copy_test.go 9 项——native（ID/parent/size 保留、
+零 upload/download）、relay（改名、body 流转、guess content-type、
+声明 size、cid 传递、overwrite=false）、existing 拒绝两分支零调
+用、验证 6 面、Depth 0/1/infinity 三档（folder/upload 次序）、
+entry/depth 上限、失败级联清理（含 delete 失败吞掉）、取消关闭
+两侧、MultiSpace 委托与跨空间拒绝。wps writes_test.go 新增 5 项
+（B1200）。
+
+## B1203 Lock Store（2026-09-06）
+
+新文件 go/internal/httpserver/locks.go：移植 server.py DavLockStore
+（104-225）：
+
+- ActiveLock 六字段齐备（token/path/depth/owner/timeout_seconds/
+  expires_at）；expires 以注入时钟（生产 time.Now，Go 时序含单调
+  读数）驱动，purge 在 Allows/Acquire/Unlock 每次操作前执行，
+  `expires_at <= now` 即过期（Go !After 同判）。
+- applies 规则一致：精确路径恒适用；仅 depth==infinity 覆盖
+  `lock.path.rstrip("/") + "/"` 后代（含 "/" 根锁）。
+- tokens_from_headers 全等：正则 `<((?:opaquelocktoken:)[^>]+)>`
+  (?i) 全部匹配 + 整头 strip() 后 strip("<>") 再小写前缀判
+  opaquelocktoken:（保大小写入集）。表驱动测试以 Python 原实现
+  逐例对拍（含 "if list" 的三 token 形态与裸文本头）。
+- acquire：timeout 夹取 [1,max]；refresh 仅续同 token 同路径
+  （保 depth/owner，换 timeout/expires），无 token/路径不匹配 →
+  KeyError 等价 errLockTokenInvalid；新锁双向冲突检查（现有锁
+  applies(new.path) 或新 infinity 锁以合成锁 applies(现有.path)）
+  → RuntimeError 等价 errLockConflict；registry 满 →
+  ServiceBusy "too many active WebDAV locks"（映射既有
+  KindServiceBusy→503+Retry-After）；token = "opaquelocktoken:"
+  + crypto/rand UUIDv4。
+- unlock：token 存在且路径精确相等才删；过期先清理（过期 token
+  刷新/解锁均按不存在处理）。
+- 进程内、重启即空；map+sync.Mutex 全部并发面 race 安全（-race
+  16 goroutine×50 轮 acquire/unlock/allows/tokens 测试）。
+- max_timeout/max_locks 构造期校验与 Python 一致（正值），默认
+  86400/4096。
+
+测试：locks_test.go 6 项——token 提取表（与 Python 对拍）、
+exact/infinity 适用规则、双向冲突+夹取+refresh+过期 refresh、
+unlock 精确路径、registry 上限与过期释放、race 压测。
+
+## B1204 LOCK/UNLOCK 协议与全路由锁检查（2026-09-06）
+
+新文件 go/internal/httpserver/dav_write.go；rest.go/upload.go/
+dav.go 相应接线：
+
+- Destination 解析（_destination_dav_path 全等）：缺失 →
+  "Destination header is required"；凭据/query/fragment 拒绝；
+  绝对形式 host casefold 比较 + 端口精确比较（Go Port() 空串对
+  Python port None 同帧；解析失败 → "Destination host or port is
+  invalid"）；netloc 为空跳过 host 检查（urlsplit 空网络位置同
+  构）；前缀判断在原始（未解码）路径上做，摘出余部后经
+  unquotePercent 解码恰好一次——Python 由 split_remote_path 内
+  unquote 承接，Go 侧业务路径进 handler 前只此一处解码。
+- COPY（_do_webdav_copy 全等）：Depth 校验→400 固定文案；body
+  丢弃时机逐分支对齐（depth 失败先丢弃，overwrite 失败不丢弃，
+  锁失败丢弃，正常流程丢弃）；目标存在→412/501 双门；CopyPath
+  的 AlreadyExists 竞态在 !overwrite 时再答 412；Location 用
+  buildHref（quote safe=''）；handler 末段 204 分支与 Python 一样
+  为结构保留（存在即提前返回，实际恒 201）。
+- MOVE（_do_webdav_move 全等）：锁检查先于 body 丢弃；overwrite
+  解析后于丢弃；same_path 以 canonical(join(split)) 比较；存在→
+  412/501（"MOVE overwrite is disabled because WPS move is not
+  atomic"）；新目标 201+Location。
+- MKCOL/DELETE：MKCOL 锁检查先于丢弃；DELETE 丢弃先于锁检查
+  （两分支顺序与 Python 不同，逐一对齐）；成功 201+Location /
+  204。
+- LOCK（_do_lock 全等）：canonical 路径；If/Lock-Token 提取 >
+  1 → "LOCK request contains multiple lock tokens"（400）；Depth
+  默认 infinity ∈ {0,infinity}；Timeout 默认 Second-3600、
+  Infinite→max、second-(\d+) (?i) 搜索、溢出按 Python 无界 int
+  语义夹到 max；owner：64 KiB 上限（超 → 413 + 关连接，与
+  _RequestBodyTooLarge 同帧）、short body → 400、字节级拒
+  <!doctype/<!entity、ElementTree 严格性（firstXMLElementText：
+  单根、未闭合、双根、根外非空白、unbound prefix、控制字符均
+  拒绝——encoding/xml 宽松面逐条补严）、首个局部名 owner 元素
+  的 itertext 全文（含后代文本，注释/PI 不计入）、空白折叠
+  （str.split/join 语义）+ 512 rune 截断；refresh 分支：allows
+  失败 423、KeyError 409 "lock token is invalid"、成功 200；
+  新锁分支：allows 423、metadata 缺席 → 201 否则 200、
+  RuntimeError 423。响应体手工复刻 ElementTree 序列化（D: 前缀、
+  空元素 "<tag />"、<?xml version='1.0' encoding='utf-8'?>\n 声
+  明行、timeout 为剩余秒 max(1,int(expires-now))、lockroot 为
+  _href_path 无尾斜杠），DAV: 1,2 与 Lock-Token 头经裸 map 赋值
+  保持线上大小写。
+- UNLOCK（_do_unlock 全等）：先丢弃 body；Lock-Token 恰一 token
+  否则 "Lock-Token header is required"（400）；KeyError → 409；
+  成功 204。
+- 全路由锁检查（B901 既录「REST 源/目标锁检查留到 LOCK 接入阶
+  段验证」在本任务落地）：checkLocks 镜像 _check_locks（canonical
+  化失败按域错误传播；423 文案 "resource is locked"，REST JSON/
+  DAV 文本帧）。接入面：DAV PUT（锁检查先于 Content-Length 门，
+  与 Python _do_webdav_put 同序）、REST PUT（path+overwrite 解析
+  后、读 body 前）、REST folders POST/DELETE（丢弃后、变更前）、
+  REST PATCH（name→join 精确子路径；destination 原串（canonical
+  在 checkLocks 内做）；parent_path→父+按源 entry 元数据 join 的
+  精确子路径，且 metadata 在锁检查前完成——与 Python 注释所述
+  「A destination can be protected by a lock independently of the
+  source」一致）。
+- 同时落地此前未接线的 HTTP 写路由（Python server.py 1205-1278,
+  1520-1545, 1602-1640 的 Go 对应物）：REST folders POST、entries/
+  files/delete DELETE、entries/files PATCH（name/fname 重命名、
+  destination 移动、parent_path 移动，含全部 JSON 形状错误文案：
+  "choose either a new name or a move destination"、"request
+  contains multiple mutation targets"、"JSON field 'name' is
+  required" 等）与 DAV MKCOL/MOVE/DELETE handler。缺路由不可能
+  完成 B1204 的「所有 REST/DAV mutation 对源和精确目标检查锁」
+  验证，故归入本任务（阶段 9 完成条件中 REST/DAV 黑盒在 HTTP 层
+  的余项就此闭合）。payload 形状与 Python 一致：folders
+  {"path","entry"}、PATCH {"path","entry"}（new_path 由 entry.name
+  join，文件夹带尾斜杠）、DELETE 204。
+- dispatcher 构造签名新增 mutations/locks 必填参数（缺失
+  errChainConfig），与 B1000 uploads 接线同一模式；DAVMutations/
+  RESTMutations 窄接口由 *storage.Storage 与 *storage.MultiSpace
+  同时满足；测试以 stub（意外调用即失败）与 recording fake 分层。
+
+测试：httpserver dav_write_test.go 13 项——MKCOL/DELETE/COPY/
+MOVE 全 golden（含 Destination 7 面 400、%20 解码恰好一次且
+Location 按 pythonQuote 重编码、Overwrite 三态、Depth 2 → 400、
+存在目标 412/501 且零存储调用、竞态 412）、LOCK 生命周期（200/
+201/refresh 保 token、响应体逐字节前缀+后缀）、请求校验 7 面+
+多 token+超时夹取+64 KiB 413、owner 提取 8 面（跨 namespace、
+嵌套 itertext、首元素胜出、空白折叠、rune 截断）、继承与冲突
+（兄弟共存、祖先冲突、文件夹锁覆盖后代 PUT、token 放行）、
+UNLOCK 4 态、REST 写路由四方法 423+JSON 帧+成功形状、PATCH
+parent_path/rename 的精确目标锁、JSON 形状错误 6 面。
+
+偏差：①COPY/MOVE 的 Lock-Token 顺序、头默认值等已逐条对齐；唯
+Go url.Parse 对 URL 控制字符的拒绝早于 Python（Python 会放到
+split 阶段报 "forbidden character"，两者同为 400，文案不同——
+契约测试未固定该形态）。②LOCK owner 的 Unicode 空白折叠用
+strings.Fields（Go unicode.IsSpace），与 Python str.split() 在
+极少数 C0 控制符（\x1c-\x1f）上不同——XML 文本节点实际不可见，
+影响面为零。③测试基调：contract_tests 证据 JSON 含随机 lock
+token（B103 既录），Go 测试只断言 token 形状前缀。
+
+门禁：gofmt/vet 无差异；go test ./... 全绿；wps+storage+
+httpserver -race -count=2 全绿；交叉构建 linux amd64/arm64、
+windows amd64、darwin arm64 通过；Python 参照套件 169 项全绿
+（manifest 按门禁顺序重建）、contract_tests 119 项全绿。
+
+本阶段（B1200–B1204）按用户节奏以单次阶段提交落地；各任务证据
+分立如上。阶段完成条件：COPY 深度/失败残留 ✓（Depth 三档、
+entry/depth 上限、级联清理、清理失败吞掉、existing 目标绝不先
+删）、LOCK 并发/过期/继承/刷新 ✓（race 压测、注入时钟过期、
+infinity 继承与祖先冲突、refresh 保 token）；各写路由锁检查全
+部接入并由黑盒测试固定 ✓。
+
+## B1300 组装依赖
+
+日期：2026-09-06
+
+按 04-backend-migration-steps.md §14 B1300 执行；重写
+go/internal/app/application.go（此前为 B200 骨架）、改接
+go/cmd/wps-adapter/main.go。组装顺序：config → secure 状态
+（securefile 读取器经 ReadSecret/凭据源注入，Go 无独立 secure 状态
+对象，折叠进凭据/认证步）→ 凭据/workspace/settings → HTTP clients
+→ 全局 budget → storage → handlers → server。
+
+- 凭据：config 新增 WPS_COOKIE/WPS_CSRF_TOKEN 内联值（Python
+  from_env 同款读取）；FileCredentialSource 存在时文件快照优先、
+  内联值仅补空字段（镜像 client._credentials 的逐字段回退）；无
+  文件源时 import 拒绝、store/replace 返回 false（Python 的
+  missing replace_credentials 同义）。会话过期与轮换持久化语义与
+  Python 一致（仅 FileCredentialSource 落盘）。
+- workspace：app.New 按 Python from_env 条件重建热加载
+  WorkspaceState（group/root auto 或文件存在）；config.Load 的
+  快照仅服务 check-config 摘要。SingleSelection 返回
+  configured_root == "auto" 的 autoRoot，与
+  WpsStorage._sync_workspace_root 条件一致。
+- HTTP clients：所有 space 共享一个控制面 opener 与签名传输
+  （wps 新增导出 NewControlHTTPClient/NewSignedTransport，镜像
+  Python 的单 opener 共享）；凭据源全局唯一——刷新协调全局串行
+  （B1300「所有 child space 共用全局资源与刷新协调器」）。
+- 全局 budget 提到 client 构造之前：client 的 spool 预留经
+  SpoolLimiter 协调（D-03），顺序若按计划字面（clients→budget）
+  会让上传无协调器；以 D-03 的资源安全语义为准，偏差已记录。
+  主循环 MaxConnections 兜底 DefaultMaxConnections（check-config
+  不解析 serve 专属变量，保持 Python 语义）。
+- handlers：REST/DAV dispatcher、DavLockStore（WPS_MAX_LOCKS、
+  超时默认 86400）、RootNameController、StatusController
+  （multi 为 roots、基础 client 为 checker——镜像
+  current_wps_status 的 storage.client.check_status）、
+  SessionImporter（工作区导入面仅在 state 存在时注入，roots 同步
+  为 nil——Python 无 workspace 时不调 set_root_id）。
+- server：main.go 改用 httpserver.Listen（连接槽门 + 头部超时），
+  组装顺序 app.New → CheckPublicBind → ValidateRuntime → Listen，
+  对齐 Python（_application → _check_public_bind → create_server）；
+  serve 专属变量在组装前解析（与 Python 在 create_server 处求值
+  的差异仅影响多重故障时先报哪条错误，已记录）。构造失败经
+  fail() 关闭已建传输（CloseIdleConnections）；check-config 走
+  完整本地组装、零网络（与 Python 构造整个 AdapterApplication 一
+  致，含坏 settings 文件导致 check-config 失败的语义）。
+- app.New 增加注入 Option（WithTransports）供契约入口使用（见
+  B1302）；生产 main 不传。
+
+测试：组装齐全性与 settings→storage 根名传播、auto root 的
+workspace 选择、组装失败顺序（budget 先于 client 泄漏面、锁上限
+最后）、内联凭据回退与拒绝面、workspace 导入面成对注入、
+spaceFactory 空 group 复用基础 client/挂载自建 client、
+check-config 离线输出逐字符、坏 workspace 文件失败退出。
+
+偏差：①budget 先于 client（如上，D-03 依赖）；②serve 专属变量
+解析先于组装（仅多重故障报错顺序）；③目标平台收敛 Linux——
+负责人指示本阶段起不再产出 windows/darwin 构建（B201 曾误把
+冒烟二进制提交入库，已从 git 移除并加入 .gitignore）。
+
+## B1301 接入静态前端
+
+日期：2026-09-06
+
+依赖 05-frontend-plan.md（M2-F0..F5 已完成：三资产拆分、settings
+取根名、CSP 收紧、Python 白名单桥）。本任务完成 F6 的 Go 嵌入侧。
+
+- go/web/embed.go：//go:embed index.html style.css app.js；
+  白名单 Asset(name) 只暴露清单内两资源（含 MIME），Page() 返回
+  固定页字节；缓存策略常量 no-store（§10.10/11：文件名无内容哈
+  希）。不承载业务路由、不读配置、不做运行时替换。
+- app.serveWebApp：/、/web、/web/ 三入口（Router 既有
+  webAppPaths）200 text/html; charset=utf-8 + 固定 CSP + nosniff
+  + no-store + Content-Length；根名经 GET/PATCH /api/v1/settings
+  （M2-F3 语义），响应 HTML 不含用户名。OSError 分支以
+  SendPlainError 保留结构镜像（embed 下不可达）。
+- app.serveWebAsset：白名单命中 200 + 白名单 MIME + nosniff +
+  no-store；未命中 404 "unknown web asset\n" + Connection: close
+  （Python _handle_web_asset 逐字节）；HEAD 无 body 有长度；
+  其余方法走 Router 既有 404/501 兼容路径。httpserver 导出
+  SendPlainError/NormalizePrefix 供组装层使用（路由错误表与
+  Python 前缀归一的单一事实源）。
+- 认证/E2E：页面与资产均在 Basic Auth 后（401 挑战逐字节），
+  /healthz 豁免；E2E 覆盖未认证 401、认证后三入口字节等于嵌入
+  资产、Content-Type/CSP/no-store/nosniff/Content-Length、未知
+  资产与编码拼写/穿越形态 404、HEAD 无 body、POST 资产 404、
+  CSP 无 unsafe-inline 且页内无内联 script（嵌入字节断言）；
+  进程级 TestServeServesWebPageAndAssets 用真实二进制复核。
+
+## B1302 全量对照
+
+日期：2026-09-06
+
+按 §14 B1302 执行；harness.Service 增加 Go 模式
+（CONTRACT_SERVICE_BINARY）：fake upstream 留在 harness 进程，经
+contract_tests/fake_relay.py 的 loopback relay 暴露；测试专用
+入口 go/internal/contractsrv 把 WPS 传输全部换成 relay 客户端
+（app.WithTransports 注入），配置/安全文件/存储路由/服务生命周
+期全部走生产路径——与 python_service.py 的补丁范围一一对应。
+结果写 contract_tests/results/go/；场景归一（epoch、随机
+lock token、os.urandom 摘要、reason phrase 只比状态码）。
+tools/compare_contract.py 双端运行 + 逐场景 diff + 分类表 + 
+results/comparison-report.json，未批准差异非零即退出 1。
+
+结果：119 场景 112 项逐字节一致；3 项批准修正（D-03 进程级预算
+502×4 vs 201×4、D-04 单次解码、D-07 控制字符拒绝）；1 项细纲规
+定（DEC-D09-A：B502 冷 miss 同键合并使"两次上游到达"前置不成立，
+D-09 门等价性由 TestSlotListenerClosesThirdConnection 固定）；
+3 项偏差待负责人追认：①HTTP-FRAMING-002——Go 传输层对值相同的
+重复 Content-Length 去重放行（值不同仍 400），镜像 Python 的
+逐次拒绝需原始连接字节扫描；②DAV-DELETE-001/REST-DELETE-001——
+Python 在 204 上发显式 Content-Length: 0，Go 传输层按 RFC 7230
+§3.3.2 一律剥离。未批准差异 = 0。
+
+对照过程中修复的实现缺陷（Go 侧）：contractsrv 缺 serve 前置
+检查（ParseServerRuntime/CheckPublicBind/ValidateRuntime）、relay
+nil Body panic、relay 404 分支不排空请求体导致 keep-alive 失步；
+组装层 SpoolLimiter 未接线（budget 先于 client 的根因，D-03 语
+义）；413 响应体应为 "request body is too large"（B602 曾按"空
+消息"假设实现，Python 3.14 基线为固定消息）；LOCK 响应根元素应
+为 <D:prop xmlns:D="DAV:">（ElementTree register_namespace 对根
+同样加前缀）；上传正文按声明长度限读且提前断开视为干净 EOF
+（_LimitedReader 镜像，短读落 400 "source size mismatch"）。
+测试骨架另暴露 app 组装对 t.TempDir 权限/内联凭据的适配与
+cmd 进程测试补强（check-config 组装路径、坏 workspace 失败、
+真实二进制资产服务）。
+
+## B1303 全量静态与并发检查
+
+日期：2026-09-06
+
+- gofmt -l 无差异；go vet ./... 通过；go test ./... 全绿；
+  go test -race ./... 全绿，wps/storage/httpserver -race
+  -count=2 全绿。
+- parser fuzz：06-testing-risk-gates.md 10.1 的解析器入口新增 7
+  个 fuzz 目标——路径/查询解码（SplitRequestTarget+unquotePercent
+  +parseQueryValues）、LOCK owner XML（含 DOCTYPE/ENTITY/控制字
+  笜/深嵌套种子）、Range、Basic Auth base64、Set-Cookie 合并、
+  workspace/settings JSON、multipart checkpoint JSON。每目标
+  30s 实机 fuzz（合计 3.5 分钟、约 2,000 万次执行）无崩溃无泄
+  漏；种子语料随 go test 常规运行回归。CI 定时 10 分钟/发布候选
+  30 分钟的长跑按 06-testing-risk-gates.md 留给所有者侧流水线。
+- Linux amd64/arm64 构建通过（负责人指示：目标平台 Linux，不再
+  产出 windows/darwin 构建）。
+- 二进制 smoke：cmd 进程测试（TestMain 构建真实二进制）覆盖启
+  动两行监听、/healthz 契约、SIGTERM/SIGINT 优雅停止退出 0、强
+  制关闭期限、端口冲突退出 1、公共 bind 拒绝、认证后页面/资产
+  服务；全部通过。
+- Python 参照套件 169 项、contract_tests 119 项全绿；manifest 按
+  门禁顺序重建。
+
+完成条件：Go 服务具备全部旧能力（REST/DAV 读写、上传、multipart、
+COPY、LOCK、多空间、session import、前端资源），尚未替换生产入口
+（阶段 14 部署、灰度与发布后按 08-executor-checklist.md 签字切换）。
+
+## R1400 Go 生产入口切换准备
+
+日期：2026-09-07
+
+本任务把 Go 服务接入长期运行的部署链路，保留 Python 代码仅作为参照和
+本地登录助手：
+
+- `deploy/wps-adapter.service` 的 `ExecStart` 改为
+  `/opt/wps-adapter/wps-adapter serve`，移除 `PYTHONPATH`。
+- `deploy/Dockerfile` 改为 Go 1.25 多阶段构建，最终镜像为 `scratch`，
+  只包含静态 Go 二进制和 CA 证书；Compose 和 Docker 安装器同步改用
+  `GO_BUILDER_IMAGE`。
+- Native 安装器不再安装或启动 Python，主机已有 Go 1.25+ 时复用，
+  否则下载固定版本 Go 工具链并校验架构 SHA-256，再构建 `CGO_ENABLED=0`
+  服务。Docker/Native 均保留原有凭据路径、端口参数、回滚和进度输出。
+- 安装器的 Go 版本解析修正为读取 `go version` 的工具链字段；32 位 ARM
+  的校验值按 `armv6l` 归档名选择。Native、Docker、卸载器只把 Go 服务
+  作为新的生产入口，便携模式仍能识别旧进程以便平滑升级。
+- Go 侧同步修复非法 Destination 端口、超长 LOCK Timeout、重复 workspace
+  group 写入以及 IPv6 方括号监听地址；这些修改不引入新的 WPS 接口。
+- README、部署说明和 Go 模块说明改为 Go 服务优先；安装命令暂时指向
+  `rewrite`，避免在 `main` 完成替换前下载旧 Python 安装器。
+
+必要门禁（本次工作树）：
+
+```text
+GOCACHE=/tmp/wps-go-cache-audit go test ./...   PASS
+GOCACHE=/tmp/wps-go-cache-audit go vet ./...   PASS
+CGO_ENABLED=0 go build -trimpath ./cmd/wps-adapter PASS
+bash -n scripts/install-native.sh scripts/install-docker.sh scripts/uninstall.sh PASS
+git diff --check PASS
+```
+
+发布清单需在本任务所有文档和源码变更完成后重新生成；安装器默认的
+`SOURCE_REF` 与 `SOURCE_MANIFEST_SHA256` 必须在发布提交后固定到同一份
+可验证归档。真实 WPS 目录、浏览器和 Native/Docker VPS 灰度仍由发布者
+执行，不能用 fake upstream 结果替代。

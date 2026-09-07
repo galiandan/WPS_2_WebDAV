@@ -1,0 +1,4 @@
+{
+  "body": "LOCK Depth must be 0 or infinity\n",
+  "status": 400
+}

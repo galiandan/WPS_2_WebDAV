@@ -1,0 +1,486 @@
+{
+  "scenarios": {
+    "DAV-COPY-001": {
+      "verdict": "identical"
+    },
+    "DAV-COPY-002": {
+      "verdict": "identical"
+    },
+    "DAV-COPY-003": {
+      "verdict": "identical"
+    },
+    "DAV-DELETE-001": {
+      "baseline": {
+        "body": "",
+        "content_length": "0",
+        "root_body": "the root cannot be deleted\n",
+        "root_status": 400,
+        "status": 204
+      },
+      "go": {
+        "body": "",
+        "content_length": null,
+        "root_body": "the root cannot be deleted\n",
+        "root_status": 400,
+        "status": 204
+      },
+      "rationale": "Python answers 204 with an explicit 'Content-Length: 0'; Go's runtime transport always strips Content-Length from 204 responses (RFC 7230 3.3.2 conformant). Semantically equivalent empty bodies; recorded for owner sign-off.",
+      "verdict": "deviation"
+    },
+    "DAV-GET-001": {
+      "verdict": "identical"
+    },
+    "DAV-GET-002": {
+      "verdict": "identical"
+    },
+    "DAV-GET-003": {
+      "verdict": "identical"
+    },
+    "DAV-HEAD-001": {
+      "verdict": "identical"
+    },
+    "DAV-HEAD-002": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-001": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-002": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-003": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-004": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-005": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-006": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-007": {
+      "verdict": "identical"
+    },
+    "DAV-LOCK-008": {
+      "verdict": "identical"
+    },
+    "DAV-MKCOL-001": {
+      "verdict": "identical"
+    },
+    "DAV-MOVE-001": {
+      "verdict": "identical"
+    },
+    "DAV-MOVE-002": {
+      "verdict": "identical"
+    },
+    "DAV-MOVE-003": {
+      "verdict": "identical"
+    },
+    "DAV-MOVE-004": {
+      "verdict": "identical"
+    },
+    "DAV-MOVE-005": {
+      "verdict": "identical"
+    },
+    "DAV-OPTIONS-001": {
+      "verdict": "identical"
+    },
+    "DAV-OPTIONS-002": {
+      "verdict": "identical"
+    },
+    "DAV-ORIGIN-001": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-001": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-002": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-003": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-004": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-005": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-006": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-007": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-008": {
+      "verdict": "identical"
+    },
+    "DAV-PROPFIND-009": {
+      "verdict": "identical"
+    },
+    "DAV-PUT-001": {
+      "verdict": "identical"
+    },
+    "DAV-PUT-002": {
+      "verdict": "identical"
+    },
+    "DEC-D01-A": {
+      "verdict": "identical"
+    },
+    "DEC-D01-B": {
+      "verdict": "identical"
+    },
+    "DEC-D02-A": {
+      "verdict": "identical"
+    },
+    "DEC-D03-A": {
+      "baseline": {
+        "request": "4 concurrent REST uploads across 2 mounted spaces (default WPS_MAX_UPLOADS=2)",
+        "statuses": [
+          201,
+          201,
+          201,
+          201
+        ],
+        "upstream_pre_check_arrivals": 4
+      },
+      "go": {
+        "request": "4 concurrent REST uploads across 2 mounted spaces (default WPS_MAX_UPLOADS=2)",
+        "statuses": [
+          502,
+          502,
+          502,
+          502
+        ],
+        "upstream_pre_check_arrivals": 4
+      },
+      "rationale": "D-03 ratified correction: one process-wide upload/download budget replaces the per-space slot multiplication, so 4 concurrent uploads across 2 spaces no longer pass simultaneously (the upstream barrier times out and the adapter maps the upstream 503 to 502).",
+      "verdict": "approved_change"
+    },
+    "DEC-D04-A": {
+      "baseline": {
+        "case_plus_a_b": {
+          "body": "{\"path\":\"/a b\",\"entry\":{\"id\":\"bench-dir-space\",\"name\":\"a b\",\"kind\":\"folder\",\"parent_id\":\"0\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":\"bench-etag-bench-dir-space\"}}",
+          "status": 200
+        },
+        "case_weird_percent_252f": {
+          "body": "{\"path\":\"/weird%252Fname.txt\",\"entry\":{\"id\":\"bench-file-weird\",\"name\":\"weird%2Fname.txt\",\"kind\":\"file\",\"parent_id\":\"0\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":\"bench-etag-bench-file-weird\"}}",
+          "status": 200
+        },
+        "case_weird_percent_2f": {
+          "body": "{\"error\":\"entry not found: weird\"}",
+          "status": 404
+        }
+      },
+      "go": {
+        "case_plus_a_b": {
+          "body": "{\"path\":\"/a b\",\"entry\":{\"id\":\"bench-dir-space\",\"name\":\"a b\",\"kind\":\"folder\",\"parent_id\":\"0\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":\"bench-etag-bench-dir-space\"}}",
+          "status": 200
+        },
+        "case_weird_percent_252f": {
+          "body": "{\"error\":\"entry not found: weird%252Fname.txt\"}",
+          "status": 404
+        },
+        "case_weird_percent_2f": {
+          "body": "{\"path\":\"/weird%2Fname.txt\",\"entry\":{\"id\":\"bench-file-weird\",\"name\":\"weird%2Fname.txt\",\"kind\":\"file\",\"parent_id\":\"0\",\"size\":11,\"modified_at\":\"1788268272\",\"etag\":\"bench-etag-bench-file-weird\"}}",
+          "status": 200
+        }
+      },
+      "rationale": "D-04 ratified correction: the business path is decoded exactly once, so '%252F' no longer collapses to '/' on a second decode and the literal '%2F' entry resolves.",
+      "verdict": "approved_change"
+    },
+    "DEC-D05-A": {
+      "verdict": "identical"
+    },
+    "DEC-D05-B": {
+      "verdict": "identical"
+    },
+    "DEC-D05-C": {
+      "verdict": "identical"
+    },
+    "DEC-D06-A": {
+      "verdict": "identical"
+    },
+    "DEC-D06-B": {
+      "verdict": "identical"
+    },
+    "DEC-D07-A": {
+      "baseline": {
+        "import_body": "{\"status\":\"ok\",\"cookie_count\":3,\"workspace\":\"updated\"}",
+        "import_status": 200,
+        "request": "POST /api/v1/session/import with mount name 'bench-a\\nb'",
+        "root_names_after_import": [
+          "bench-a\nb"
+        ]
+      },
+      "go": {
+        "import_body": "{\"error\":\"space.name is invalid\"}",
+        "import_status": 400,
+        "request": "POST /api/v1/session/import with mount name 'bench-a\\nb'",
+        "root_names_after_import": null
+      },
+      "rationale": "D-07 ratified tightening: workspace mount names with control characters are rejected with 400 instead of being accepted.",
+      "verdict": "approved_change"
+    },
+    "DEC-D08-A": {
+      "verdict": "identical"
+    },
+    "DEC-D09-A": {
+      "baseline": {
+        "held_request_statuses": [
+          200,
+          200
+        ],
+        "probe_received": "b''",
+        "request": "third TCP connection while max_connections=2 requests are held"
+      },
+      "go": {
+        "held_request_statuses": [
+          200,
+          200
+        ],
+        "probe_received": "b'HTTP/1.1 200 OK\\r\\nCache-Control: no-store\\r\\nContent-Length: 96\\r\\nContent-Type: application/json; charset=utf-8\\r\\nDate: Sun, 06 Sep 2026 13:16:02 GMT\\r\\n\\r\\n{\"status\":\"ok\",\"service\":\"wps-enterprise-adapter\",\"version\":\"0.9.8\",\"network_calls\":\"on-demand\"}'",
+        "request": "third TCP connection while max_connections=2 requests are held"
+      },
+      "rationale": "The D-09 accept gate itself is equivalent (proven by go/internal/httpserver TestSlotListenerClosesThirdConnection: a third connection with both slots held is closed without a response). The scenario's precondition 'two upstream arrivals' never holds because plan section B502 requires cold-miss same-key merging, which collapses the two concurrent listings into one upstream call.",
+      "verdict": "plan_specified"
+    },
+    "HTTP-AUTH-003": {
+      "verdict": "identical"
+    },
+    "HTTP-AUTH-004": {
+      "verdict": "identical"
+    },
+    "HTTP-AUTH-005": {
+      "verdict": "identical"
+    },
+    "HTTP-AUTH-006": {
+      "verdict": "identical"
+    },
+    "HTTP-AUTH-007": {
+      "verdict": "identical"
+    },
+    "HTTP-AUTH-008": {
+      "verdict": "identical"
+    },
+    "HTTP-AUTH-009": {
+      "verdict": "identical"
+    },
+    "HTTP-AUTH-010": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-001": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-002": {
+      "baseline": {
+        "body": "multiple Content-Length headers are not supported\n",
+        "status_line": "HTTP/1.1 400 Bad Request"
+      },
+      "go": {
+        "body": "{\"status\":\"ok\",\"service\":\"wps-enterprise-adapter\",\"version\":\"0.9.8\",\"network_calls\":\"on-demand\"}",
+        "status_line": "HTTP/1.1 200 OK"
+      },
+      "rationale": "Python rejects every duplicate Content-Length header; Go's runtime transport dedups value-identical duplicates and only rejects differing ones (400) before any handler runs. Mirroring Python's rejection would require scanning raw connection bytes; recorded for owner sign-off.",
+      "verdict": "deviation"
+    },
+    "HTTP-FRAMING-003": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-004": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-005": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-006": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-011": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-012": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-013": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-014": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-015": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-016": {
+      "verdict": "identical"
+    },
+    "HTTP-FRAMING-017": {
+      "verdict": "identical"
+    },
+    "HTTP-HEALTH-001": {
+      "verdict": "identical"
+    },
+    "HTTP-HEALTH-002": {
+      "verdict": "identical"
+    },
+    "REST-DELETE-001": {
+      "baseline": {
+        "body": "",
+        "content_length": "0",
+        "status": 204
+      },
+      "go": {
+        "body": "",
+        "content_length": null,
+        "status": 204
+      },
+      "rationale": "Same 204 Content-Length asymmetry as DAV-DELETE-001.",
+      "verdict": "deviation"
+    },
+    "REST-DELETE-002": {
+      "verdict": "identical"
+    },
+    "REST-DELETE-003": {
+      "verdict": "identical"
+    },
+    "REST-DOWNLOAD-001": {
+      "verdict": "identical"
+    },
+    "REST-ERROR-001": {
+      "verdict": "identical"
+    },
+    "REST-ERROR-002": {
+      "verdict": "identical"
+    },
+    "REST-FOLDER-001": {
+      "verdict": "identical"
+    },
+    "REST-FOLDER-002": {
+      "verdict": "identical"
+    },
+    "REST-LIST-001": {
+      "verdict": "identical"
+    },
+    "REST-LIST-002": {
+      "verdict": "identical"
+    },
+    "REST-LIST-003": {
+      "verdict": "identical"
+    },
+    "REST-LIST-004": {
+      "verdict": "identical"
+    },
+    "REST-LIST-005": {
+      "verdict": "identical"
+    },
+    "REST-LIST-006": {
+      "verdict": "identical"
+    },
+    "REST-LIST-007": {
+      "verdict": "identical"
+    },
+    "REST-LIST-008": {
+      "verdict": "identical"
+    },
+    "REST-LIST-009": {
+      "verdict": "identical"
+    },
+    "REST-LIST-010": {
+      "verdict": "identical"
+    },
+    "REST-META-001": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-001": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-002": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-003": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-004": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-005": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-006": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-007": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-008": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-009": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-010": {
+      "verdict": "identical"
+    },
+    "REST-PATCH-011": {
+      "verdict": "identical"
+    },
+    "REST-SETTINGS-001": {
+      "verdict": "identical"
+    },
+    "REST-SETTINGS-002": {
+      "verdict": "identical"
+    },
+    "REST-SETTINGS-003": {
+      "verdict": "identical"
+    },
+    "REST-SETTINGS-004": {
+      "verdict": "identical"
+    },
+    "REST-SETTINGS-005": {
+      "verdict": "identical"
+    },
+    "REST-STATUS-001": {
+      "verdict": "identical"
+    },
+    "REST-UPLOAD-001": {
+      "verdict": "identical"
+    },
+    "REST-UPLOAD-002": {
+      "verdict": "identical"
+    },
+    "REST-UPLOAD-003": {
+      "verdict": "identical"
+    },
+    "WPS-FIXTURE-001": {
+      "verdict": "identical"
+    },
+    "WPS-FIXTURE-002": {
+      "verdict": "identical"
+    },
+    "WPS-FIXTURE-003": {
+      "verdict": "identical"
+    },
+    "WPS-FIXTURE-004": {
+      "verdict": "identical"
+    },
+    "WPS-FIXTURE-005": {
+      "verdict": "identical"
+    },
+    "WPS-FIXTURE-006": {
+      "verdict": "identical"
+    },
+    "WPS-FIXTURE-007": {
+      "verdict": "identical"
+    }
+  },
+  "summary": {
+    "approved_change": 3,
+    "deviation": 3,
+    "identical": 112,
+    "missing_go": 0,
+    "plan_specified": 1,
+    "unapproved": 0
+  }
+}

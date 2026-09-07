@@ -1,0 +1,8 @@
+{
+  "garbage_body": "Timeout must be Second-N or Infinite\n",
+  "garbage_status": 400,
+  "huge_status": 200,
+  "huge_timeout": 86399,
+  "infinite_status": 200,
+  "infinite_timeout": 86399
+}

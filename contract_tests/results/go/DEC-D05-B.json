@@ -1,0 +1,4 @@
+{
+  "status_with_credentials": 200,
+  "status_without_credentials": 401
+}

@@ -1,0 +1,8 @@
+{
+  "lock_status": 200,
+  "put_after_unlock": 201,
+  "unlock_missing_header": 400,
+  "unlock_ok": 204,
+  "unlock_wrong_body": "lock token is invalid\n",
+  "unlock_wrong_token": 409
+}

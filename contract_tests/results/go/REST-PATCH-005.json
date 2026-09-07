@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\":\"choose either a new name or a move destination\"}",
+  "status": 400
+}

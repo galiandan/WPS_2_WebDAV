@@ -1,0 +1,9 @@
+{
+  "body": {
+    "network_calls": "on-demand",
+    "service": "wps-enterprise-adapter",
+    "status": "ok",
+    "version": "0.9.8"
+  },
+  "status": 200
+}
