@@ -18,9 +18,12 @@ after this one-time bootstrap.
 
 from __future__ import annotations
 
+import argparse
 import base64
+import getpass
 import ipaddress
 import json
+import math
 import os
 import posixpath
 import re
@@ -33,14 +36,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from http.client import HTTPConnection, HTTPSConnection
+from dataclasses import dataclass, field
+from http.client import HTTPConnection, HTTPSConnection, HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
-from dataclasses import field
 
 @dataclass(frozen=True, slots=True)
 class WpsCredentials:
@@ -57,8 +59,21 @@ DEFAULT_REMOTE_COOKIE_PATH = "/etc/wps-adapter/secrets/wps-cookie"
 DEFAULT_REMOTE_CSRF_PATH = "/etc/wps-adapter/secrets/wps-csrf"
 DEFAULT_REMOTE_WORKSPACE_PATH = "/etc/wps-adapter/secrets/wps-workspace.json"
 REMOTE_SECRET_DIR = "/etc/wps-adapter/secrets"
+DEFAULT_ADAPTER_PORT = 54321
+DEFAULT_SSH_PORT = 22
+MAX_WORKSPACE_SPACES = 128
+MAX_WORKSPACE_NAME_LENGTH = 4096
 MAX_COOKIE_SNAPSHOT_BYTES = 4 * 1024 * 1024
 MAX_ADAPTER_RESPONSE_BYTES = 1 * 1024 * 1024
+
+
+def _is_positive_timeout(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value)) and value > 0
+    except (OverflowError, ValueError):
+        return False
 
 
 class LoginError(RuntimeError):
@@ -92,27 +107,58 @@ _SPACE_PATH_PATTERN = re.compile(
 
 
 def _workspace_id(value: str, *, field_name: str) -> str:
-    if not _WORKSPACE_ID_PATTERN.fullmatch(value):
+    if not isinstance(value, str) or not _WORKSPACE_ID_PATTERN.fullmatch(value):
         raise LoginError(f"WPS {field_name} 格式不正确")
+    return value
+
+
+def _workspace_name(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+    ):
+        raise LoginError("WPS 空间名称格式不正确")
+    try:
+        if len(value.encode("utf-8")) > MAX_WORKSPACE_NAME_LENGTH:
+            raise LoginError("WPS 空间名称过长")
+    except UnicodeEncodeError as exc:
+        raise LoginError("WPS 空间名称格式不正确") from exc
     return value
 
 
 def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, object]:
     if not isinstance(selection, WpsWorkspaceSelection):
         raise LoginError("WPS 工作区信息无效")
+    tenant_id = _workspace_id(selection.tenant_id, field_name="企业 ID")
     payload: dict[str, object] = {
         "group_id": _workspace_id(selection.group_id, field_name="群组 ID"),
         "root_id": _workspace_id(selection.root_id, field_name="目录 ID"),
     }
     if selection.spaces:
-        payload["spaces"] = [
-            {
-                "group_id": _workspace_id(item.group_id, field_name="群组 ID"),
-                "root_id": "0",
-                "name": item.name,
-            }
-            for item in selection.spaces
-        ]
+        if len(selection.spaces) > MAX_WORKSPACE_SPACES:
+            raise LoginError("选择的 WPS 空间过多，请减少选择数量")
+        seen_groups: set[str] = set()
+        seen_names: set[str] = set()
+        spaces: list[dict[str, str]] = []
+        for item in selection.spaces:
+            if not isinstance(item, WpsWorkspaceCandidate):
+                raise LoginError("WPS 空间选择无效")
+            if item.tenant_id != tenant_id:
+                raise LoginError("WPS 空间不属于当前企业")
+            group_id = _workspace_id(item.group_id, field_name="群组 ID")
+            name = _workspace_name(item.name)
+            if group_id in seen_groups:
+                raise LoginError("选择的 WPS 空间重复")
+            if name in seen_names:
+                raise LoginError("选择的 WPS 空间名称重复，请只选择其中一个")
+            seen_groups.add(group_id)
+            seen_names.add(name)
+            spaces.append({"group_id": group_id, "root_id": "0", "name": name})
+        payload["spaces"] = spaces
     return payload
 
 
@@ -387,7 +433,13 @@ def validate_secret_path(path):
     relative = path[len(SECRET_DIR) + 1:]
     if not relative or "/" in relative or relative in {".", ".."}:
         raise ValueError("credential path must be a direct secret file")
-    if not all("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in "._-" for char in relative):
+    if not all(
+        "A" <= char <= "Z"
+        or "a" <= char <= "z"
+        or "0" <= char <= "9"
+        or char in "._-"
+        for char in relative
+    ):
         raise ValueError("credential path contains an invalid file name")
     if os.path.normpath(path) != path or os.path.realpath(SECRET_DIR) != SECRET_DIR:
         raise ValueError("credential path must not use symlinks or traversal")
@@ -402,9 +454,64 @@ def validate_secret_path(path):
 def validate_workspace_id(value):
     if not isinstance(value, str) or not value or len(value) > 256:
         raise ValueError("invalid workspace identifier")
-    if not all("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in ".-_" for char in value):
+    if not all(
+        "A" <= char <= "Z"
+        or "a" <= char <= "z"
+        or "0" <= char <= "9"
+        or char in ".-_"
+        for char in value
+    ):
         raise ValueError("invalid workspace identifier")
     return value
+
+def validate_workspace_name(value):
+    if not isinstance(value, str) or not value or value in {".", ".."}:
+        raise ValueError("invalid workspace name")
+    if "/" in value or "\\" in value:
+        raise ValueError("invalid workspace name")
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in value):
+        raise ValueError("invalid workspace name")
+    try:
+        if len(value.encode("utf-8")) > 4096:
+            raise ValueError("invalid workspace name")
+    except UnicodeEncodeError as exc:
+        raise ValueError("invalid workspace name") from exc
+    return value
+
+def validate_workspace_payload(value):
+    if not isinstance(value, dict):
+        raise ValueError("invalid workspace payload")
+    group_id = validate_workspace_id(value.get("group_id"))
+    root_id = validate_workspace_id(value.get("root_id"))
+    normalized = {"group_id": group_id, "root_id": root_id}
+    raw_spaces = value.get("spaces")
+    if raw_spaces is not None:
+        if not isinstance(raw_spaces, list) or not raw_spaces or len(raw_spaces) > 128:
+            raise ValueError("invalid workspace spaces")
+        spaces = []
+        seen_groups = set()
+        seen_names = set()
+        for raw_space in raw_spaces:
+            if not isinstance(raw_space, dict):
+                raise ValueError("invalid workspace space")
+            space_group = validate_workspace_id(raw_space.get("group_id"))
+            space_root = validate_workspace_id(raw_space.get("root_id", "0"))
+            space_name = validate_workspace_name(raw_space.get("name"))
+            if space_group in seen_groups:
+                raise ValueError("duplicate workspace groups")
+            if space_name in seen_names:
+                raise ValueError("duplicate workspace names")
+            seen_groups.add(space_group)
+            seen_names.add(space_name)
+            spaces.append(
+                {
+                    "group_id": space_group,
+                    "root_id": space_root,
+                    "name": space_name,
+                }
+            )
+        normalized["spaces"] = spaces
+    return normalized
 
 def atomic_write(path, value):
     target = validate_secret_path(path)
@@ -417,7 +524,11 @@ def atomic_write(path, value):
             raise ValueError("credential target must be a regular file")
     except FileNotFoundError:
         pass
-    fd, temporary = tempfile.mkstemp(prefix="." + os.path.basename(target) + ".", dir=directory, text=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix="." + os.path.basename(target) + ".",
+        dir=directory,
+        text=True,
+    )
     try:
         os.fchmod(fd, 0o600)
         if previous_stat is not None and hasattr(os, "fchown"):
@@ -453,19 +564,18 @@ if cookie_path == csrf_path:
     raise ValueError("credential paths must be different")
 if any(any(ord(char) < 0x20 or ord(char) == 0x7f for char in item) for item in (cookie, csrf)):
     raise ValueError("invalid credential value")
-atomic_write(cookie_path, cookie)
-atomic_write(csrf_path, csrf)
 workspace_path = data.get("workspace_path")
 workspace = data.get("workspace")
+workspace_payload = None
 if workspace_path is not None or workspace is not None:
     workspace_path = validate_secret_path(workspace_path)
-    if not isinstance(workspace, dict):
-        raise ValueError("invalid workspace payload")
-    group_id = validate_workspace_id(workspace.get("group_id"))
-    root_id = validate_workspace_id(workspace.get("root_id"))
+    workspace_payload = validate_workspace_payload(workspace)
+atomic_write(cookie_path, cookie)
+atomic_write(csrf_path, csrf)
+if workspace_payload is not None:
     atomic_write(
         workspace_path,
-        json.dumps({"group_id": group_id, "root_id": root_id}, ensure_ascii=True, separators=(",", ":")),
+        json.dumps(workspace_payload, ensure_ascii=True, separators=(",", ":")),
     )
 print("credentials-updated")
 '''
@@ -497,7 +607,7 @@ def push_credentials_over_ssh(
     workspace: WpsWorkspaceSelection | None = None,
     workspace_path: str = DEFAULT_REMOTE_WORKSPACE_PATH,
     identity_file: str | None = None,
-    port: int = 22,
+    port: int = DEFAULT_SSH_PORT,
     password_auth: bool = False,
     timeout: float = 30.0,
 ) -> None:
@@ -509,7 +619,7 @@ def push_credentials_over_ssh(
         raise LoginError("SSH 目标不能包含空格")
     if not 1 <= port <= 65535:
         raise LoginError("SSH 端口必须在 1 到 65535 之间")
-    if timeout <= 0:
+    if not _is_positive_timeout(timeout):
         raise LoginError("SSH 超时时间必须为正数")
     _validate_remote_secret_path(cookie_path, label="凭据")
     _validate_remote_secret_path(csrf_path, label="凭据")
@@ -549,7 +659,7 @@ def push_credentials_over_ssh(
                 "PreferredAuthentications=password,keyboard-interactive",
             ]
         )
-    if port != 22:
+    if port != DEFAULT_SSH_PORT:
         command.extend(["-p", str(port)])
     command.extend(["--", ssh_target, remote_command])
     try:
@@ -638,12 +748,17 @@ def _cookie_payload(cookies: Sequence[Mapping[str, object]]) -> list[dict[str, s
             continue
         name = raw_cookie.get("name")
         value = raw_cookie.get("value")
-        if not isinstance(name, str) or not isinstance(value, str):
+        if (
+            not isinstance(name, str)
+            or not isinstance(value, str)
+            or not _safe_cookie_part(name, name=True)
+            or not _safe_cookie_part(value)
+        ):
             continue
         item = {"name": name, "value": value}
         for field_name in ("domain", "path"):
             field_value = raw_cookie.get(field_name)
-            if isinstance(field_value, str):
+            if isinstance(field_value, str) and _safe_cookie_part(field_value):
                 item[field_name] = field_value
         payload.append(item)
     if not payload:
@@ -705,7 +820,7 @@ def push_credentials_over_https(
         allow_insecure_http=allow_insecure_http,
     )
     _validate_adapter_auth(username, password)
-    if timeout <= 0:
+    if not _is_positive_timeout(timeout):
         raise LoginError("适配器同步超时时间必须为正数")
     if not credentials.cookie or not credentials.csrf_token:
         raise LoginError("WPS 登录凭据不完整")
@@ -720,7 +835,7 @@ def push_credentials_over_https(
         )
     try:
         connection = connection_factory(host, port, timeout)
-    except (OSError, TypeError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         raise LoginError("无法连接适配器") from exc
     response_status: int | None = None
     try:
@@ -739,7 +854,7 @@ def push_credentials_over_https(
             response = connection.getresponse()  # type: ignore[attr-defined]
             response_status = getattr(response, "status", None)
             _read_limited_http_response(response, max_bytes=MAX_ADAPTER_RESPONSE_BYTES)
-        except (OSError, TimeoutError) as exc:
+        except (HTTPException, OSError, TimeoutError, ValueError) as exc:
             raise LoginError("适配器同步凭据失败，请检查地址和网络") from exc
     finally:
         try:
@@ -928,10 +1043,16 @@ def find_browser(explicit: str | None = None) -> str:
     """Find a locally installed Chrome/Chromium executable."""
 
     if explicit:
-        return explicit
+        candidate = shutil.which(explicit) or explicit
+        if not Path(candidate).is_file() or not os.access(candidate, os.X_OK):
+            raise LoginError(f"找不到指定的 Chrome/Chromium：{explicit}")
+        return candidate
     configured = os.environ.get("WPS_BROWSER", "").strip()
     if configured:
-        return configured
+        candidate = shutil.which(configured) or configured
+        if not Path(candidate).is_file() or not os.access(candidate, os.X_OK):
+            raise LoginError(f"找不到 WPS_BROWSER 指定的 Chrome/Chromium：{configured}")
+        return candidate
     candidates = [
         "google-chrome-stable",
         "google-chrome",
@@ -966,7 +1087,10 @@ def _cdp_page_url(port: int, *, timeout: float) -> str:
     while time.monotonic() < deadline:
         try:
             request = Request(f"http://127.0.0.1:{port}/json/list")
-            with opener.open(request, timeout=min(2.0, max(0.1, deadline - time.monotonic()))) as response:
+            with opener.open(
+                request,
+                timeout=min(2.0, max(0.1, deadline - time.monotonic())),
+            ) as response:
                 payload = json.loads(
                     _read_limited_http_response(
                         response,
@@ -1001,7 +1125,7 @@ class ChromeLoginSession:
 
     def __enter__(self) -> "ChromeLoginSession":
         _host_from_url(self.login_url)
-        if self.startup_timeout <= 0:
+        if not _is_positive_timeout(self.startup_timeout):
             raise LoginError("Chrome 启动超时时间必须为正数")
         browser = find_browser(self.browser)
         # Chrome can keep cache files briefly after its process exits. Python
@@ -1039,6 +1163,8 @@ class ChromeLoginSession:
     def cookies(self) -> list[Mapping[str, object]]:
         if self._connection is None:
             raise LoginError("Chrome 登录会话未启动")
+        if self._process is not None and self._process.poll() is not None:
+            raise LoginError("Chrome 登录窗口已关闭，请重新运行登录助手")
         result = self._connection.call("Network.getAllCookies")
         cookies = result.get("cookies")
         if not isinstance(cookies, list):
@@ -1050,6 +1176,8 @@ class ChromeLoginSession:
 
         if self._connection is None:
             raise LoginError("Chrome 登录会话未启动")
+        if self._process is not None and self._process.poll() is not None:
+            raise LoginError("Chrome 登录窗口已关闭，请重新运行登录助手")
         result = self._connection.call(
             "Runtime.evaluate",
             {
@@ -1091,7 +1219,7 @@ class ChromeLoginSession:
         if profile is not None:
             try:
                 profile.cleanup()
-            except OSError:
+            except (OSError, RuntimeError):
                 # A Chrome cache child can still hold a file briefly. The
                 # profile is isolated and disposable, so cleanup must not
                 # turn a successful credential sync into a login failure.
@@ -1110,7 +1238,7 @@ def wait_for_login_credentials(
 ) -> tuple[WpsCredentials, tuple[str, ...], list[Mapping[str, object]]]:
     """Poll the isolated browser until the WPS refresh session is available."""
 
-    if timeout <= 0:
+    if not _is_positive_timeout(timeout):
         raise LoginError("登录等待时间必须为正数")
     deadline = time.monotonic() + timeout
     last_error: LoginError | None = None
@@ -1154,7 +1282,7 @@ def wait_for_login_snapshot(
 ]:
     """Wait for credentials and either the WPS root or an explicit folder."""
 
-    if timeout <= 0:
+    if not _is_positive_timeout(timeout):
         raise LoginError("登录等待时间必须为正数")
     login_host = _host_from_url(login_url)
     expected_workspace: WpsWorkspaceSelection | None = None
@@ -1235,7 +1363,7 @@ def discover_workspaces(
     if not isinstance(credentials, WpsCredentials) or not credentials.cookie:
         raise LoginError("WPS 登录凭据不完整，无法发现工作区")
     tenant_id = _workspace_id(tenant_id, field_name="企业 ID")
-    if timeout <= 0:
+    if not _is_positive_timeout(timeout):
         raise LoginError("工作区发现超时时间必须为正数")
     host = _host_from_url(base_url)
     url = urlunsplit(
@@ -1292,16 +1420,20 @@ def discover_workspaces(
         if not isinstance(raw_item, Mapping):
             continue
         raw_group_id = _workspace_candidate_value(raw_item, ("group_id", "groupid", "id"))
-        raw_name = _workspace_candidate_value(raw_item, ("name", "group_name", "groupname", "title"))
+        raw_name = _workspace_candidate_value(
+            raw_item,
+            ("name", "group_name", "groupname", "title"),
+        )
         if isinstance(raw_group_id, bool) or raw_group_id is None:
             continue
         group_id = str(raw_group_id)
-        name = str(raw_name).strip() if raw_name is not None else ""
+        if not isinstance(raw_name, str):
+            continue
+        name = raw_name
         try:
             group_id = _workspace_id(group_id, field_name="群组 ID")
+            name = _workspace_name(name)
         except LoginError:
-            continue
-        if not name or len(name) > 256 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in name):
             continue
         if group_id in seen:
             continue
@@ -1330,7 +1462,7 @@ def verify_workspace_access(
         raise LoginError("WPS 登录凭据不完整，无法验证工作区")
     if not isinstance(workspace, WpsWorkspaceSelection):
         raise LoginError("WPS 工作区信息无效，无法验证访问权限")
-    if timeout <= 0:
+    if not _is_positive_timeout(timeout):
         raise LoginError("工作区验证超时时间必须为正数")
     host = _host_from_url(base_url)
     group_id = _workspace_id(workspace.group_id, field_name="群组 ID")
@@ -1404,7 +1536,7 @@ def login_and_sync(
     ssh_csrf_path: str = DEFAULT_REMOTE_CSRF_PATH,
     ssh_workspace_path: str = DEFAULT_REMOTE_WORKSPACE_PATH,
     ssh_identity: str | None = None,
-    ssh_port: int = 22,
+    ssh_port: int = DEFAULT_SSH_PORT,
     ssh_password_auth: bool = False,
     output_dir: str | None = None,
     ssh_timeout: float = 30.0,
@@ -1421,7 +1553,7 @@ def login_and_sync(
     target_count = sum(bool(target) for target in (ssh_target, output_dir, adapter_url))
     if target_count != 1:
         raise LoginError("请在 --adapter-url、--ssh-target 和 --output-dir 中选择一个同步目标")
-    if wait_timeout <= 0:
+    if not _is_positive_timeout(wait_timeout):
         raise LoginError("登录等待时间必须为正数")
     if output_dir is not None and not Path(output_dir).is_absolute():
         raise LoginError("本地凭据目录必须是绝对路径")
@@ -1441,7 +1573,7 @@ def login_and_sync(
             allow_insecure_http=allow_insecure_http,
         )
         _validate_adapter_auth(adapter_user, adapter_password or "")
-        if adapter_timeout <= 0:
+        if not _is_positive_timeout(adapter_timeout):
             raise LoginError("适配器同步超时时间必须为正数")
     discovered_workspaces: tuple[WpsWorkspaceCandidate, ...] = ()
     with ChromeLoginSession(login_url=browser_url, browser=browser) as session:
@@ -1465,7 +1597,11 @@ def login_and_sync(
                     timeout=wait_timeout,
                 )
                 page_workspace = workspace_root_from_page_url(session.current_url())
-                tenant_id = page_workspace.tenant_id if page_workspace is not None else _cookie_value(selected_cookies, "cid")
+                tenant_id = (
+                    page_workspace.tenant_id
+                    if page_workspace is not None
+                    else _cookie_value(selected_cookies, "cid")
+                )
                 if not tenant_id:
                     raise LoginError("无法识别 WPS 企业空间，请确认已登录 WPS 企业云盘")
                 workspace = page_workspace or WpsWorkspaceSelection(tenant_id, "", "0")
@@ -1495,16 +1631,19 @@ def login_and_sync(
                 raise LoginError(f"无法获取当前账号的 WPS 空间名称：{exc}；未同步新凭据") from exc
             if not discovered_workspaces:
                 raise LoginError("WPS 没有返回可用空间名称；未同步新凭据")
+    print("已关闭临时 WPS 窗口。", flush=True)
     if workspace_url is None and discovered_workspaces:
-        selected = discovered_workspaces[0] if workspace_selector is None else workspace_selector(discovered_workspaces)
-        if isinstance(selected, WpsWorkspaceCandidate):
-            selected_candidates = (selected,)
-        elif isinstance(selected, Sequence) and not isinstance(selected, (str, bytes)):
-            selected_candidates = tuple(selected)
-        else:
-            raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
-        if not selected_candidates or any(not isinstance(item, WpsWorkspaceCandidate) for item in selected_candidates):
-            raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+        selected = (
+            discovered_workspaces[0]
+            if workspace_selector is None
+            else workspace_selector(discovered_workspaces)
+        )
+        selected_candidates = _normalize_selected_workspaces(
+            selected,
+            discovered_workspaces,
+        )
+        selected_names = "、".join(item.name for item in selected_candidates)
+        print(f"已选择 WPS 空间：{selected_names}", flush=True)
         selected_candidate = selected_candidates[0]
         workspace = WpsWorkspaceSelection(
             tenant_id=selected_candidate.tenant_id,
@@ -1522,7 +1661,12 @@ def login_and_sync(
                 timeout=adapter_timeout,
             )
     else:
-        verify_workspace_access(credentials, workspace, base_url=browser_url, timeout=adapter_timeout)
+        verify_workspace_access(
+            credentials,
+            workspace,
+            base_url=browser_url,
+            timeout=adapter_timeout,
+        )
     print("工作区验证成功，准备同步凭据。", flush=True)
     if ssh_target:
         push_credentials_over_ssh(
@@ -1558,18 +1702,27 @@ def login_and_sync(
     return names
 
 
-"""Command-line interface shared by the package and standalone login helper."""
+# Command-line interface for the standalone login helper.
 
-import argparse
-import getpass
-import os
-import sys
-from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
 
-def _env_int(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    return default if value is None else int(value)
+def _port_value(value: str) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("端口必须是数字") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("端口必须在 1 到 65535 之间")
+    return port
+
+
+def _positive_float_value(value: str) -> float:
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("超时时间必须是数字") from exc
+    if not _is_positive_timeout(timeout):
+        raise argparse.ArgumentTypeError("超时时间必须大于 0")
+    return timeout
 
 
 def add_login_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1583,7 +1736,7 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--browser", default=None, help="local Chrome/Chromium executable")
     parser.add_argument("--domain-suffix", default=DEFAULT_COOKIE_DOMAIN_SUFFIX)
-    parser.add_argument("--wait-timeout", type=float, default=300.0)
+    parser.add_argument("--wait-timeout", type=_positive_float_value, default=300.0)
     parser.add_argument(
         "--adapter-url",
         default=os.environ.get("WPS_ADAPTER_URL", ""),
@@ -1596,7 +1749,7 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--adapter-port",
-        type=int,
+        type=_port_value,
         default=None,
         help="adapter port; use with --adapter-url when it has no port",
     )
@@ -1605,14 +1758,18 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="allow sending the WPS session to a remote adapter over HTTP",
     )
-    parser.add_argument("--adapter-timeout", type=float, default=30.0)
+    parser.add_argument("--adapter-timeout", type=_positive_float_value, default=30.0)
     parser.add_argument(
         "--ssh-target",
         default=os.environ.get("WPS_ADAPTER_SSH_TARGET", ""),
         help="remote SSH target, for example root@203.0.113.10",
     )
     parser.add_argument("--ssh-identity", default=None)
-    parser.add_argument("--ssh-port", type=int, default=_env_int("WPS_ADAPTER_SSH_PORT", 22))
+    parser.add_argument(
+        "--ssh-port",
+        type=_port_value,
+        default=os.environ.get("WPS_ADAPTER_SSH_PORT", str(DEFAULT_SSH_PORT)),
+    )
     parser.add_argument(
         "--ssh-password-auth",
         action="store_true",
@@ -1621,7 +1778,7 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ssh-cookie-path", default=DEFAULT_REMOTE_COOKIE_PATH)
     parser.add_argument("--ssh-csrf-path", default=DEFAULT_REMOTE_CSRF_PATH)
     parser.add_argument("--ssh-workspace-path", default=DEFAULT_REMOTE_WORKSPACE_PATH)
-    parser.add_argument("--ssh-timeout", type=float, default=30.0)
+    parser.add_argument("--ssh-timeout", type=_positive_float_value, default=30.0)
     parser.add_argument(
         "--output-dir",
         default=None,
@@ -1636,7 +1793,7 @@ class _LoginTarget:
     adapter_user: str = ""
     ssh_target: str = ""
     ssh_identity: str | None = None
-    ssh_port: int = 22
+    ssh_port: int = DEFAULT_SSH_PORT
     ssh_password_auth: bool = False
 
 
@@ -1644,20 +1801,39 @@ def _prompt_port(label: str, default: int) -> int:
     while True:
         value = input(f"{label} [{default}]: ").strip() or str(default)
         try:
-            port = int(value)
-        except ValueError:
-            print("端口必须是数字，请重新输入。")
+            return _port_value(value)
+        except argparse.ArgumentTypeError as exc:
+            print(f"{exc}，请重新输入。")
             continue
-        if 1 <= port <= 65535:
-            return port
-        print("端口必须在 1 到 65535 之间，请重新输入。")
+
+
+def _validate_host_input(value: str) -> str:
+    host = value.strip()
+    if not host or any(char.isspace() for char in host):
+        raise LoginError("VPS 地址不能为空且不能包含空格")
+    if any(char in host for char in "/?#@"):
+        raise LoginError("VPS 地址只填写 IP 或域名，不要包含协议、端口或路径")
+    if host.startswith("[") or host.endswith("]"):
+        if not (host.startswith("[") and host.endswith("]")):
+            raise LoginError("IPv6 地址请使用完整的 [地址] 格式")
+        host = host[1:-1]
+    if not host:
+        raise LoginError("VPS 地址不能为空")
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    if ":" in host or len(host) > 253 or not re.fullmatch(
+        r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", host
+    ):
+        raise LoginError("VPS 地址格式不正确，请填写 IP 或域名")
+    return host
 
 
 def _prompt_login_target() -> _LoginTarget:
     print("提示：[] 里面的是默认选项，直接按回车即可使用。")
-    host = input("VPS 地址/IP或域名: ").strip()
-    if not host or any(char.isspace() for char in host):
-        raise LoginError("VPS 地址不能为空且不能包含空格")
+    host = _validate_host_input(input("VPS 地址/IP或域名: "))
     print("选择连接方式：")
     print("  1) SSH 私钥")
     print("  2) SSH 密码")
@@ -1672,7 +1848,7 @@ def _prompt_login_target() -> _LoginTarget:
         user = input("SSH 用户名 [root]: ").strip() or "root"
         if not user or any(char.isspace() or char in "@/\\" for char in user):
             raise LoginError("SSH 用户名格式不正确")
-        port = _prompt_port("SSH 端口", 22)
+        port = _prompt_port("SSH 端口", DEFAULT_SSH_PORT)
         if choice == "2":
             print("WPS 登录完成后，系统 ssh 会在传输凭据时询问 SSH 密码。")
             return _LoginTarget(
@@ -1691,7 +1867,7 @@ def _prompt_login_target() -> _LoginTarget:
     host_for_url = host
     if ":" in host and not host.startswith("["):
         host_for_url = f"[{host}]"
-    adapter_port = _prompt_port("适配器端口", 54321)
+    adapter_port = _prompt_port("适配器端口", DEFAULT_ADAPTER_PORT)
     default_url = f"http://{host_for_url}:{adapter_port}"
     entered_url = input(f"适配器 HTTP/HTTPS 地址 [{default_url}]: ").strip()
     adapter_url = entered_url or default_url
@@ -1728,28 +1904,9 @@ def _apply_adapter_port(adapter_url: str, port: int | None) -> str:
     return urlunsplit((parts.scheme, f"{netloc}:{port}", parts.path, parts.query, parts.fragment))
 
 
-def _select_workspace(candidates: tuple[WpsWorkspaceCandidate, ...]) -> WpsWorkspaceCandidate:
-    """Let a normal user choose a space by its name, never by its ID."""
-
-    if len(candidates) == 1:
-        print(f"已找到 WPS 空间：{candidates[0].name}，将自动使用它。", flush=True)
-        return candidates[0]
-    print(f"发现 {len(candidates)} 个可用 WPS 空间：", flush=True)
-    for index, candidate in enumerate(candidates, 1):
-        print(f"  [{index}] {candidate.name}", flush=True)
-    while True:
-        answer = input("请选择空间 [1]: ").strip() or "1"
-        try:
-            index = int(answer)
-        except ValueError:
-            print("请输入列表中的序号。", flush=True)
-            continue
-        if 1 <= index <= len(candidates):
-            return candidates[index - 1]
-        print("请输入列表中的序号。", flush=True)
-
-
-def _select_workspaces(candidates: tuple[WpsWorkspaceCandidate, ...]) -> tuple[WpsWorkspaceCandidate, ...]:
+def _select_workspaces(
+    candidates: tuple[WpsWorkspaceCandidate, ...],
+) -> tuple[WpsWorkspaceCandidate, ...]:
     """Select one, several, or all discovered spaces by display name."""
 
     if len(candidates) == 1:
@@ -1776,12 +1933,46 @@ def _select_workspaces(candidates: tuple[WpsWorkspaceCandidate, ...]) -> tuple[W
         return tuple(candidates[index - 1] for index in indexes)
 
 
+def _normalize_selected_workspaces(
+    selected: object,
+    candidates: tuple[WpsWorkspaceCandidate, ...],
+) -> tuple[WpsWorkspaceCandidate, ...]:
+    """Validate a UI/library selection before any WPS write or sync."""
+
+    if isinstance(selected, WpsWorkspaceCandidate):
+        selected_candidates = (selected,)
+    elif isinstance(selected, Sequence) and not isinstance(selected, (str, bytes)):
+        selected_candidates = tuple(selected)
+    else:
+        raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+    if not selected_candidates:
+        raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+    available = set(candidates)
+    if any(
+        not isinstance(item, WpsWorkspaceCandidate) or item not in available
+        for item in selected_candidates
+    ):
+        raise LoginError("WPS 工作区选择无效，未同步新凭据")
+    if len(selected_candidates) > MAX_WORKSPACE_SPACES:
+        raise LoginError("选择的 WPS 空间过多，请减少选择数量")
+    if len({item.group_id for item in selected_candidates}) != len(selected_candidates):
+        raise LoginError("选择的 WPS 空间重复，请重新选择")
+    if len({item.name for item in selected_candidates}) != len(selected_candidates):
+        raise LoginError("选择的 WPS 空间名称重复，请只选择其中一个")
+    return selected_candidates
+
+
 def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
     """Run the login flow and return a process exit code."""
 
     interactive_target = (
         _prompt_login_target()
-        if interactive and not args.adapter_url and not args.ssh_target and args.output_dir is None
+        if (
+            interactive
+            and not args.adapter_url
+            and not args.ssh_target
+            and args.output_dir is None
+        )
         else _LoginTarget(
             adapter_url=args.adapter_url,
             adapter_port=args.adapter_port,
@@ -1792,6 +1983,16 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
             ssh_password_auth=args.ssh_password_auth,
         )
     )
+    target_count = sum(
+        bool(target)
+        for target in (
+            interactive_target.adapter_url,
+            interactive_target.ssh_target,
+            args.output_dir,
+        )
+    )
+    if target_count != 1:
+        raise LoginError("请只选择一种同步目标：HTTP/HTTPS、SSH 或本地目录")
     adapter_url = (
         _apply_adapter_port(
             interactive_target.adapter_url,
@@ -1864,7 +2065,7 @@ __all__ = [
 ]
 
 
-__version__ = '0.9.8'
+__version__ = "0.9.8"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:
