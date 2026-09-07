@@ -164,7 +164,7 @@ linux_go_target() {
     # the target emitted by that toolchain.  Select the checksum by archive
     # name rather than GOARCH, which is simply "arm" in that case.
     case "$GO_ARCHIVE" in
-        amd64) GO_SHA256="2852af0cb20a13139b3448992e69b868e50ed0f8a1e5942ee1de9e19a123b613" ;;
+        amd64) GO_SHA256="2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613" ;;
         arm64) GO_SHA256="05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae" ;;
         armv6l) GO_SHA256="a5a8f8198fcf00e1e485b8ecef9ee020778bf32a408a4e8873371bfce458cd09" ;;
         386) GO_SHA256="8c602dd9d99bc9453b3995d20ce4baf382cc50855900a0ece5de9929df4a993a" ;;

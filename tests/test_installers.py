@@ -118,6 +118,10 @@ class InstallerTemplateTests(unittest.TestCase):
             self.assertIn("scripts/install-docker.sh", document)
 
         self.assertIn('awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP"', native)
+        self.assertIn(
+            'amd64) GO_SHA256="2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613"',
+            native,
+        )
         self.assertIn('systemctl is-enabled --quiet wps-adapter.service 2>/dev/null', native)
         self.assertIn('--user "$RUN_UID:$RUN_GID"', docker)
         self.assertIn('host_uses_systemd', native)
