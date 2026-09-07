@@ -28,13 +28,13 @@ WPS 企业云盘 -> WPS 2 WebDAV -> 网页 / WebDAV / REST
 Native（推荐，VPS 不需要 Docker）：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/install-native.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
 ```
 
 Docker：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/install-docker.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ```
 
 安装器会显示下载和安装进度，并在首次安装时询问 WebDAV/网页共用的 Basic Auth 用户名和密码。密码不会显示，请记住它，后面连接服务时要使用。
@@ -44,8 +44,8 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 60 --re
 如果 `gh-proxy.com` 无法访问，可将命令中的加速地址替换为 `ghfast.top`：
 
 ```text
-https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/...
-https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/...
+https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
+https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
 ```
 
 安装器会校验固定版本的文件清单。看到“下载归档的内容清单校验失败”时，重新复制当前 README 的命令执行，不要混用旧命令或旧校验值。
@@ -55,7 +55,7 @@ https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/...
 在你自己的电脑上下载并运行独立登录脚本（国内加速下载）：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/wps_login.py' -o wps_login.py && python3 wps_login.py
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
 ```
 
 电脑需要 Python `3.11+`、Chrome 或 Chromium。如果选择 SSH 同步，还需要系统自带的 `ssh` 命令。
@@ -117,7 +117,7 @@ Go 依赖会在首次构建时自动下载；如果网络不通，先执行 `go 
 登录助手可以把凭据直接写到本地目录（不需要 VPS）：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/wps_login.py' -o wps_login.py
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py
 python3 wps_login.py --output-dir $HOME/wps-creds
 ```
 
@@ -225,13 +225,13 @@ curl -u <用户名> 'http://<VPS-IP>:54321/api/v1/status'
 默认卸载服务和程序，但保留本机配置、Basic Auth、Cookie 和工作区文件：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/uninstall.sh' | sudo bash -s --
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ```
 
 连同本机配置和凭据一起删除：
 
 ```bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/rewrite/scripts/uninstall.sh' | sudo bash -s -- --purge
+curl -fL --progress-bar --connect-timeout 10 --max-time 60 --retry 1 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --purge
 ```
 
 Docker 镜像需要额外添加 `--remove-image`。卸载不会删除 WPS 云盘中的远端文件，也不会删除 Docker 软件本身。
