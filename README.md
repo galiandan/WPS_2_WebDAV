@@ -48,7 +48,7 @@ https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main
 https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/...
 ```
 
-安装器会校验固定版本的文件清单。看到“下载归档的内容清单校验失败”时，重新复制当前 README 的命令执行，不要混用旧命令或旧校验值。
+安装器会校验固定版本的文件清单。Native 安装需要 Go 工具链时，会优先使用阿里云 Go 镜像，再回退到官方镜像；每个下载地址都会使用固定 SHA-256 校验。看到“下载归档的内容清单校验失败”时，重新复制当前 README 的命令执行，不要混用旧命令或旧校验值。
 
 ### 第二步：登录 WPS
 

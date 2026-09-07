@@ -208,6 +208,7 @@ download_go_toolchain() {
     local filename="go${GO_VERSION}.linux-${GO_ARCHIVE}.tar.gz"
     local archive="$TMP_DIR/$filename"
     local candidates=(
+        "https://mirrors.aliyun.com/golang/$filename"
         "https://golang.google.cn/dl/$filename"
         "https://go.dev/dl/$filename"
     )
