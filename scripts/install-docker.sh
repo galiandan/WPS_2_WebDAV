@@ -30,6 +30,7 @@ DOWNLOAD_MAX_TIME="${WPS_ADAPTER_DOWNLOAD_MAX_TIME:-300}"
 DOCKER_SERVICE_MODE=""
 DOCKER_BUILDER_IMAGE=""
 LOCAL_BUILDER_IMAGE="wps-adapter-go-builder:1.25.0"
+DOCKER_BUILD_MODE="legacy"
 
 die() {
     printf '安装失败：%s\n' "$*" >&2
@@ -110,6 +111,41 @@ install_docker_package() {
             die "无法通过 $PACKAGE_MANAGER 安装 Docker；请检查发行版软件源"
             ;;
     esac
+}
+
+docker_buildx_available() {
+    docker buildx version >/dev/null 2>&1
+}
+
+install_buildx_plugin() {
+    docker_buildx_available && return 0
+
+    [[ -n "$PACKAGE_MANAGER" ]] || detect_package_manager || {
+        printf '提示：未找到可用的软件包管理器，Docker 将使用兼容构建器。\n' >&2
+        return 0
+    }
+
+    local package=""
+    case "$PACKAGE_MANAGER" in
+        apt)
+            if has_command apt-cache && apt-cache show docker-buildx >/dev/null 2>&1; then
+                package="docker-buildx"
+            elif has_command apt-cache && apt-cache show docker-buildx-plugin >/dev/null 2>&1; then
+                package="docker-buildx-plugin"
+            fi
+            ;;
+        dnf|microdnf|tdnf|yum) package="docker-buildx-plugin" ;;
+        apk) package="docker-cli-buildx" ;;
+        pacman|zypper|xbps) package="docker-buildx" ;;
+    esac
+
+    if [[ -n "$package" ]]; then
+        printf '安装 Docker Buildx 插件：%s\n' "$package"
+        if package_install "$package" && docker_buildx_available; then
+            return 0
+        fi
+    fi
+    printf '提示：当前发行版未提供可用的 Docker Buildx，继续使用兼容构建器。\n' >&2
 }
 
 install_docker_dependencies() {
@@ -294,6 +330,9 @@ usage() {
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
   WPS_ADAPTER_GO_BUILDER_IMAGE         自定义 Go 1.25 构建镜像地址
 
+Docker 构建：
+  优先安装并使用 Docker Buildx；发行版没有 Buildx 时使用兼容构建器。
+
 适配器密码不会作为命令行参数接受；首次安装时会隐藏输入。
 EOF
 }
@@ -371,6 +410,7 @@ if ! has_command docker; then
 fi
 has_command docker || die "Docker 安装后仍不可用，请检查发行版软件源"
 start_docker_daemon
+install_buildx_plugin
 
 if [[ -n "$RUN_USER_ARG" ]]; then
     RUN_USER="$RUN_USER_ARG"
@@ -698,16 +738,28 @@ mkdir -p "$APP_STAGE_DIR"
 cp -a "$SOURCE_DIR/." "$APP_STAGE_DIR/"
 chown -R "$RUN_USER:$RUN_GROUP" "$APP_STAGE_DIR"
 
-# Build from the verified temporary checkout before stopping an active native service.
+# Build from the temporary checkout before stopping an active native service.
 prepare_go_builder_image
 progress_step "构建 Docker 镜像（构建输出会持续显示）"
-docker build \
-    --file "$SOURCE_DIR/deploy/Dockerfile" \
-    --build-arg "GO_BUILDER_IMAGE=$DOCKER_BUILDER_IMAGE" \
-    --build-arg "APP_UID=$RUN_UID" \
-    --build-arg "APP_GID=$RUN_GID" \
-    --tag "$IMAGE_NAME" \
-    "$SOURCE_DIR"
+build_application_image() {
+    local build_args=(
+        --file "$SOURCE_DIR/deploy/Dockerfile"
+        --build-arg "GO_BUILDER_IMAGE=$DOCKER_BUILDER_IMAGE"
+        --build-arg "APP_UID=$RUN_UID"
+        --build-arg "APP_GID=$RUN_GID"
+        --tag "$IMAGE_NAME"
+    )
+    if docker_buildx_available; then
+        DOCKER_BUILD_MODE="buildx"
+        printf '使用 Docker Buildx 构建应用镜像。\n'
+        docker buildx build --load --progress=plain "${build_args[@]}" "$SOURCE_DIR"
+    else
+        DOCKER_BUILD_MODE="legacy"
+        printf '使用 Docker 兼容构建器；当前发行版未安装 Buildx。\n'
+        docker build "${build_args[@]}" "$SOURCE_DIR"
+    fi
+}
+build_application_image
 
 STAGED_COOKIE="$TMP_DIR/wps-cookie"
 STAGED_CSRF="$TMP_DIR/wps-csrf"
@@ -853,6 +905,7 @@ printf '监听端口：%s\n' "$PORT"
 printf 'WebDAV： http://<VPS地址>:%s/dav/\n' "$PORT"
 printf '网页：   http://<VPS地址>:%s/\n' "$PORT"
 printf '容器：   %s\n' "$CONTAINER_NAME"
+printf '构建器： %s\n' "$DOCKER_BUILD_MODE"
 printf '运行用户：%s\n' "$RUN_USER"
 printf '凭据目录：%s（不会被升级覆盖）\n' "$SECRET_DIR"
 printf '下一步：在自己的电脑下载并运行独立的 wps_login.py 完成 WPS 登录。\n'

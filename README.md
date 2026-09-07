@@ -39,7 +39,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 
 Native 安装器不要求 VPS 预装 Go：如果系统没有 Go 1.25+，它会从国内 Go 镜像临时下载固定版本、编译静态二进制，安装完成后删除临时工具链。服务运行时只使用编译好的 Go 二进制，不需要 Python、Node.js 或 Go 运行时。
 
-Docker 安装器会从国内 Docker 镜像获取 Go 构建镜像，最终容器只包含服务二进制和 CA 证书；你的个人电脑不需要安装 Docker。
+Docker 安装器会从国内 Docker 镜像获取 Go 构建镜像，并在发行版提供时自动安装 Docker Buildx；最终容器只包含服务二进制和 CA 证书，你的个人电脑不需要安装 Docker。Buildx 可用时使用 Buildx 构建，旧发行版会自动使用兼容构建器。
 
 安装器默认只访问命令中显示的国内加速地址；网络不可用时不会静默切换到其他地址。也不会执行项目归档或 Go 工具链的哈希校验。不要把未知网页中的安装命令直接交给 root。
 

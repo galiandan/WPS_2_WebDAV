@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- 修复 Docker 安装器在 Ubuntu 等系统使用 legacy builder 并显示弃用警告的问题；现在会自动安装可用的 Buildx，并优先使用 `docker buildx build --load`。
 - 修复卸载脚本在原生部署主机没有 Docker 命令时因 `--remove-image` 失败的问题；统一卸载流程现在自动识别 Native/Docker，并始终删除本机配置和凭据。
 - 按 D-02 决策同步修正状态检查：根目录列表遇到 401 时不再触发 refresh-token 刷新，整个 status 路径保持只读（Python 与 Go 实现已一致）。
 - 修复登录助手多空间选择时不显示空间名称和序号的问题。
