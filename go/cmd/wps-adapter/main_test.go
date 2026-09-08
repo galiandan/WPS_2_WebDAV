@@ -168,7 +168,7 @@ func TestVersionReportsTheBuildSummary(t *testing.T) {
 		t.Fatalf("--version failed: %v", err)
 	}
 	line := strings.TrimSpace(string(output))
-	if !strings.HasPrefix(line, "0.9.93 commit=") || !strings.Contains(line, " build_time=") {
+	if !strings.HasPrefix(line, "0.9.94 commit=") || !strings.Contains(line, " build_time=") {
 		t.Fatalf("--version = %q, want a version/commit/build-time summary", line)
 	}
 }
@@ -208,7 +208,7 @@ func TestServeAnswersHealthzBeforeStop(t *testing.T) {
 	body := make([]byte, 256)
 	n, _ := response.Body.Read(body)
 	response.Body.Close()
-	want := `{"status":"ok","service":"wps-enterprise-adapter","version":"0.9.93","network_calls":"on-demand"}`
+	want := `{"status":"ok","service":"wps-enterprise-adapter","version":"0.9.94","network_calls":"on-demand"}`
 	if response.StatusCode != http.StatusOK || string(body[:n]) != want {
 		t.Errorf("healthz = %d %q", response.StatusCode, body[:n])
 	}

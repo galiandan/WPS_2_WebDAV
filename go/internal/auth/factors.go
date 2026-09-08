@@ -37,6 +37,7 @@ const (
 	factorChallengeLifetime    = 5 * time.Minute
 	maxPasskeyResponseBytes    = 128 * 1024
 	maxPasskeys                = 32
+	maxPendingChallenges       = 128
 	maxFactorAttempts          = 5
 	totpDigits                 = 6
 	totpPeriod                 = 30
@@ -234,9 +235,15 @@ func (s *Store) EnableTOTP(secret, code string) ([]string, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var previous *totpState
+	if s.factorState.TOTP != nil {
+		copyValue := *s.factorState.TOTP
+		copyValue.RecoveryCodes = append([]string(nil), s.factorState.TOTP.RecoveryCodes...)
+		previous = &copyValue
+	}
 	s.factorState.TOTP = &totpState{Secret: secret, RecoveryCodes: hashes}
 	if err := s.persistFactorStateLocked(); err != nil {
-		s.factorState.TOTP = nil
+		s.factorState.TOTP = previous
 		return nil, err
 	}
 	return recovery, nil
@@ -296,6 +303,7 @@ func (s *Store) VerifyTwoFactor(challenge, code string) (string, User, error) {
 		return "", User{}, ErrFactorChallengeExpired
 	}
 	pending.Attempts++
+	s.pending[challenge] = pending
 	if pending.Attempts > maxFactorAttempts {
 		if pending.Attempts >= maxFactorAttempts {
 			delete(s.pending, challenge)
@@ -381,16 +389,20 @@ func (s *Store) VerifyPasskeyLogin(challengeToken string, payload PasskeyCredent
 	if challenge.RPID != rpID {
 		return "", User{}, ErrInvalidPasskey
 	}
-	credential, err := s.verifyAssertionLocked(payload, challenge, rpID, origin)
-	if err != nil {
-		return "", User{}, err
+	credentialID := payload.RawID
+	if credentialID == "" {
+		credentialID = payload.ID
 	}
 	previousCount := uint32(0)
 	for _, item := range s.factorState.Passkeys {
-		if item.ID == credential.ID {
+		if item.ID == credentialID {
 			previousCount = item.SignCount
 			break
 		}
+	}
+	credential, err := s.verifyAssertionLocked(payload, challenge, rpID, origin)
+	if err != nil {
+		return "", User{}, err
 	}
 	delete(s.pending, challenge.ChallengeString)
 	if err := s.persistFactorStateLocked(); err != nil {
@@ -522,13 +534,22 @@ func (s *Store) newSessionLocked(username string) (string, error) {
 }
 
 func (s *Store) newChallengeLocked(value factorChallenge) (string, error) {
+	now := s.now()
+	for key, pending := range s.pending {
+		if !now.Before(pending.Expires) {
+			delete(s.pending, key)
+		}
+	}
+	if len(s.pending) >= maxPendingChallenges {
+		return "", ErrFactorState
+	}
 	challenge := make([]byte, 32)
 	if _, err := rand.Read(challenge); err != nil {
 		return "", ErrFactorState
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(challenge)
 	value.Challenge = challenge
-	value.Expires = s.now().Add(factorChallengeLifetime)
+	value.Expires = now.Add(factorChallengeLifetime)
 	s.pending[encoded] = value
 	return encoded, nil
 }
