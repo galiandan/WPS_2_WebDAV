@@ -8,13 +8,18 @@ import (
 // buildStatePayload renders the workspace file body with Python-compatible
 // JSON: compact separators, ensure_ascii escaping, and the old field set
 // plus spaces. The trailing newline is added by the atomic write.
-func buildStatePayload(groupID string, rootID string, spaces []Mount) string {
+func buildStatePayload(groupID string, rootID string, rootPath string, spaces []Mount) string {
 	var b strings.Builder
 	b.WriteString(`{"group_id":"`)
 	b.WriteString(pyEscape(groupID))
 	b.WriteString(`","root_id":"`)
 	b.WriteString(pyEscape(rootID))
 	b.WriteString(`"`)
+	if rootPath != "" && rootPath != "/" {
+		b.WriteString(`,"root_path":"`)
+		b.WriteString(pyEscape(rootPath))
+		b.WriteString(`"`)
+	}
 	if len(spaces) > 0 {
 		b.WriteString(`,"spaces":[`)
 		for i, mount := range spaces {
@@ -27,7 +32,13 @@ func buildStatePayload(groupID string, rootID string, spaces []Mount) string {
 			b.WriteString(pyEscape(mount.RootID))
 			b.WriteString(`","name":"`)
 			b.WriteString(pyEscape(mount.Name))
-			b.WriteString(`"}`)
+			b.WriteString(`"`)
+			if mount.Path != "" && mount.Path != "/" {
+				b.WriteString(`,"path":"`)
+				b.WriteString(pyEscape(mount.Path))
+				b.WriteString(`"`)
+			}
+			b.WriteByte('}')
 		}
 		b.WriteByte(']')
 	}

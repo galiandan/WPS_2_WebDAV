@@ -45,7 +45,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
-预编译 Release 默认使用 `v0.9.91`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v0.9.92`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
@@ -64,10 +64,11 @@ curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/
 随后脚本打开临时隔离的官方 WPS 登录窗口。只在这个官方窗口中完成登录、SSO、扫码、验证码或二次验证。登录完成后：
 
 1. 脚本自动读取当前账号能看到的全部 WPS 空间。
-2. 浏览器自动关闭，回到终端选择空间；输入序号选择一个，输入 1,3 选择多个，输入 all 选择全部。
-3. 脚本自动验证所选空间并把 Cookie、CSRF 和工作区配置安全同步到 VPS。
+2. 浏览器自动关闭，回到终端选择空间；输入序号选择一个，输入 `1,3` 选择多个，输入 `all` 选择全部。
+3. 脚本逐个显示所选空间的文件夹。输入 `0` 使用当前目录，输入序号进入子文件夹，输入 `b` 返回上一级。这个选择就是 WebDAV 的 `/dav/` 根目录。
+4. 脚本自动验证所选文件夹并把 Cookie、CSRF 和工作区配置安全同步到 VPS。
 
-WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。默认使用企业云盘空间根目录；只有明确使用 --workspace-url 时才会指定某个具体文件夹。脚本不会显示 Cookie、CSRF、密码或签名 URL，也不需要手动填写企业 ID、群组 ID 或文件夹 ID。
+WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。默认在终端中选择企业云盘空间和文件夹；以后可以在网页“设置 → WebDAV 存储位置”中重新选择。切换位置不会移动 WPS 文件，只会改变 `/dav/` 的映射。脚本不会显示 Cookie、CSRF、密码或签名 URL，也不需要手动填写企业 ID、群组 ID 或文件夹 ID。
 
 如果使用 HTTP 同步，脚本会要求明确确认风险，因为 HTTP 会明文传输凭据和文件内容。公网使用建议给适配器套 HTTPS 反向代理；没有域名和证书时，个人可信网络可以暂时使用 HTTP。
 

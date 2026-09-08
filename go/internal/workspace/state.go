@@ -56,12 +56,22 @@ type Mount struct {
 	GroupID string
 	RootID  string
 	Name    string
+	// Path is the human-readable folder path selected inside the WPS space.
+	// The ID remains the routing source of truth; Path is persisted so the
+	// web UI can explain the current mapping after a restart.
+	Path string
 }
 
 // NewMount validates and builds one mount, mirroring WorkspaceMount's
 // construction checks. Control characters in names are rejected per the
 // owner decision on D-07.
 func NewMount(groupID string, rootID string, name string) (Mount, error) {
+	return NewMountWithPath(groupID, rootID, name, "/")
+}
+
+// NewMountWithPath validates and builds a mounted WPS space with its
+// optional human-readable folder path.
+func NewMountWithPath(groupID string, rootID string, name string, path string) (Mount, error) {
 	if err := ValidateIdentifier(groupID, "space.group_id"); err != nil {
 		return Mount{}, err
 	}
@@ -71,7 +81,38 @@ func NewMount(groupID string, rootID string, name string) (Mount, error) {
 	if err := validateMountName(name); err != nil {
 		return Mount{}, err
 	}
-	return Mount{GroupID: groupID, RootID: rootID, Name: name}, nil
+	if path == "" {
+		path = "/"
+	}
+	if err := ValidateSelectionPath(path, "space.path"); err != nil {
+		return Mount{}, err
+	}
+	return Mount{GroupID: groupID, RootID: rootID, Name: name, Path: path}, nil
+}
+
+// ValidateSelectionPath validates a persisted WPS folder path. It is a
+// display and selection path, not a local filesystem path, but rejecting
+// traversal and controls keeps it safe for the web API and logs.
+func ValidateSelectionPath(path string, fieldName string) error {
+	if path == "" || !strings.HasPrefix(path, "/") || strings.Contains(path, "\\") || strings.Contains(path, "\x00") {
+		return configErrorf("%s is invalid", fieldName)
+	}
+	for _, r := range path {
+		if r < 0x20 || r == 0x7F {
+			return configErrorf("%s is invalid", fieldName)
+		}
+	}
+	if path != "/" {
+		for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+			if part == "" || part == "." || part == ".." {
+				return configErrorf("%s is invalid", fieldName)
+			}
+		}
+	}
+	if len([]rune(path)) > 4096 {
+		return configErrorf("%s is too long", fieldName)
+	}
+	return nil
 }
 
 func validateMountName(name string) error {
@@ -91,9 +132,10 @@ func validateMountName(name string) error {
 
 // State is a resolved workspace snapshot.
 type State struct {
-	GroupID string
-	RootID  string
-	Spaces  []Mount
+	GroupID  string
+	RootID   string
+	RootPath string
+	Spaces   []Mount
 }
 
 // WorkspaceState resolves the live workspace view, reloading the state file
@@ -103,11 +145,12 @@ type WorkspaceState struct {
 	configuredGroupID string
 	configuredRootID  string
 
-	mu      sync.Mutex
-	groupID string
-	rootID  string
-	spaces  []Mount
-	mtimeNs *int64
+	mu       sync.Mutex
+	groupID  string
+	rootID   string
+	rootPath string
+	spaces   []Mount
+	mtimeNs  *int64
 }
 
 // NewWorkspaceState mirrors WorkspaceState.__post_init__: validate the file
@@ -205,6 +248,19 @@ func (s *WorkspaceState) RootID() (string, error) {
 	return s.rootID, nil
 }
 
+// RootPath returns the selected folder path for the single-space view.
+func (s *WorkspaceState) RootPath() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshLocked(false); err != nil {
+		return "", err
+	}
+	if s.rootPath == "" {
+		return "/", nil
+	}
+	return s.rootPath, nil
+}
+
 // Spaces returns the named spaces written by the current login flow.
 func (s *WorkspaceState) Spaces() ([]Mount, error) {
 	s.mu.Lock()
@@ -235,10 +291,22 @@ func (s *WorkspaceState) ConfiguredRootID() string {
 // for every field still on auto. Like Python, configured (non-auto) values
 // are never overwritten.
 func (s *WorkspaceState) Update(groupID string, rootID string, spaces []Mount) error {
+	return s.UpdateWithPaths(groupID, rootID, "", spaces)
+}
+
+// UpdateWithPaths persists a login or web selection, including the
+// human-readable path for the selected root and each mounted space.
+func (s *WorkspaceState) UpdateWithPaths(groupID string, rootID string, rootPath string, spaces []Mount) error {
 	if err := ValidateIdentifier(groupID, "workspace.group_id"); err != nil {
 		return err
 	}
 	if err := ValidateIdentifier(rootID, "workspace.root_id"); err != nil {
+		return err
+	}
+	if rootPath == "" {
+		rootPath = "/"
+	}
+	if err := ValidateSelectionPath(rootPath, "workspace.root_path"); err != nil {
 		return err
 	}
 	if len(spaces) > MaxSpaces {
@@ -248,7 +316,7 @@ func (s *WorkspaceState) Update(groupID string, rootID string, spaces []Mount) e
 	seenGroups := make(map[string]struct{}, len(spaces))
 	seenNames := make(map[string]struct{}, len(spaces))
 	for _, mount := range spaces {
-		validated, err := NewMount(mount.GroupID, mount.RootID, mount.Name)
+		validated, err := NewMountWithPath(mount.GroupID, mount.RootID, mount.Name, mount.Path)
 		if err != nil {
 			return err
 		}
@@ -269,7 +337,7 @@ func (s *WorkspaceState) Update(groupID string, rootID string, spaces []Mount) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.filePath != "" {
-		if err := s.persistLocked(groupID, rootID, normalized); err != nil {
+		if err := s.persistLocked(groupID, rootID, rootPath, normalized); err != nil {
 			return err
 		}
 	}
@@ -279,12 +347,13 @@ func (s *WorkspaceState) Update(groupID string, rootID string, spaces []Mount) e
 	if s.configuredRootID == AutoValue {
 		s.rootID = rootID
 	}
+	s.rootPath = rootPath
 	s.spaces = normalized
 	return nil
 }
 
-func (s *WorkspaceState) persistLocked(groupID string, rootID string, spaces []Mount) error {
-	mtimeNs, err := securefile.WriteAtomic(s.filePath, buildStatePayload(groupID, rootID, spaces))
+func (s *WorkspaceState) persistLocked(groupID string, rootID string, rootPath string, spaces []Mount) error {
+	mtimeNs, err := securefile.WriteAtomic(s.filePath, buildStatePayload(groupID, rootID, rootPath, spaces))
 	if err != nil {
 		return translateWriteErr(err)
 	}
@@ -317,12 +386,13 @@ func (s *WorkspaceState) refreshLocked(force bool) error {
 	if err != nil {
 		return translateReadErr(err)
 	}
-	groupID, rootID, spaces, err := applyPayload(s.configuredGroupID, s.configuredRootID, s.groupID, s.rootID, payload)
+	groupID, rootID, rootPath, spaces, err := applyPayload(s.configuredGroupID, s.configuredRootID, s.groupID, s.rootID, s.rootPath, payload)
 	if err != nil {
 		return err
 	}
 	s.groupID = groupID
 	s.rootID = rootID
+	s.rootPath = rootPath
 	s.spaces = spaces
 	s.mtimeNs = readMtime
 	return nil
@@ -331,20 +401,21 @@ func (s *WorkspaceState) refreshLocked(force bool) error {
 // applyPayload mirrors _apply_file_payload_locked: file values are adopted
 // only for configured auto/empty fields, and everything is validated before
 // any value is applied.
-func applyPayload(configuredGroupID string, configuredRootID string, currentGroupID string, currentRootID string, payload map[string]any) (string, string, []Mount, error) {
+func applyPayload(configuredGroupID string, configuredRootID string, currentGroupID string, currentRootID string, currentRootPath string, payload map[string]any) (string, string, string, []Mount, error) {
 	fileGroup := ""
 	fileRoot := "0"
+	fileRootPath := "/"
 	var spaces []Mount
 	if payload != nil {
 		rawGroup, hasGroup := payload["group_id"]
 		if hasGroup {
 			groupText, ok := rawGroup.(string)
 			if !ok {
-				return "", "", nil, configErrorf("workspace.group_id is invalid")
+				return "", "", "", nil, configErrorf("workspace.group_id is invalid")
 			}
 			if groupText != "" {
 				if err := ValidateIdentifier(groupText, "workspace.group_id"); err != nil {
-					return "", "", nil, err
+					return "", "", "", nil, err
 				}
 				fileGroup = groupText
 			}
@@ -355,16 +426,26 @@ func applyPayload(configuredGroupID string, configuredRootID string, currentGrou
 		}
 		rootText, ok := rawRoot.(string)
 		if !ok {
-			return "", "", nil, configErrorf("workspace.root_id is invalid")
+			return "", "", "", nil, configErrorf("workspace.root_id is invalid")
 		}
 		if err := ValidateIdentifier(rootText, "workspace.root_id"); err != nil {
-			return "", "", nil, err
+			return "", "", "", nil, err
 		}
 		fileRoot = rootText
+		if rawPath, present := payload["root_path"]; present {
+			rootPath, ok := rawPath.(string)
+			if !ok {
+				return "", "", "", nil, configErrorf("workspace.root_path is invalid")
+			}
+			if err := ValidateSelectionPath(rootPath, "workspace.root_path"); err != nil {
+				return "", "", "", nil, err
+			}
+			fileRootPath = rootPath
+		}
 
 		var err error
 		if spaces, err = parseSpaces(payload["spaces"]); err != nil {
-			return "", "", nil, err
+			return "", "", "", nil, err
 		}
 	}
 
@@ -376,7 +457,14 @@ func applyPayload(configuredGroupID string, configuredRootID string, currentGrou
 	if configuredRootID == AutoValue {
 		rootID = fileRoot
 	}
-	return groupID, rootID, spaces, nil
+	rootPath := currentRootPath
+	if rootPath == "" {
+		rootPath = "/"
+	}
+	if configuredRootID == AutoValue {
+		rootPath = fileRootPath
+	}
+	return groupID, rootID, rootPath, spaces, nil
 }
 
 func parseSpaces(raw any) ([]Mount, error) {
@@ -421,11 +509,22 @@ func parseSpaces(raw any) ([]Mount, error) {
 		if err := validateMountName(nameText); err != nil {
 			return nil, err
 		}
+		pathText := "/"
+		if rawPath, present := fields["path"]; present {
+			var ok bool
+			pathText, ok = rawPath.(string)
+			if !ok {
+				return nil, configErrorf("space.path is invalid")
+			}
+		}
+		if err := ValidateSelectionPath(pathText, "space.path"); err != nil {
+			return nil, err
+		}
 		if seenGroups[group] {
 			return nil, configErrorf("workspace spaces contain duplicate groups")
 		}
 		seenGroups[group] = true
-		spaces = append(spaces, Mount{GroupID: group, RootID: rootText, Name: nameText})
+		spaces = append(spaces, Mount{GroupID: group, RootID: rootText, Name: nameText, Path: pathText})
 	}
 	return spaces, nil
 }

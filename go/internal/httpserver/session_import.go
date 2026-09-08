@@ -39,6 +39,14 @@ type WorkspaceImporter interface {
 	Update(groupID, rootID string, spaces []workspace.Mount) (freshRoot string, err error)
 }
 
+// WorkspacePathImporter is implemented by the current application state so
+// login can persist the human-readable folder selected by the helper. The
+// small optional interface keeps focused test importers and older adapters
+// usable for root-only payloads.
+type WorkspacePathImporter interface {
+	UpdateWithPaths(groupID, rootID, rootPath string, spaces []workspace.Mount) (freshRoot string, err error)
+}
+
 // SessionImporter implements POST /api/v1/session/import. All input is
 // validated into a plan before the first file write: cookies are selected
 // and checked, the workspace payload is fully validated, and only then does
@@ -107,7 +115,7 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 	// The workspace plan is validated completely before any write (D-06).
 	var mounts []workspace.Mount
 	workspaceRequested := false
-	var groupID, rootID string
+	var groupID, rootID, rootPath string
 	if rawWorkspace, present := payload["workspace"]; present && rawWorkspace != nil {
 		workspaceRequested = true
 		workspaceMap, ok := rawWorkspace.(map[string]any)
@@ -122,6 +130,17 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 		}
 		if rootID, err = identifierField(workspaceMap, "root_id", "workspace.root_id", "0"); err != nil {
 			return err
+		}
+		rootPath = "/"
+		if rawPath, present := workspaceMap["root_path"]; present {
+			var ok bool
+			rootPath, ok = rawPath.(string)
+			if !ok {
+				return errBadRequest("workspace.root_path is invalid")
+			}
+			if err := workspace.ValidateSelectionPath(rootPath, "workspace.root_path"); err != nil {
+				return errBadRequest(err.Error())
+			}
 		}
 		rawSpaces, present := workspaceMap["spaces"]
 		if present && rawSpaces != nil {
@@ -165,7 +184,15 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 	}
 	responsePayload := sessionImportPayload{Status: "ok", CookieCount: len(names)}
 	if workspaceRequested {
-		freshRoot, err := s.workspace.Update(groupID, rootID, mounts)
+		var freshRoot string
+		if importer, ok := s.workspace.(WorkspacePathImporter); ok {
+			freshRoot, err = importer.UpdateWithPaths(groupID, rootID, rootPath, mounts)
+		} else {
+			if rootPath != "/" {
+				return model.NewWpsAPIError("store imported workspace", 0, model.WpsCategoryUpstream)
+			}
+			freshRoot, err = s.workspace.Update(groupID, rootID, mounts)
+		}
 		if err != nil {
 			return model.NewWpsAPIError("store imported workspace", 0, model.WpsCategoryUpstream)
 		}
@@ -221,7 +248,18 @@ func buildImportMount(spaceMap map[string]any) (workspace.Mount, error) {
 		// is not a usable name, so keep the coercion minimal.
 		return workspace.Mount{}, errBadRequest("space.name is invalid")
 	}
-	mount, err := workspace.NewMount(groupID, rootID, name)
+	path := "/"
+	if rawPath, present := spaceMap["path"]; present {
+		var ok bool
+		path, ok = rawPath.(string)
+		if !ok {
+			return workspace.Mount{}, errBadRequest("space.path is invalid")
+		}
+		if err := workspace.ValidateSelectionPath(path, "space.path"); err != nil {
+			return workspace.Mount{}, errBadRequest(err.Error())
+		}
+	}
+	mount, err := workspace.NewMountWithPath(groupID, rootID, name, path)
 	if err != nil {
 		return workspace.Mount{}, errBadRequest(err.Error())
 	}

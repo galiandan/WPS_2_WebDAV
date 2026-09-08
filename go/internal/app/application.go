@@ -259,6 +259,7 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	if application.Sessions != nil {
 		rest.SetWebAuth(application.Sessions)
 	}
+	rest.SetStorageLocations(application.storageLocations())
 	dav, err := httpserver.NewDAVDispatcher(multi, limits,
 		httpserver.DAVLimits{
 			MaxPropfindEntries: cfg.MaxPropfindEntries,
@@ -395,18 +396,148 @@ func (a *Application) workspaceImporter() httpserver.WorkspaceImporter {
 		return nil
 	}
 	state := a.State
-	return importerFunc(func(groupID, rootID string, spaces []workspace.Mount) (string, error) {
-		if err := state.Update(groupID, rootID, spaces); err != nil {
-			return "", err
-		}
-		return state.RootID()
-	})
+	return importerFunc{state: state}
 }
 
-type importerFunc func(groupID, rootID string, spaces []workspace.Mount) (string, error)
+type importerFunc struct{ state *workspace.WorkspaceState }
 
 func (f importerFunc) Update(groupID, rootID string, spaces []workspace.Mount) (string, error) {
-	return f(groupID, rootID, spaces)
+	if err := f.state.Update(groupID, rootID, spaces); err != nil {
+		return "", err
+	}
+	return f.state.RootID()
+}
+
+// UpdateWithPaths preserves the optional folder labels carried by the login
+// helper. The existing Update method remains the narrow session-import
+// contract used by focused test doubles.
+func (f importerFunc) UpdateWithPaths(groupID, rootID, rootPath string, spaces []workspace.Mount) (string, error) {
+	if err := f.state.UpdateWithPaths(groupID, rootID, rootPath, spaces); err != nil {
+		return "", err
+	}
+	return f.state.RootID()
+}
+
+// storageLocations wires the browser storage picker to the live workspace
+// state and the WPS-backed storage facade. A fixed, hand-configured adapter
+// has no safe runtime persistence surface, so it leaves the feature disabled.
+func (a *Application) storageLocations() httpserver.StorageLocationController {
+	if a.State == nil || a.Storage == nil {
+		return nil
+	}
+	return &storageLocationController{state: a.State, storage: a.Storage}
+}
+
+type storageLocationController struct {
+	state   *workspace.WorkspaceState
+	storage *storage.MultiSpace
+}
+
+func (c *storageLocationController) Locations() (string, []httpserver.StorageLocation, error) {
+	spaces, err := c.state.Spaces()
+	if err != nil {
+		return "", nil, err
+	}
+	if len(spaces) == 0 {
+		root, err := c.storage.Root()
+		if err != nil {
+			return "", nil, err
+		}
+		rootPath, err := c.state.RootPath()
+		if err != nil {
+			return "", nil, err
+		}
+		return "single", []httpserver.StorageLocation{{Name: root.Name, Path: "/", RootPath: rootPath}}, nil
+	}
+	locations := make([]httpserver.StorageLocation, 0, len(spaces))
+	for _, mount := range spaces {
+		path, err := storage.JoinRemotePath([]string{mount.Name}, false)
+		if err != nil {
+			return "", nil, err
+		}
+		rootPath := mount.Path
+		if rootPath == "" {
+			rootPath = "/"
+		}
+		locations = append(locations, httpserver.StorageLocation{
+			Name: mount.Name, Path: path, RootPath: rootPath,
+		})
+	}
+	return "spaces", locations, nil
+}
+
+func (c *storageLocationController) Browse(path string) ([]model.RemoteEntry, error) {
+	return c.storage.ListLocation(path)
+}
+
+func (c *storageLocationController) Select(path string) error {
+	parts, err := storage.SplitRemotePath(path)
+	if err != nil {
+		return err
+	}
+	groupID, err := c.state.GroupID()
+	if err != nil {
+		return err
+	}
+	if groupID == "" {
+		return model.NewStorageError(model.KindEntryNotFound, "WPS workspace is not configured")
+	}
+	spaces, err := c.state.Spaces()
+	if err != nil {
+		return err
+	}
+	if len(spaces) == 0 {
+		if c.state.ConfiguredRootID() != workspace.AutoValue {
+			return model.NewStorageError(model.KindUnsupportedOperation, "固定 WPS_ROOT_ID 不支持网页切换存储位置")
+		}
+		rootID := "0"
+		rootPath := "/"
+		if len(parts) > 0 {
+			entry, err := c.storage.ResolveLocation(path)
+			if err != nil {
+				return err
+			}
+			if entry.Kind != model.KindFolder {
+				return model.NewStorageError(model.KindNotFolder, "the selected storage location is not a folder")
+			}
+			rootID = entry.ID
+			rootPath = path
+		}
+		return c.state.UpdateWithPaths(groupID, rootID, rootPath, nil)
+	}
+	if len(parts) == 0 {
+		return model.NewStorageError(model.KindBadRequest, "请选择一个 WPS 空间和文件夹")
+	}
+	mountIndex := -1
+	for index, mount := range spaces {
+		if mount.Name == parts[0] {
+			mountIndex = index
+			break
+		}
+	}
+	if mountIndex < 0 {
+		return model.NewStorageError(model.KindEntryNotFound, "WPS space not found: "+parts[0])
+	}
+	rootID := "0"
+	rootPath := "/"
+	if len(parts) > 1 {
+		entry, err := c.storage.ResolveLocation(path)
+		if err != nil {
+			return err
+		}
+		if entry.Kind != model.KindFolder {
+			return model.NewStorageError(model.KindNotFolder, "the selected storage location is not a folder")
+		}
+		rootID = entry.ID
+		rootPath, err = storage.JoinRemotePath(parts[1:], false)
+		if err != nil {
+			return err
+		}
+	}
+	updated := append([]workspace.Mount(nil), spaces...)
+	updated[mountIndex].RootID = rootID
+	updated[mountIndex].Path = rootPath
+	return c.state.UpdateWithPaths(groupID, "0", "/", updated)
 }
 
 // roots exposes the storage surface that follows an imported workspace.

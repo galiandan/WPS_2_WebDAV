@@ -65,6 +65,9 @@ PATCH /api/v1/entries?path=/folder/file.txt
 GET  /api/v1/settings
 PATCH /api/v1/settings
 POST  /api/v1/session/import
+GET   /api/v1/storage
+GET   /api/v1/storage/entries?path=/空间名称/子文件夹
+PATCH /api/v1/storage
 ```
 
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
@@ -100,6 +103,28 @@ Content-Type: application/json
 ```
 
 成功响应为 `200` JSON。名称只影响适配器网页、虚拟根目录元数据和 WebDAV `displayname`，不会重命名 WPS 远端文件夹。服务会将名称以权限受限的 JSON 文件保存到 `/etc/wps-adapter/secrets/web-settings.json`，不访问 WPS，因此即使 WPS 当前未连接也可以修改。
+
+### WebDAV storage location
+
+`GET /api/v1/storage` 返回当前 WebDAV 映射的显示信息，不返回 WPS 的群组 ID、文件夹 ID、Cookie 或签名地址：
+
+```json
+{
+  "status": "ok",
+  "mode": "spaces",
+  "locations": [
+    {"name": "项目空间", "path": "/项目空间", "root_path": "/WebDAV文件"}
+  ]
+}
+```
+
+网页设置中的“选择文件夹”使用 `GET /api/v1/storage/entries?path=...` 浏览 WPS 原始空间根目录下的文件夹。`PATCH /api/v1/storage` 只接受一个已经在该接口中浏览到的虚拟路径，例如：
+
+```json
+{"path":"/项目空间/WebDAV文件/归档"}
+```
+
+保存后，WebDAV 地址仍然是 `/dav/`，但它映射到新的 WPS 文件夹。这个操作不会在 WPS 中移动、复制或删除任何文件；它只更新 `/etc/wps-adapter/secrets/wps-workspace.json` 中的 `root_id`、`root_path` 或空间 mount 信息。服务会立即清理目录缓存并使用新位置，无需重启。
 
 ### Importing a WPS session
 

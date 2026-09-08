@@ -26,7 +26,7 @@ func FuzzWorkspaceAndSettingsJSON(f *testing.F) {
 		if err := json.Unmarshal(payload, &decoded); err != nil {
 			return
 		}
-		_, _, _, _ = applyPayload("auto", "auto", "current-g", "current-r", decoded)
+		_, _, _, _, _ = applyPayload("auto", "auto", "current-g", "current-r", "/", decoded)
 		if _, err := ValidateRootName(decoded["name"]); err != nil {
 			_ = err
 		}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
 
@@ -28,6 +29,26 @@ type recordingRootNameStorage struct {
 	mu       sync.Mutex
 	names    []string
 	failNext bool
+}
+
+type recordingStorageLocations struct {
+	mode      string
+	locations []StorageLocation
+	entries   map[string][]model.RemoteEntry
+	selected  []string
+}
+
+func (s *recordingStorageLocations) Locations() (string, []StorageLocation, error) {
+	return s.mode, s.locations, nil
+}
+
+func (s *recordingStorageLocations) Browse(path string) ([]model.RemoteEntry, error) {
+	return s.entries[path], nil
+}
+
+func (s *recordingStorageLocations) Select(path string) error {
+	s.selected = append(s.selected, path)
+	return nil
 }
 
 func (s *recordingRootNameStorage) SetRootName(name string) error {
@@ -48,10 +69,11 @@ func (s *recordingRootNameStorage) applied() []string {
 }
 
 type settingsHarness struct {
-	router   *Router
-	storage  *recordingRootNameStorage
-	settings *workspace.WebSettings
-	path     string
+	router    *Router
+	storage   *recordingRootNameStorage
+	settings  *workspace.WebSettings
+	path      string
+	locations *recordingStorageLocations
 }
 
 func newSettingsHarness(t *testing.T) *settingsHarness {
@@ -83,6 +105,14 @@ func newSettingsHarness(t *testing.T) *settingsHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	locations := &recordingStorageLocations{
+		mode:      "single",
+		locations: []StorageLocation{{Name: "Drive", Path: "/", RootPath: "/Archive"}},
+		entries: map[string][]model.RemoteEntry{
+			"/": {{ID: "folder-1", Name: "Archive", Kind: model.KindFolder}},
+		},
+	}
+	dispatcher.SetStorageLocations(locations)
 	router, err := NewRouter(RouterConfig{
 		DAVPrefix:  "/dav",
 		RESTPrefix: "/api/v1",
@@ -99,7 +129,7 @@ func newSettingsHarness(t *testing.T) *settingsHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &settingsHarness{router: router, storage: storage, settings: settings, path: path}
+	return &settingsHarness{router: router, storage: storage, settings: settings, path: path, locations: locations}
 }
 
 func (h *settingsHarness) request(t *testing.T, method, target, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -150,6 +180,29 @@ func TestSettingsGETReturnsHotName(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q", got)
+	}
+}
+
+func TestStorageLocationRoutes(t *testing.T) {
+	harness := newSettingsHarness(t)
+	recorder := harness.request(t, "GET", "/api/v1/storage", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("storage GET status = %d (%q)", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); body != `{"status":"ok","mode":"single","locations":[{"name":"Drive","path":"/","root_path":"/Archive"}]}` {
+		t.Fatalf("storage GET body = %q", body)
+	}
+	recorder = harness.request(t, "GET", "/api/v1/storage/entries?path=%2F", "", nil)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"name":"Archive"`) {
+		t.Fatalf("storage browse = %d (%q)", recorder.Code, recorder.Body.String())
+	}
+	body := `{"path":"/Archive"}`
+	recorder = harness.request(t, "PATCH", "/api/v1/storage", body, jsonRequestHeaders(body))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("storage PATCH status = %d (%q)", recorder.Code, recorder.Body.String())
+	}
+	if got := harness.locations.selected; len(got) != 1 || got[0] != "/Archive" {
+		t.Fatalf("selected paths = %v", got)
 	}
 }
 

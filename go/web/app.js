@@ -96,6 +96,9 @@
   let settingsDraftTheme = theme;
   let settingsInFlight = false;
   let settingsTrigger = null;
+  let storageLocations = [];
+  let storageMode = "";
+  let storageLocationLoading = false;
 
   function renderThemeOptions() {
     document.querySelectorAll(".theme-option").forEach((button) => {
@@ -116,8 +119,49 @@
     $("settings-name").value = rootName;
     setSettingsError("");
     renderThemeOptions();
+    loadStorageLocations();
     $("settings-modal").showModal();
     setTimeout(() => $("settings-name").focus(), 0);
+  }
+
+  function storageLocationLabel(location) {
+    if (!location) return "未配置";
+    const rootPath = location.root_path || "/";
+    return rootPath === "/" ? `${location.name} /` : `${location.name} ${rootPath}`;
+  }
+
+  function renderStorageLocation() {
+    const node = $("storage-location-current");
+    if (!node) return;
+    if (storageLocationLoading) {
+      node.textContent = "正在读取存储位置...";
+      return;
+    }
+    if (!storageLocations.length) {
+      node.textContent = "尚未配置 WPS 工作区";
+      return;
+    }
+    if (storageMode === "single") {
+      node.textContent = storageLocationLabel(storageLocations[0]);
+    } else {
+      node.textContent = storageLocations.map(storageLocationLabel).join("；");
+    }
+  }
+
+  async function loadStorageLocations() {
+    storageLocationLoading = true;
+    renderStorageLocation();
+    try {
+      const data = await apiRequest("storage");
+      storageMode = data && typeof data.mode === "string" ? data.mode : "";
+      storageLocations = data && Array.isArray(data.locations) ? data.locations : [];
+    } catch (error) {
+      storageLocations = [];
+      setSettingsError(error.message || "存储位置读取失败");
+    } finally {
+      storageLocationLoading = false;
+      renderStorageLocation();
+    }
   }
 
   function closeSettingsModal() {
@@ -125,6 +169,119 @@
     if (dialog.open) dialog.close();
     if (settingsTrigger && document.contains(settingsTrigger)) settingsTrigger.focus();
     settingsTrigger = null;
+  }
+
+  let storagePickerResolve = null;
+  let storagePickerSpace = null;
+  let storagePickerPath = "/";
+  let storagePickerLoading = false;
+  let storagePickerGeneration = 0;
+
+  function storagePickerFullPath() {
+    if (!storagePickerSpace) return "/";
+    return storagePickerSpace.path === "/"
+      ? storagePickerPath
+      : joinPath(storagePickerSpace.path, storagePickerPath === "/" ? "" : storagePickerPath.slice(1));
+  }
+
+  function renderStoragePickerHeader() {
+    $("storage-picker-path").textContent = storagePickerFullPath();
+    $("storage-picker-up").disabled = storagePickerLoading || storagePickerPath === "/";
+    $("storage-picker-select").disabled = storagePickerLoading || !storagePickerSpace;
+  }
+
+  async function renderStoragePickerFolders() {
+    const generation = ++storagePickerGeneration;
+    storagePickerLoading = true;
+    renderStoragePickerHeader();
+    const list = $("storage-picker-list");
+    list.replaceChildren(el("div", "picker-loading", "正在读取文件夹..."));
+    $("storage-picker-error").textContent = "";
+    try {
+      const data = await api("storage/entries", storagePickerFullPath());
+      const entries = data && Array.isArray(data.entries) ? data.entries : [];
+      if (generation !== storagePickerGeneration || !storagePickerResolve) return;
+      list.replaceChildren();
+      const folders = entries.filter((entry) => entry && entry.kind === "folder");
+      if (!folders.length) list.append(el("div", "picker-empty", "这里没有子文件夹"));
+      folders.forEach((entry) => {
+        const button = el("button", "picker-item");
+        button.type = "button";
+        button.append(icon("folder"), el("span", "p-name", entry.name), icon("chev-right", "p-chev"));
+        button.addEventListener("click", () => {
+          storagePickerPath = joinPath(storagePickerPath, entry.name);
+          renderStoragePickerFolders();
+        });
+        list.append(button);
+      });
+    } catch (error) {
+      if (generation === storagePickerGeneration) $("storage-picker-error").textContent = error.message || "文件夹读取失败";
+    } finally {
+      if (generation === storagePickerGeneration) {
+        storagePickerLoading = false;
+        renderStoragePickerHeader();
+      }
+    }
+  }
+
+  function closeStoragePicker(value) {
+    if (!storagePickerResolve) return;
+    storagePickerGeneration += 1;
+    const resolve = storagePickerResolve;
+    storagePickerResolve = null;
+    $("storage-picker").close();
+    resolve(value);
+  }
+
+  async function openStoragePicker() {
+    if (storageLocationLoading) return;
+    if (!storageLocations.length) await loadStorageLocations();
+    if (!storageLocations.length) return;
+    storagePickerSpace = storageLocations[0];
+    storagePickerPath = "/";
+    $("storage-picker").showModal();
+    renderStoragePickerSpaces();
+    renderStoragePickerFolders();
+    return new Promise((resolve) => { storagePickerResolve = resolve; });
+  }
+
+  function renderStoragePickerSpaces() {
+    const list = $("storage-picker-spaces");
+    list.replaceChildren();
+    storageLocations.forEach((space) => {
+      const button = el("button", "storage-picker-space" + (space === storagePickerSpace ? " selected" : ""));
+      button.type = "button";
+      button.append(icon("cloud"), el("span", "p-name", space.name));
+      button.addEventListener("click", () => {
+        storagePickerSpace = space;
+        storagePickerPath = "/";
+        renderStoragePickerSpaces();
+        renderStoragePickerFolders();
+      });
+      list.append(button);
+    });
+  }
+
+  async function chooseStorageLocation() {
+    const selected = await openStoragePicker();
+    if (!selected) return;
+    setSettingsError("正在保存存储位置...");
+    try {
+      await apiRequest("storage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selected }),
+      });
+      clearDirectoryCache();
+      state.path = "/";
+      history.replaceState(null, "", "#/" );
+      await loadStorageLocations();
+      closeSettingsModal();
+      await load("/", true, true);
+      toast("WebDAV 存储位置已更新", "success");
+    } catch (error) {
+      setSettingsError(error.message || "存储位置保存失败");
+    }
   }
 
   async function submitSettings(event) {
@@ -1976,6 +2133,7 @@
     }
   });
   $("settings-form").addEventListener("submit", submitSettings);
+  $("storage-location-button").addEventListener("click", chooseStorageLocation);
   $("settings-cancel").addEventListener("click", closeSettingsModal);
   $("settings-modal").addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -2023,6 +2181,20 @@
     if (pickerLoading) return;
     pickerCurrent = parentPath(pickerCurrent);
     renderPickerList();
+  });
+
+  $("storage-picker-cancel").addEventListener("click", () => closeStoragePicker(null));
+  $("storage-picker").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeStoragePicker(null);
+  });
+  $("storage-picker-up").addEventListener("click", () => {
+    if (storagePickerLoading || storagePickerPath === "/") return;
+    storagePickerPath = parentPath(storagePickerPath);
+    renderStoragePickerFolders();
+  });
+  $("storage-picker-select").addEventListener("click", () => {
+    if (storagePickerSpace) closeStoragePicker(storagePickerFullPath());
   });
 
   $("theme-button").addEventListener("click", openSettingsModal);

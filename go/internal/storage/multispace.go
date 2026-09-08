@@ -467,6 +467,91 @@ func (m *MultiSpace) ListPath(path string) ([]model.RemoteEntry, error) {
 	return space.ListPath(childPath)
 }
 
+// ResolveLocation resolves a path from the original WPS space roots rather
+// than from the currently selected WebDAV roots. This lets the settings UI
+// choose a sibling folder after a narrower folder has already been mounted.
+func (m *MultiSpace) ResolveLocation(path string) (model.RemoteEntry, error) {
+	if err := m.syncMounts(); err != nil {
+		return model.RemoteEntry{}, err
+	}
+	parts, err := SplitRemotePath(path)
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	m.mu.Lock()
+	hasMounts := len(m.mounts) > 0
+	single := m.single
+	m.mu.Unlock()
+	if !hasMounts {
+		if single == nil {
+			return model.RemoteEntry{}, model.NewStorageError(model.KindEntryNotFound, "WPS workspace is not configured")
+		}
+		return single.ResolveFromRoot("0", path)
+	}
+	if len(parts) == 0 {
+		return m.Root()
+	}
+	mount, ok := m.mountByName(parts[0])
+	if !ok {
+		return model.RemoteEntry{}, model.NewStorageError(model.KindEntryNotFound, "WPS space not found: "+parts[0])
+	}
+	m.mu.Lock()
+	space := m.spaces[mount.Name]
+	m.mu.Unlock()
+	if space == nil {
+		return model.RemoteEntry{}, model.NewStorageError(model.KindEntryNotFound, "WPS space not found: "+parts[0])
+	}
+	childPath, err := JoinRemotePath(parts[1:], false)
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	if len(parts) == 1 {
+		return space.ResolveFromRoot("0", "/")
+	}
+	return space.ResolveFromRoot("0", childPath)
+}
+
+// ListLocation lists a folder from the original WPS space roots. The
+// returned path is still expressed in the adapter's virtual namespace.
+func (m *MultiSpace) ListLocation(path string) ([]model.RemoteEntry, error) {
+	entry, err := m.ResolveLocation(path)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Kind != model.KindFolder {
+		return nil, model.NewStorageError(model.KindNotFolder, "the requested path is not a folder")
+	}
+	parts, err := SplitRemotePath(path)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	hasMounts := len(m.mounts) > 0
+	single := m.single
+	m.mu.Unlock()
+	if !hasMounts {
+		return single.ListFromRoot("0", path)
+	}
+	if len(parts) == 0 {
+		return m.ListPath("/")
+	}
+	mount, ok := m.mountByName(parts[0])
+	if !ok {
+		return nil, model.NewStorageError(model.KindEntryNotFound, "WPS space not found: "+parts[0])
+	}
+	m.mu.Lock()
+	space := m.spaces[mount.Name]
+	m.mu.Unlock()
+	if len(parts) == 1 {
+		return space.ListFromRoot("0", "/")
+	}
+	childPath, err := JoinRemotePath(parts[1:], false)
+	if err != nil {
+		return nil, err
+	}
+	return space.ListFromRoot("0", childPath)
+}
+
 // UploadPath uploads into the routed space; the root itself is rejected by
 // routing or by the single storage's parent rules.
 func (m *MultiSpace) UploadPath(ctx context.Context, path string, source io.Reader, options UploadOptions) (model.RemoteEntry, error) {

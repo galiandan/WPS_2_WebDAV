@@ -22,6 +22,24 @@ type RootNameSetter interface {
 	SetRootName(name string) error
 }
 
+// StorageLocation is the public description of one WebDAV mount. WPS IDs
+// stay server-side; the UI only needs the virtual mount path and the folder
+// selected inside that space.
+type StorageLocation struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	RootPath string `json:"root_path"`
+}
+
+// StorageLocationController backs the storage-location settings UI. Browse
+// always starts at the original WPS space root, while Select persists the
+// chosen folder as the new WebDAV root.
+type StorageLocationController interface {
+	Locations() (mode string, locations []StorageLocation, err error)
+	Browse(path string) ([]model.RemoteEntry, error)
+	Select(path string) error
+}
+
 // RootNameController mirrors AdapterApplication's web root name glue: the
 // settings store is the hot source of truth, and every effective name
 // change propagates to the storage virtual root without a restart and
@@ -134,6 +152,13 @@ type RESTDispatcher struct {
 	// client.config.max_upload_bytes; zero disables the check like the
 	// Python getattr fallback.
 	maxUploadBytes int64
+	locations      StorageLocationController
+}
+
+// SetStorageLocations enables the authenticated storage-location settings
+// routes without changing the established dispatcher constructor contract.
+func (d *RESTDispatcher) SetStorageLocations(controller StorageLocationController) {
+	d.locations = controller
 }
 
 // NewRESTDispatcher wires the dispatcher; a zero limits value selects the
@@ -279,6 +304,12 @@ type settingsPayload struct {
 	Name   string `json:"name"`
 }
 
+type storageLocationsPayload struct {
+	Status    string            `json:"status"`
+	Mode      string            `json:"mode"`
+	Locations []StorageLocation `json:"locations"`
+}
+
 func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
 	// Python answers status and settings before reading the path query, so
 	// both tolerate missing or malformed path parameters.
@@ -301,6 +332,11 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 			return err
 		}
 		return sendJSON(w, r, http.StatusOK, settingsPayload{Status: "ok", Name: name}, d.limits, nil)
+	case "storage":
+		if err := discardBody(w, r, d.limits); err != nil {
+			return err
+		}
+		return d.doStorageLocations(w, r)
 	}
 	// Python parses the path query before dispatching the known routes, so
 	// a malformed path parameter errors even for unknown suffixes.
@@ -311,6 +347,8 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	switch route.Suffix {
 	case "entries", "list":
 		return d.doEntries(w, r, path)
+	case "storage/entries":
+		return d.doStorageEntries(w, r, path)
 	case "metadata":
 		return d.doMetadata(w, r, path)
 	case "download":
@@ -321,7 +359,61 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	return nil
 }
 
+func (d *RESTDispatcher) doStorageLocations(w http.ResponseWriter, r *http.Request) error {
+	if d.locations == nil {
+		return model.NewStorageError(model.KindUnsupportedOperation, "storage location settings are unavailable")
+	}
+	mode, locations, err := d.locations.Locations()
+	if err != nil {
+		return err
+	}
+	return sendJSON(w, r, http.StatusOK, storageLocationsPayload{
+		Status:    "ok",
+		Mode:      mode,
+		Locations: locations,
+	}, d.limits, nil)
+}
+
+func (d *RESTDispatcher) doStorageEntries(w http.ResponseWriter, r *http.Request, path string) error {
+	if d.locations == nil {
+		return model.NewStorageError(model.KindUnsupportedOperation, "storage location settings are unavailable")
+	}
+	entries, err := d.locations.Browse(path)
+	if err != nil {
+		return err
+	}
+	payload := listPayload{Path: path, Entries: make([]model.PublicEntry, 0, len(entries))}
+	for _, item := range entries {
+		payload.Entries = append(payload.Entries, item.Public())
+	}
+	return sendJSON(w, r, http.StatusOK, payload, d.limits, nil)
+}
+
+func (d *RESTDispatcher) doStorageSelect(w http.ResponseWriter, r *http.Request) error {
+	if d.locations == nil {
+		return model.NewStorageError(model.KindUnsupportedOperation, "storage location settings are unavailable")
+	}
+	payload, err := readJSONBody(w, r, d.limits)
+	if err != nil || payload == nil {
+		return err
+	}
+	if len(payload) != 1 {
+		return errBadRequest("JSON field 'path' is required")
+	}
+	path, ok := payload["path"].(string)
+	if !ok {
+		return errBadRequest("JSON field 'path' must be a string")
+	}
+	if err := d.locations.Select(path); err != nil {
+		return err
+	}
+	return d.doStorageLocations(w, r)
+}
+
 func (d *RESTDispatcher) doPatch(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
+	if route.Suffix == "storage" {
+		return d.doStorageSelect(w, r)
+	}
 	if route.Suffix != "settings" {
 		// The entries/files rename-move routes; every other suffix discards
 		// the body and answers the unknown-route 404 like Python.

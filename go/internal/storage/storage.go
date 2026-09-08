@@ -333,6 +333,58 @@ func (s *Storage) Resolve(path string) (model.RemoteEntry, error) {
 	return s.resolveParts(parts)
 }
 
+// ResolveFromRoot resolves a path from an explicit WPS folder ID instead of
+// the currently mounted root. It powers the storage-location picker: users
+// can browse the original space root even after a narrower folder is mapped
+// to WebDAV.
+func (s *Storage) ResolveFromRoot(rootID string, path string) (model.RemoteEntry, error) {
+	if rootID == "" {
+		return model.RemoteEntry{}, model.NewStorageError(model.KindInvalidPath, "root id is required")
+	}
+	parts, err := SplitRemotePath(path)
+	if err != nil {
+		return model.RemoteEntry{}, err
+	}
+	current := model.RemoteEntry{
+		ID:   rootID,
+		Name: s.rootNameValue(),
+		Kind: model.KindFolder,
+		Size: model.Ptr(int64(0)),
+	}
+	for _, name := range parts {
+		children, err := s.children(current.ID)
+		if err != nil {
+			return model.RemoteEntry{}, err
+		}
+		current, err = child(current.ID, name, children)
+		if err != nil {
+			return model.RemoteEntry{}, err
+		}
+		if current.Kind != model.KindFolder && name != parts[len(parts)-1] {
+			return model.RemoteEntry{}, model.NewStorageError(model.KindNotFolder, "not a folder: "+current.Name)
+		}
+	}
+	return current, nil
+}
+
+// ListFromRoot lists a path relative to an explicit WPS folder ID.
+func (s *Storage) ListFromRoot(rootID string, path string) ([]model.RemoteEntry, error) {
+	entry, err := s.ResolveFromRoot(rootID, path)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Kind != model.KindFolder {
+		return nil, model.NewStorageError(model.KindNotFolder, "the requested path is not a folder")
+	}
+	return s.children(entry.ID)
+}
+
+func (s *Storage) rootNameValue() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rootName
+}
+
 // Metadata mirrors metadata: resolution is the metadata.
 func (s *Storage) Metadata(path string) (model.RemoteEntry, error) {
 	return s.Resolve(path)

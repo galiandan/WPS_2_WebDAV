@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.client import HTTPConnection, HTTPSConnection, HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -88,6 +88,7 @@ class WpsWorkspaceSelection:
     group_id: str
     root_id: str
     spaces: tuple["WpsWorkspaceCandidate", ...] = ()
+    root_path: str = "/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +98,8 @@ class WpsWorkspaceCandidate:
     tenant_id: str
     group_id: str
     name: str
+    root_id: str = "0"
+    root_path: str = "/"
 
 
 _WORKSPACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
@@ -130,14 +133,31 @@ def _workspace_name(value: object) -> str:
     return value
 
 
+def _workspace_path(value: object, *, field_name: str) -> str:
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise LoginError(f"WPS {field_name} 格式不正确")
+    if "\\" in value or "\x00" in value or any(
+        ord(char) < 0x20 or ord(char) == 0x7F for char in value
+    ):
+        raise LoginError(f"WPS {field_name} 格式不正确")
+    if value != "/" and any(part in {"", ".", ".."} for part in value[1:].split("/")):
+        raise LoginError(f"WPS {field_name} 格式不正确")
+    if len(value.encode("utf-8")) > 16 * 1024:
+        raise LoginError(f"WPS {field_name} 过长")
+    return value
+
+
 def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, object]:
     if not isinstance(selection, WpsWorkspaceSelection):
         raise LoginError("WPS 工作区信息无效")
     tenant_id = _workspace_id(selection.tenant_id, field_name="企业 ID")
+    root_path = _workspace_path(selection.root_path, field_name="根目录路径")
     payload: dict[str, object] = {
         "group_id": _workspace_id(selection.group_id, field_name="群组 ID"),
         "root_id": _workspace_id(selection.root_id, field_name="目录 ID"),
     }
+    if root_path != "/":
+        payload["root_path"] = root_path
     if selection.spaces:
         if len(selection.spaces) > MAX_WORKSPACE_SPACES:
             raise LoginError("选择的 WPS 空间过多，请减少选择数量")
@@ -155,9 +175,18 @@ def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, object]:
                 raise LoginError("选择的 WPS 空间重复")
             if name in seen_names:
                 raise LoginError("选择的 WPS 空间名称重复，请只选择其中一个")
+            root_id = _workspace_id(item.root_id, field_name="目录 ID")
+            root_path = _workspace_path(item.root_path, field_name="目录路径")
             seen_groups.add(group_id)
             seen_names.add(name)
-            spaces.append({"group_id": group_id, "root_id": "0", "name": name})
+            space_payload: dict[str, str] = {
+                "group_id": group_id,
+                "root_id": root_id,
+                "name": name,
+            }
+            if root_path != "/":
+                space_payload["path"] = root_path
+            spaces.append(space_payload)
         payload["spaces"] = spaces
     return payload
 
@@ -478,12 +507,28 @@ def validate_workspace_name(value):
         raise ValueError("invalid workspace name") from exc
     return value
 
+def validate_workspace_path(value):
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ValueError("invalid workspace path")
+    if "\\" in value or "\x00" in value:
+        raise ValueError("invalid workspace path")
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in value):
+        raise ValueError("invalid workspace path")
+    if value != "/" and any(part in {"", ".", ".."} for part in value[1:].split("/")):
+        raise ValueError("invalid workspace path")
+    if len(value.encode("utf-8")) > 16 * 1024:
+        raise ValueError("invalid workspace path")
+    return value
+
 def validate_workspace_payload(value):
     if not isinstance(value, dict):
         raise ValueError("invalid workspace payload")
     group_id = validate_workspace_id(value.get("group_id"))
     root_id = validate_workspace_id(value.get("root_id"))
     normalized = {"group_id": group_id, "root_id": root_id}
+    root_path = validate_workspace_path(value.get("root_path", "/"))
+    if root_path != "/":
+        normalized["root_path"] = root_path
     raw_spaces = value.get("spaces")
     if raw_spaces is not None:
         if not isinstance(raw_spaces, list) or not raw_spaces or len(raw_spaces) > 128:
@@ -497,19 +542,21 @@ def validate_workspace_payload(value):
             space_group = validate_workspace_id(raw_space.get("group_id"))
             space_root = validate_workspace_id(raw_space.get("root_id", "0"))
             space_name = validate_workspace_name(raw_space.get("name"))
+            space_path = validate_workspace_path(raw_space.get("path", "/"))
             if space_group in seen_groups:
                 raise ValueError("duplicate workspace groups")
             if space_name in seen_names:
                 raise ValueError("duplicate workspace names")
             seen_groups.add(space_group)
             seen_names.add(space_name)
-            spaces.append(
-                {
+            item = {
                     "group_id": space_group,
                     "root_id": space_root,
                     "name": space_name,
                 }
-            )
+            if space_path != "/":
+                item["path"] = space_path
+            spaces.append(item)
         normalized["spaces"] = spaces
     return normalized
 
@@ -1442,6 +1489,181 @@ def discover_workspaces(
     return tuple(candidates)
 
 
+def list_workspace_folders(
+    credentials: WpsCredentials,
+    *,
+    group_id: str,
+    parent_id: str = "0",
+    base_url: str = DEFAULT_LOGIN_URL,
+    timeout: float = 30.0,
+    opener: object | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """List folders below one WPS directory for the interactive picker."""
+
+    if not isinstance(credentials, WpsCredentials) or not credentials.cookie:
+        raise LoginError("WPS 登录凭据不完整，无法读取文件夹")
+    if not _is_positive_timeout(timeout):
+        raise LoginError("文件夹读取超时时间必须为正数")
+    group_id = _workspace_id(group_id, field_name="群组 ID")
+    parent_id = _workspace_id(parent_id, field_name="目录 ID")
+    host = _host_from_url(base_url)
+    query = urlencode(
+        {
+            "parentid": parent_id,
+            "linkgroup": "true",
+            "include": "acl,pic_thumbnail",
+            "with_link": "true",
+            "review_pic_thumbnail": "true",
+            "with_sharefolder_type": "true",
+            "offset": "0",
+            "count": "100",
+            "orderby": "mtime",
+            "order": "desc",
+        }
+    )
+    url = urlunsplit(
+        (
+            "https",
+            host,
+            f"/3rd/drive/api/v5/groups/{quote(group_id, safe='')}/files",
+            query,
+            "",
+        )
+    )
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Cookie": credentials.cookie,
+            "User-Agent": "wps-adapter-login/1",
+        },
+        method="GET",
+    )
+    client = opener or build_opener(ProxyHandler({}))
+    try:
+        response = client.open(request, timeout=timeout)  # type: ignore[attr-defined]
+        try:
+            body = _read_limited_http_response(response, max_bytes=MAX_ADAPTER_RESPONSE_BYTES)
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+    except HTTPError as exc:
+        try:
+            exc.close()
+        except OSError:
+            pass
+        if exc.code == 401:
+            raise LoginError("WPS 登录已过期，无法读取文件夹") from exc
+        if exc.code in {403, 404}:
+            raise LoginError("当前账号无权读取这个 WPS 文件夹") from exc
+        raise LoginError(f"WPS 文件夹读取失败（HTTP {exc.code}）") from exc
+    except (OSError, URLError, TimeoutError, ValueError) as exc:
+        raise LoginError("无法连接 WPS 文件夹接口") from exc
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LoginError("WPS 文件夹接口返回了无效响应") from exc
+    if not isinstance(payload, Mapping):
+        raise LoginError("WPS 文件夹接口返回格式异常")
+    if payload.get("result") not in {None, "ok"}:
+        raise LoginError("WPS 文件夹读取未成功")
+    raw_files = payload.get("files", [])
+    if not isinstance(raw_files, list):
+        raise LoginError("WPS 文件夹接口返回格式异常")
+    folders: list[tuple[str, str]] = []
+    for item in raw_files:
+        if not isinstance(item, Mapping) or item.get("ftype") != "folder":
+            continue
+        raw_id = item.get("id")
+        raw_name = item.get("fname")
+        if raw_id is None or not isinstance(raw_name, str):
+            continue
+        try:
+            folder_id = _workspace_id(str(raw_id), field_name="目录 ID")
+            folder_name = _workspace_name(raw_name)
+        except LoginError:
+            continue
+        folders.append((folder_id, folder_name))
+    return tuple(folders)
+
+
+def _select_workspace_folder(
+    credentials: WpsCredentials,
+    candidate: WpsWorkspaceCandidate,
+    *,
+    base_url: str,
+    timeout: float,
+) -> WpsWorkspaceCandidate:
+    """Interactively select a folder below one discovered WPS space."""
+
+    current_id = "0"
+    current_path = "/"
+    path_stack: list[tuple[str, str]] = []
+    while True:
+        folders = list_workspace_folders(
+            credentials,
+            group_id=candidate.group_id,
+            parent_id=current_id,
+            base_url=base_url,
+            timeout=timeout,
+        )
+        print(f"\n空间：{candidate.name}    当前目录：{current_path}", flush=True)
+        print("  [0] 使用当前目录作为 WebDAV 根目录", flush=True)
+        for index, (_folder_id, folder_name) in enumerate(folders, 1):
+            print(f"  [{index}] {folder_name}", flush=True)
+        if current_path != "/":
+            print("  [b] 返回上一级", flush=True)
+        answer = input("选择文件夹 [0]: ").strip()
+        if not answer or answer == "0":
+            return replace(candidate, root_id=current_id, root_path=current_path)
+        if answer.casefold() == "b" and current_path != "/":
+            path_stack.pop()
+            current_id = path_stack[-1][0] if path_stack else "0"
+            current_path = (
+                "/" + "/".join(name for _folder_id, name in path_stack)
+                if path_stack
+                else "/"
+            )
+            continue
+        try:
+            index = int(answer)
+        except ValueError:
+            print("请输入文件夹序号，或输入 b 返回上一级。", flush=True)
+            continue
+        if index < 1 or index > len(folders):
+            print("请输入列表中的序号。", flush=True)
+            continue
+        current_id, folder_name = folders[index - 1]
+        path_stack.append((current_id, folder_name))
+        current_path = posixpath.join(current_path, folder_name)
+        if not current_path.startswith("/"):
+            current_path = "/" + current_path
+
+
+def select_workspace_folders(
+    credentials: WpsCredentials,
+    candidates: Sequence[WpsWorkspaceCandidate],
+    *,
+    base_url: str,
+    timeout: float,
+) -> tuple[WpsWorkspaceCandidate, ...]:
+    """Select one folder for each selected WPS space."""
+
+    selected: list[WpsWorkspaceCandidate] = []
+    for candidate in candidates:
+        print(f"\n请为 WPS 空间“{candidate.name}”选择 WebDAV 根文件夹。", flush=True)
+        selected.append(
+            _select_workspace_folder(
+                credentials,
+                candidate,
+                base_url=base_url,
+                timeout=timeout,
+            )
+        )
+    return tuple(selected)
+
+
 def verify_workspace_access(
     credentials: WpsCredentials,
     workspace: WpsWorkspaceSelection,
@@ -1547,6 +1769,10 @@ def login_and_sync(
     allow_insecure_http: bool = False,
     workspace_url: str | None = None,
     workspace_selector: Callable[[Sequence[WpsWorkspaceCandidate]], object] | None = None,
+    workspace_folder_selector: Callable[
+        [WpsCredentials, Sequence[WpsWorkspaceCandidate], str, float],
+        Sequence[WpsWorkspaceCandidate],
+    ] | None = None,
 ) -> tuple[str, ...]:
     """Open WPS, wait for a human login, then sync a safe credential snapshot."""
 
@@ -1651,12 +1877,36 @@ def login_and_sync(
             root_id="0",
             spaces=tuple(selected_candidates),
         )
+        if workspace_folder_selector is not None:
+            try:
+                selected_with_folders = workspace_folder_selector(
+                    credentials,
+                    selected_candidates,
+                    browser_url,
+                    adapter_timeout,
+                )
+            except LoginError:
+                raise
+            selected_with_folders = _normalize_selected_workspaces(
+                selected_with_folders,
+                discovered_workspaces,
+            )
+            workspace = WpsWorkspaceSelection(
+                tenant_id=selected_candidate.tenant_id,
+                group_id=selected_candidate.group_id,
+                root_id="0",
+                spaces=tuple(selected_with_folders),
+            )
+            selected_names = "、".join(
+                f"{item.name}（{item.root_path}）" for item in selected_with_folders
+            )
+            print(f"已选择 WebDAV 根文件夹：{selected_names}", flush=True)
     print("正在验证 WPS 工作区访问权限...", flush=True)
     if workspace.spaces:
         for candidate in workspace.spaces:
             verify_workspace_access(
                 credentials,
-                WpsWorkspaceSelection(candidate.tenant_id, candidate.group_id, "0"),
+                WpsWorkspaceSelection(candidate.tenant_id, candidate.group_id, candidate.root_id),
                 base_url=browser_url,
                 timeout=adapter_timeout,
             )
@@ -1947,12 +2197,23 @@ def _normalize_selected_workspaces(
         raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
     if not selected_candidates:
         raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
-    available = set(candidates)
-    if any(
-        not isinstance(item, WpsWorkspaceCandidate) or item not in available
-        for item in selected_candidates
-    ):
-        raise LoginError("WPS 工作区选择无效，未同步新凭据")
+    available = {
+        (item.tenant_id, item.group_id, item.name): item for item in candidates
+    }
+    normalized: list[WpsWorkspaceCandidate] = []
+    for item in selected_candidates:
+        if not isinstance(item, WpsWorkspaceCandidate):
+            raise LoginError("WPS 工作区选择无效，未同步新凭据")
+        key = (item.tenant_id, item.group_id, item.name)
+        if key not in available:
+            raise LoginError("WPS 工作区选择无效，未同步新凭据")
+        try:
+            root_id = _workspace_id(item.root_id, field_name="目录 ID")
+            root_path = _workspace_path(item.root_path, field_name="目录路径")
+        except LoginError:
+            raise LoginError("WPS 工作区选择无效，未同步新凭据") from None
+        normalized.append(replace(item, root_id=root_id, root_path=root_path))
+    selected_candidates = tuple(normalized)
     if len(selected_candidates) > MAX_WORKSPACE_SPACES:
         raise LoginError("选择的 WPS 空间过多，请减少选择数量")
     if len({item.group_id for item in selected_candidates}) != len(selected_candidates):
@@ -2039,6 +2300,16 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         adapter_timeout=args.adapter_timeout,
         allow_insecure_http=allow_insecure_http,
         workspace_selector=_select_workspaces if interactive and not args.workspace_url else None,
+        workspace_folder_selector=(
+            lambda credentials, candidates, base_url, timeout: select_workspace_folders(
+                credentials,
+                candidates,
+                base_url=base_url,
+                timeout=timeout,
+            )
+            if interactive and not args.workspace_url
+            else candidates
+        ),
     )
     return 0
 
@@ -2065,7 +2336,7 @@ __all__ = [
 ]
 
 
-__version__ = "0.9.91"
+__version__ = "0.9.92"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

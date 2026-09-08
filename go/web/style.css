@@ -506,6 +506,17 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
 .danger-solid:hover { background: var(--bad); border-color: var(--bad); color: #ffffff; filter: brightness(1.06); }
 .modal-inline-error { color: var(--bad); font-size: 12px; min-height: 18px; margin: 10px 0 -6px; }
 .settings-card { max-width: 440px; }
+.storage-setting { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 18px; }
+.storage-setting-head { align-items: center; display: flex; gap: 14px; justify-content: space-between; }
+.storage-setting h3 { font-size: 13px; font-weight: 600; margin: 0; }
+.storage-setting p { color: var(--text-3); font-size: 12px; line-height: 18px; margin: 4px 0 0; max-width: 270px; overflow-wrap: anywhere; }
+.storage-setting .secondary { flex: 0 0 auto; min-height: 36px; padding: 7px 11px; }
+.storage-picker-card { display: flex; flex-direction: column; max-height: min(640px, calc(100vh - 36px)); }
+.storage-picker-spaces { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; max-height: 112px; overflow-y: auto; }
+.storage-picker-space { background: var(--surface-2); border-color: var(--line); color: var(--text-2); min-height: 38px; padding: 7px 11px; }
+.storage-picker-space:hover, .storage-picker-space.selected { border-color: var(--accent); color: var(--accent); }
+.storage-picker-space.selected { background: var(--accent-soft); font-weight: 600; }
+.storage-picker-space .icon { height: 15px; margin-right: 7px; width: 15px; }
 .theme-field { border: 0; margin: 20px 0 0; padding: 0; }
 .theme-field legend { color: var(--text-2); font-size: 13px; padding: 0; }
 .theme-options { display: grid; gap: 7px; grid-template-columns: repeat(3, 1fr); margin-top: 8px; }

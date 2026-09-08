@@ -250,6 +250,15 @@
         <span>云盘名称</span>
         <input id="settings-name" class="modal-input" type="text" autocomplete="off" maxlength="256">
       </label>
+      <section class="storage-setting" aria-labelledby="storage-setting-title">
+        <div class="storage-setting-head">
+          <div>
+            <h3 id="storage-setting-title">WebDAV 存储位置</h3>
+            <p id="storage-location-current">正在读取存储位置...</p>
+          </div>
+          <button id="storage-location-button" class="secondary" type="button">选择文件夹</button>
+        </div>
+      </section>
       <fieldset class="theme-field">
         <legend>主题</legend>
         <div id="theme-options" class="theme-options" role="radiogroup" aria-label="主题">
@@ -278,6 +287,24 @@
       <div class="modal-actions">
         <button id="picker-cancel" type="button">取消</button>
         <button id="picker-move" class="primary" type="button">移动到这里</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="storage-picker" aria-labelledby="storage-picker-title">
+    <form class="modal-card storage-picker-card" method="dialog" onsubmit="return false;">
+      <h2 id="storage-picker-title" class="modal-title">选择 WebDAV 存储位置</h2>
+      <p class="modal-message">选择一个 WPS 空间或文件夹作为 /dav/ 的根目录</p>
+      <div id="storage-picker-spaces" class="storage-picker-spaces" role="list" aria-label="WPS 空间"></div>
+      <div class="picker-nav">
+        <button id="storage-picker-up" class="icon-button small" type="button" title="上一级" aria-label="上一级"><svg class="icon"><use href="#i-chev-up"/></svg></button>
+        <span id="storage-picker-path" class="picker-path">/</span>
+      </div>
+      <div id="storage-picker-list" class="picker-list" role="list"></div>
+      <p id="storage-picker-error" class="modal-inline-error" role="alert" aria-live="polite"></p>
+      <div class="modal-actions">
+        <button id="storage-picker-cancel" type="button">取消</button>
+        <button id="storage-picker-select" class="primary" type="button">使用此文件夹</button>
       </div>
     </form>
   </dialog>

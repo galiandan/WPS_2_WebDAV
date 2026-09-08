@@ -318,6 +318,55 @@ func TestUpdatePersistsAndAdopts(t *testing.T) {
 	}
 }
 
+func TestUpdateWithPathsPersistsSelectedFolders(t *testing.T) {
+	dir := mkPrivateDir(t)
+	file := filepath.Join(dir, "workspace.json")
+	state, err := NewWorkspaceState(file, "auto", "auto")
+	if err != nil {
+		t.Fatalf("NewWorkspaceState: %v", err)
+	}
+	mount, err := NewMountWithPath("g1", "folder-42", "项目空间", "/项目/归档")
+	if err != nil {
+		t.Fatalf("NewMountWithPath: %v", err)
+	}
+	if err := state.UpdateWithPaths("g1", "folder-42", "/项目/归档", []Mount{mount}); err != nil {
+		t.Fatalf("UpdateWithPaths: %v", err)
+	}
+	rootPath, err := state.RootPath()
+	if err != nil || rootPath != "/项目/归档" {
+		t.Fatalf("RootPath = %q, %v", rootPath, err)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"group_id":"g1","root_id":"folder-42","root_path":"/\u9879\u76ee/\u5f52\u6863","spaces":[{"group_id":"g1","root_id":"folder-42","name":"\u9879\u76ee\u7a7a\u95f4","path":"/\u9879\u76ee/\u5f52\u6863"}]}` + "\n"
+	if string(raw) != want {
+		t.Errorf("persisted = %q, want %q", raw, want)
+	}
+	reloaded, err := NewWorkspaceState(file, "auto", "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spaces, err := reloaded.Spaces()
+	if err != nil || len(spaces) != 1 || spaces[0].Path != "/项目/归档" {
+		t.Fatalf("reloaded spaces = %+v, %v", spaces, err)
+	}
+}
+
+func TestSelectionPathValidation(t *testing.T) {
+	for _, path := range []string{"/", "/a/b", "/项目/归档"} {
+		if err := ValidateSelectionPath(path, "path"); err != nil {
+			t.Errorf("valid path %q rejected: %v", path, err)
+		}
+	}
+	for _, path := range []string{"", "a/b", "/a//b", "/a/../b", "/a/./b", "/a\\b"} {
+		if err := ValidateSelectionPath(path, "path"); err == nil {
+			t.Errorf("invalid path %q accepted", path)
+		}
+	}
+}
+
 func TestPersistedFileRoundTripsThroughLoader(t *testing.T) {
 	dir := mkPrivateDir(t)
 	file := filepath.Join(dir, "workspace.json")
