@@ -13,9 +13,14 @@
     entries: [],
     busy: false,
     loading: false,
+    refreshing: false,
+    directoryError: null,
     search: "",
     connection: "checking",
     view: "list",
+    spaces: [],
+    selectedPath: "",
+    pendingDeletes: new Set(),
     sort: { key: "auto", dir: "asc" },
   };
 
@@ -52,9 +57,9 @@
   /* ============ 主题 ============ */
   const THEME_ORDER = ["auto", "light", "dark"];
   const THEME_META = {
-    auto: { icon: "monitor", label: "主题：跟随系统（点击切换为浅色）", color: "#f5f7fc" },
-    light: { icon: "sun", label: "主题：浅色（点击切换为深色）", color: "#f5f7fc" },
-    dark: { icon: "moon", label: "主题：深色（点击切换为跟随系统）", color: "#0e1424" },
+    auto: { icon: "monitor", color: "#f5f7f8" },
+    light: { icon: "sun", color: "#f5f7f8" },
+    dark: { icon: "moon", color: "#121517" },
   };
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
   let theme = PREF.get("theme", "auto");
@@ -75,8 +80,8 @@
       ? (darkQuery.matches ? THEME_META.dark.color : THEME_META.light.color)
       : meta.color;
     const button = $("theme-button");
-    button.title = meta.label;
-    button.setAttribute("aria-label", meta.label);
+    button.title = "打开主题设置";
+    button.setAttribute("aria-label", "打开主题设置");
     const use = $("theme-icon");
     use.setAttribute("href", "#i-" + meta.icon);
     button.classList.remove("spin-icon");
@@ -86,12 +91,91 @@
     document.querySelector('meta[name="theme-color"]').setAttribute("content", resolvedColor);
   }
 
-  function cycleTheme() {
-    theme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
-    PREF.set("theme", theme);
-    applyTheme(true);
-  }
   darkQuery.addEventListener("change", () => { if (theme === "auto") applyTheme(false); });
+
+  let settingsDraftTheme = theme;
+  let settingsInFlight = false;
+  let settingsTrigger = null;
+
+  function renderThemeOptions() {
+    document.querySelectorAll(".theme-option").forEach((button) => {
+      const selected = button.dataset.theme === settingsDraftTheme;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-checked", String(selected));
+    });
+  }
+
+  function setSettingsError(message) {
+    $("settings-error").textContent = message || "";
+  }
+
+  function openSettingsModal() {
+    if (settingsInFlight) return;
+    settingsTrigger = document.activeElement;
+    settingsDraftTheme = theme;
+    $("settings-name").value = rootName;
+    setSettingsError("");
+    renderThemeOptions();
+    $("settings-modal").showModal();
+    setTimeout(() => $("settings-name").focus(), 0);
+  }
+
+  function closeSettingsModal() {
+    const dialog = $("settings-modal");
+    if (dialog.open) dialog.close();
+    if (settingsTrigger && document.contains(settingsTrigger)) settingsTrigger.focus();
+    settingsTrigger = null;
+  }
+
+  async function submitSettings(event) {
+    event.preventDefault();
+    if (settingsInFlight) return;
+    const name = $("settings-name").value.trim();
+    if (!name) {
+      setSettingsError("云盘名称不能为空");
+      $("settings-name").focus();
+      return;
+    }
+    if (name === rootName && settingsDraftTheme === theme) {
+      closeSettingsModal();
+      return;
+    }
+    settingsInFlight = true;
+    const submit = $("settings-submit");
+    submit.disabled = true;
+    setSettingsError("正在保存设置...");
+    try {
+      if (name !== rootName) {
+        const response = await fetch(apiUrl("settings"), {
+          method: "PATCH",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const data = await responseData(response);
+        if (!data || typeof data.name !== "string") throw new Error("服务器没有返回新的云盘名称");
+        rootName = data.name;
+      }
+      theme = settingsDraftTheme;
+      PREF.set("theme", theme);
+      applyTheme(true);
+      applyRootName();
+      closeSettingsModal();
+      setStatus("设置已保存", "success");
+      toast("设置已保存", "success");
+    } catch (error) {
+      if (error && error.status === 401) {
+        closeSettingsModal();
+        showError(error, { notify: false });
+      } else {
+        setSettingsError(error.message || "设置保存失败，请稍后重试");
+      }
+    } finally {
+      settingsInFlight = false;
+      submit.disabled = false;
+    }
+  }
 
   /* ============ REST 基础 ============ */
   function apiUrl(route) {
@@ -190,6 +274,16 @@
       authInFlight = false;
       submit.disabled = false;
     }
+  }
+
+  function togglePassword() {
+    const input = $("login-password");
+    const visible = input.type === "text";
+    input.type = visible ? "password" : "text";
+    $("password-toggle-icon").setAttribute("href", visible ? "#i-eye" : "#i-eye-off");
+    $("password-toggle").title = visible ? "显示密码" : "隐藏密码";
+    $("password-toggle").setAttribute("aria-label", visible ? "显示密码" : "隐藏密码");
+    input.focus();
   }
 
   async function initWebAuth() {
@@ -300,11 +394,16 @@
     const status = $("status");
     status.textContent = message;
     status.parentElement.className = "status-row" + (kind ? " " + kind : "");
+    const statusIcon = $("status-icon");
+    if (statusIcon) {
+      const iconName = kind === "success" ? "check" : kind === "error" ? "alert" : kind === "pending" ? "clock" : "info";
+      statusIcon.querySelector("use").setAttribute("href", `#i-${iconName}`);
+    }
   }
 
   function toast(message, kind = "info", ttl = 4200) {
     const wrap = $("toasts");
-    while (wrap.children.length >= 4) wrap.firstElementChild.remove();
+    while (wrap.children.length >= 3) wrap.firstElementChild.remove();
     const node = el("div", "toast " + kind);
     const iconName = kind === "success" ? "check" : kind === "error" ? "alert"
       : kind === "warn" ? "warn" : "info";
@@ -327,20 +426,33 @@
       node.addEventListener("animationend", () => node.remove(), { once: true });
       setTimeout(() => node.remove(), 400);
     }
-    const timer = setTimeout(dismiss, Math.max(1500, ttl));
+    let timer = setTimeout(dismiss, Math.max(1500, ttl));
+    const pause = () => clearTimeout(timer);
+    const resume = () => { if (!gone) timer = setTimeout(dismiss, Math.max(1500, ttl)); };
+    node.addEventListener("mouseenter", pause);
+    node.addEventListener("mouseleave", resume);
+    node.addEventListener("focusin", pause);
+    node.addEventListener("focusout", resume);
     wrap.append(node);
   }
 
   /* ============ 连接状态 ============ */
   function updateControls() {
     const unavailable = state.connection !== "connected";
+    const virtualRoot = state.path === "/" && state.spaces.length > 0;
     $("settings-button").disabled = state.busy;
-    $("up-button").disabled = state.busy || unavailable || state.path === "/";
+    $("sidebar-refresh-button").disabled = state.busy;
+    $("sidebar-settings-button").disabled = state.busy;
+    // Local navigation remains available when WPS is temporarily down. It
+    // lets a user return to the root or another cached location.
+    $("up-button").disabled = state.busy || state.path === "/";
     $("refresh-button").disabled = state.busy;
     [$("folder-button"), $("upload-button")].forEach((button) => {
-      button.disabled = state.busy || unavailable;
+      button.disabled = state.busy || unavailable || virtualRoot;
     });
-    document.querySelectorAll(".action-button").forEach((button) => {
+    // Empty-state retry and search actions remain usable while WPS is down;
+    // only remote entry operations depend on a connected upstream.
+    document.querySelectorAll("#entries .action-button, #entries .action-menu-trigger").forEach((button) => {
       button.disabled = state.busy || unavailable;
     });
   }
@@ -362,7 +474,7 @@
     const labels = {
       checking: "正在检查 WPS",
       connected: "WPS 已连接",
-      not_configured: "WPS 尚未连接",
+      not_configured: "WPS 尚未配置",
       session_expired: "WPS 登录已过期",
       permission_denied: "无权访问当前工作区",
       upstream_unavailable: "WPS 暂时不可用",
@@ -371,17 +483,64 @@
     };
     const visualClass = state.connection === "connected"
       ? "connected"
-      : ["not_configured", "session_expired", "permission_denied"].includes(state.connection)
-        ? "disconnected"
-        : "unknown";
+      : state.connection === "checking"
+        ? "checking"
+        : ["not_configured", "session_expired", "permission_denied"].includes(state.connection)
+          ? "disconnected"
+          : "unknown";
     badge.className = "connection " + visualClass;
     $("connection-label").textContent = labels[state.connection] || labels.unknown;
+    const iconNames = {
+      checking: "clock",
+      connected: "check",
+      not_configured: "warn",
+      session_expired: "warn",
+      permission_denied: "warn",
+      upstream_unavailable: "alert",
+      invalid_response: "alert",
+      unknown: "info",
+    };
+    $("connection-icon").querySelector("use").setAttribute("href", `#i-${iconNames[state.connection] || "info"}`);
+    updateStatusPanel();
     updateControls();
+  }
+
+  function updateStatusPanel() {
+    const panel = $("status-panel-wps");
+    if (!panel) return;
+    const labels = {
+      checking: "正在检查",
+      connected: "已连接，可访问当前空间",
+      not_configured: "尚未配置 WPS 凭据",
+      session_expired: "登录已过期",
+      permission_denied: "当前空间没有访问权限",
+      upstream_unavailable: "WPS 暂时不可用",
+      invalid_response: "WPS 返回格式异常",
+      unknown: "状态未知",
+    };
+    const indicator = panel.querySelector(".status-indicator");
+    const indicatorClass = state.connection === "connected" ? "ok"
+      : state.connection === "checking" ? "checking"
+        : ["not_configured", "session_expired", "permission_denied"].includes(state.connection) ? "warn" : "bad";
+    indicator.className = "status-indicator " + indicatorClass;
+    $("status-panel-wps-label").textContent = "WPS";
+    $("status-panel-wps-state").textContent = labels[state.connection] || labels.unknown;
+    $("status-panel-message").textContent = state.connection === "connected"
+      ? "当前会话可用，文件操作会按当前 WPS 权限执行。"
+      : connectionMessage(state.connection);
+  }
+
+  function toggleStatusPanel(open) {
+    const panel = $("status-panel");
+    const shouldOpen = open === undefined ? panel.hidden : open;
+    panel.hidden = !shouldOpen;
+    $("connection").setAttribute("aria-expanded", String(shouldOpen));
+    if (shouldOpen) updateStatusPanel();
   }
 
   function connectionMessage(value) {
     const messages = {
-      not_configured: "WPS 尚未连接，请先在自己的电脑运行 wps_login.py 同步凭据，然后点击刷新",
+      not_configured: "WPS 尚未配置，请先在自己的电脑运行 wps_login.py 同步凭据，然后点击刷新",
       session_expired: "WPS 登录已过期，请重新运行 wps_login.py 同步凭据，然后点击刷新",
       permission_denied: "无权访问当前工作区，请检查登录账号或重新选择工作区",
       upstream_unavailable: "WPS 暂时不可用，请稍后点击刷新重试",
@@ -389,6 +548,10 @@
       unknown: "暂时无法判断 WPS 状态，请点击刷新重试",
     };
     return messages[value] || messages.unknown;
+  }
+
+  function isVirtualSpaceEntry(entry) {
+    return Boolean(entry && entry.kind === "folder" && typeof entry.id === "string" && entry.id.startsWith("space:"));
   }
 
   function isWpsError(error) {
@@ -403,6 +566,12 @@
   }
 
   function showError(error, { notify = true } = {}) {
+    if (error && error.status === 401) {
+      showLoginScreen();
+      toggleStatusPanel(false);
+      setAuthMessage("登录已过期，请重新登录");
+      return;
+    }
     if (isWpsError(error)) {
       const connection = error.code === "wps_session_expired"
         ? "session_expired"
@@ -410,6 +579,21 @@
       setConnection(connection);
       setStatus(connectionMessage(connection), "error");
       if (notify) toast(connectionMessage(connection), "error", 6000);
+      return;
+    }
+    const messages = {
+      403: "没有权限执行此操作",
+      404: "文件或文件夹不存在，可能已被删除",
+      409: "名称冲突或目标位置不允许此操作",
+      413: "文件太大，超过服务限制",
+      502: "WPS 暂时不可用，请稍后重试",
+      503: "服务暂时繁忙，请稍后重试",
+      507: "可用空间不足或已达到服务限制",
+    };
+    const friendlyMessage = error && messages[error.status];
+    if (friendlyMessage) {
+      setStatus(friendlyMessage, "error");
+      if (notify) toast(friendlyMessage, "error", 6000);
       return;
     }
     if (state.connection === "checking") setConnection("unknown");
@@ -474,7 +658,13 @@
 
   function sortedEntries(entries) {
     const { key, dir } = state.sort;
-    if (key === "auto") return entries;
+    if (key === "auto") {
+      return entries.slice().sort((a, b) => {
+        const folderDelta = (b.kind === "folder") - (a.kind === "folder");
+        if (folderDelta) return folderDelta;
+        return String(a.name).localeCompare(String(b.name), "zh-Hans-CN", { numeric: true });
+      });
+    }
     const sign = dir === "desc" ? -1 : 1;
     return entries.slice().sort((a, b) => {
       const folderDelta = (b.kind === "folder") - (a.kind === "folder");
@@ -526,13 +716,13 @@
 
   /* ============ 文件类型 ============ */
   const EXT_KINDS = [
-    [["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "avif", "heic"], "image", "tint-violet", "图片"],
+    [["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "avif", "heic"], "image", "tint-cyan", "图片"],
     [["mp4", "mov", "avi", "mkv", "webm", "flv", "m4v", "wmv"], "video", "tint-red", "视频"],
     [["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"], "music", "tint-cyan", "音频"],
-    [["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso"], "archive", "tint-amber", "压缩包"],
+    [["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso"], "archive", "tint-slate", "压缩包"],
     [["doc", "docx", "txt", "rtf", "md", "pages"], "file-text", "tint-blue", "文档"],
     [["xls", "xlsx", "csv", "numbers"], "sheet", "tint-green", "表格"],
-    [["ppt", "pptx", "key"], "image", "tint-amber", "幻灯片"],
+    [["ppt", "pptx", "key"], "file-text", "tint-red", "幻灯片"],
     [["pdf"], "file-text", "tint-red", "PDF"],
     [["js", "ts", "html", "css", "json", "py", "go", "java", "c", "cpp", "h", "sh", "yml", "yaml", "xml", "sql"], "code", "tint-slate", "代码"],
   ];
@@ -548,8 +738,10 @@
   }
 
   function glyphNode(entry, large = false) {
-    const spec = entry.kind === "folder"
-      ? { icon: "folder", tint: "tint-amber" }
+    const spec = isVirtualSpaceEntry(entry)
+      ? { icon: "cloud", tint: "tint-blue" }
+      : entry.kind === "folder"
+        ? { icon: "folder", tint: "tint-amber" }
       : extKind(entry.name);
     const glyph = el("span", "entry-glyph " + spec.tint + (large ? " lg" : ""));
     glyph.setAttribute("aria-hidden", "true");
@@ -643,9 +835,56 @@
     const title = parts.length ? parts[parts.length - 1] : rootName;
     $("folder-title").textContent = title;
     $("folder-note").textContent = parts.length ? "当前文件夹中的文件和文件夹" : `管理 ${rootName} 中的文件和文件夹`;
-    $("path-value").textContent = state.path;
     $("drop-target").textContent = state.path;
     document.title = title === rootName ? rootName : `${title} · ${rootName}`;
+    updateControls();
+  }
+
+  function closeMobileNav() {
+    document.body.classList.remove("nav-open");
+    const button = $("nav-menu-button");
+    if (button) button.setAttribute("aria-expanded", "false");
+    const scrim = $("mobile-scrim");
+    if (scrim) scrim.hidden = true;
+    if (button && document.contains(button)) button.focus();
+  }
+
+  function openMobileNav() {
+    document.body.classList.add("nav-open");
+    const button = $("nav-menu-button");
+    if (button) button.setAttribute("aria-expanded", "true");
+    const scrim = $("mobile-scrim");
+    if (scrim) scrim.hidden = false;
+    setTimeout(() => { if ($("sidebar-close") && document.body.classList.contains("nav-open")) $("sidebar-close").focus(); }, 0);
+  }
+
+  function renderSpaceNav(rootEntries = null) {
+    if (Array.isArray(rootEntries)) {
+      state.spaces = rootEntries.filter(isVirtualSpaceEntry).map((entry) => ({
+        name: entry.name,
+        path: joinPath("/", entry.name),
+      }));
+    }
+    const root = $("space-root");
+    const list = $("space-list");
+    if (!root || !list) return;
+    root.classList.toggle("active", state.path === "/");
+    list.replaceChildren();
+    state.spaces.forEach((space) => {
+      const active = state.path === space.path || state.path.startsWith(space.path + "/");
+      const button = el("button", "space-item" + (active ? " active" : ""));
+      button.type = "button";
+      button.title = space.name;
+      button.setAttribute("aria-label", `进入空间 ${space.name}`);
+      const iconWrap = el("span", "space-item-icon");
+      iconWrap.append(icon("cloud"));
+      button.append(iconWrap, el("span", "space-item-name", space.name));
+      button.addEventListener("click", () => {
+        closeMobileNav();
+        load(space.path);
+      });
+      list.append(button);
+    });
     updateControls();
   }
 
@@ -686,6 +925,21 @@
     return state.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(query));
   }
 
+  function updateSearchControls() {
+    const input = $("search-input");
+    const clear = $("search-clear");
+    const hasQuery = Boolean(input.value);
+    clear.hidden = !hasQuery;
+    clear.tabIndex = hasQuery ? 0 : -1;
+  }
+
+  function clearSearch() {
+    state.search = "";
+    $("search-input").value = "";
+    updateSearchControls();
+    renderEntries({ animate: false });
+  }
+
   function actionButton(label, title, iconName, handler, danger = false) {
     const button = el("button", "action-button" + (danger ? " danger" : ""));
     button.type = "button";
@@ -697,20 +951,109 @@
     return button;
   }
 
+  let openActionMenu = null;
+
+  function closeActionMenu(restoreFocus = false) {
+    if (!openActionMenu) return;
+    const menu = openActionMenu;
+    menu.classList.remove("open");
+    const trigger = menu.querySelector(".action-menu-trigger");
+    if (trigger) trigger.setAttribute("aria-expanded", "false");
+    openActionMenu = null;
+    if (restoreFocus && trigger && document.contains(trigger)) trigger.focus();
+  }
+
+  function menuItem(label, title, iconName, handler, danger = false) {
+    const item = el("button", "menu-item" + (danger ? " danger" : ""));
+    item.type = "button";
+    item.setAttribute("role", "menuitem");
+    item.title = title;
+    item.append(icon(iconName), el("span", "label", label));
+    item.addEventListener("click", () => {
+      closeActionMenu();
+      handler();
+    });
+    return item;
+  }
+
+  function entryMenu(entry, entryPath) {
+    const menu = el("div", "action-menu");
+    const trigger = el("button", "action-menu-trigger icon-button small");
+    trigger.type = "button";
+    trigger.title = "更多操作";
+    trigger.setAttribute("aria-label", `更多操作：${entry.name}`);
+    trigger.setAttribute("aria-haspopup", "menu");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.append(icon("more"));
+
+    const popover = el("div", "action-menu-popover");
+    popover.setAttribute("role", "menu");
+    popover.append(
+      menuItem("重命名", "重命名", "pencil", () => rename(entry, entryPath)),
+      menuItem("移动", "移动到其他文件夹", "move", () => move(entry, entryPath)),
+      menuItem("删除", "删除", "trash", () => remove(entry, entryPath), true),
+    );
+
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (openActionMenu === menu) {
+        closeActionMenu();
+        return;
+      }
+      closeActionMenu();
+      openActionMenu = menu;
+      menu.classList.add("open");
+      trigger.setAttribute("aria-expanded", "true");
+      const first = popover.querySelector(".menu-item");
+      if (first) setTimeout(() => first.focus(), 0);
+    });
+    menu.append(trigger, popover);
+    return menu;
+  }
+
   function entryActions(entry, entryPath) {
     const actions = el("div", "actions");
-    if (entry.kind === "file") {
-      actions.append(actionButton("下载", "下载文件", "download", () => download(entry, entryPath)));
+    if (isVirtualSpaceEntry(entry)) return actions;
+    if (state.pendingDeletes.has(entryPath)) {
+      actions.append(el("span", "entry-pending", "正在删除"));
+      return actions;
     }
-    actions.append(actionButton("改名", "重命名", "pencil", () => rename(entry, entryPath)));
-    actions.append(actionButton("移动", "移动到其他文件夹", "move", () => move(entry, entryPath)));
-    actions.append(actionButton("删除", "删除", "trash", () => remove(entry, entryPath), true));
+    if (entry.kind === "file") {
+      let downloadButton;
+      downloadButton = actionButton("下载", "下载文件", "download", () => download(entry, entryPath, downloadButton));
+      actions.append(downloadButton);
+    }
+    actions.append(entryMenu(entry, entryPath));
     return actions;
+  }
+
+  function selectEntry(entryPath) {
+    closeActionMenu();
+    state.selectedPath = entryPath;
+    document.querySelectorAll("[data-entry-path]").forEach((node) => {
+      const selected = node.dataset.entryPath === entryPath;
+      node.classList.toggle("is-selected", selected);
+      node.querySelectorAll(".entry-name, .card-name").forEach((button) => {
+        button.setAttribute("aria-pressed", String(selected));
+      });
+    });
   }
 
   function openTarget(entry, entryPath) {
     if (entry.kind === "folder") load(entryPath);
-    else download(entry, entryPath);
+    else selectEntry(entryPath);
+  }
+
+  function directoryErrorFor(error) {
+    if (!error) return null;
+    if (isWpsError(error) || error.status === 401) return null;
+    if (error.status === 403) {
+      return { mode: "permission", title: "没有权限访问此目录", note: "请返回上一级或检查当前 WPS 空间权限" };
+    }
+    if (error.status === 404) {
+      return { mode: "missing", title: "此目录不存在或已被移动", note: "请刷新或返回上一级" };
+    }
+    return { mode: "read-error", title: "目录读取失败", note: "暂时无法读取此目录，请重试" };
   }
 
   function renderEmpty(entries) {
@@ -718,22 +1061,28 @@
     empty.classList.toggle("hidden", entries.length !== 0 || state.loading);
     if (entries.length || state.loading) return;
     const unavailable = state.connection !== "connected" && state.connection !== "checking";
-    const mode = unavailable ? "offline" : state.entries.length ? "search" : "empty";
+    const mode = state.directoryError ? state.directoryError.mode : unavailable ? "offline" : state.entries.length ? "search" : "empty";
     empty.dataset.mode = mode;
     const art = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     art.setAttribute("class", "illustration");
     const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-    use.setAttribute("href", mode === "search" ? "#i-ill-search" : mode === "offline" ? "#i-ill-offline" : "#i-ill-empty");
+    const illustration = mode === "search" ? "#i-ill-search"
+      : mode === "offline" ? "#i-ill-offline"
+        : mode === "missing" ? "#i-folder" : mode === "permission" || mode === "read-error" ? "#i-alert" : "#i-ill-empty";
+    use.setAttribute("href", illustration);
     art.append(use);
     const title = el("strong");
     const note = el("span");
-    if (unavailable) {
+    if (state.directoryError) {
+      title.textContent = state.directoryError.title;
+      note.textContent = state.directoryError.note;
+    } else if (unavailable) {
       title.textContent = state.connection === "permission_denied"
         ? "无权访问当前工作区"
         : state.connection === "session_expired"
           ? "WPS 登录已过期"
           : state.connection === "not_configured"
-            ? "WPS 尚未连接"
+            ? "WPS 尚未配置"
             : "暂时无法读取目录";
       note.textContent = connectionMessage(state.connection);
     } else if (state.entries.length) {
@@ -743,11 +1092,20 @@
       title.textContent = "这个文件夹还是空的";
       note.textContent = "上传文件或新建文件夹开始使用";
     }
-    empty.replaceChildren(art, title, note);
+    const actions = el("div", "empty-actions");
+    if (mode === "search") {
+      actions.append(actionButton("清除搜索", "清除搜索条件", "x", clearSearch));
+    } else if (mode !== "empty" || state.path !== "/") {
+      actions.append(actionButton("重试", "重新读取当前目录", "refresh", () => load(state.path, false, true)));
+      if (state.path !== "/") {
+        actions.append(actionButton("返回上一级", "返回上一级目录", "up", () => load(parentPath(state.path))));
+      }
+    }
+    empty.replaceChildren(art, title, note, actions);
   }
 
   function renderEntries({ animate = false } = {}) {
-    if (state.loading) {
+    if (state.loading && !state.refreshing) {
       // 目录加载中：只展示骨架屏，避免把上一次的数据闪出来。
       renderSkeleton();
       return;
@@ -756,10 +1114,12 @@
     hideSkeleton();
     const entries = sortedEntries(filteredEntries());
     const isGrid = state.view === "grid";
+    holder.classList.toggle("is-animating", animate);
     holder.setAttribute("role", isGrid ? "list" : "table");
     holder.replaceChildren();
     renderEmpty(entries);
     const query = state.search.trim().toLocaleLowerCase();
+    updateSearchControls();
     entries.forEach((entry, index) => {
       const entryPath = joinPath(state.path, entry.name);
       let node;
@@ -771,10 +1131,12 @@
         if (entry.kind === "folder") top.append(icon("chev-right", "card-chev"));
         const name = el("button", "card-name");
         name.type = "button";
-        name.title = entry.kind === "folder" ? "打开文件夹" : "下载文件";
+        name.title = entry.name;
+        name.setAttribute("aria-label", `${entry.kind === "folder" ? "打开文件夹" : "选择文件"}：${entry.name}`);
+        if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPath === entryPath));
         name.append(highlightedName(entry.name, query));
         name.addEventListener("click", () => openTarget(entry, entryPath));
-        const typeLabel = entry.kind === "folder" ? "文件夹" : extKind(entry.name).label;
+        const typeLabel = isVirtualSpaceEntry(entry) ? "WPS 空间" : entry.kind === "folder" ? "文件夹" : extKind(entry.name).label;
         const meta = el("div", "card-meta",
           entry.kind === "folder"
             ? typeLabel
@@ -788,14 +1150,22 @@
         const nameCell = el("div", "cell name name-cell");
         nameCell.setAttribute("role", "cell");
         nameCell.append(glyphNode(entry));
+        const nameStack = el("div", "name-stack");
         const name = el("button", "entry-name" + (entry.kind === "folder" ? " folder" : ""));
         name.type = "button";
-        name.title = entry.kind === "folder" ? "打开文件夹" : "下载文件";
+        name.title = entry.name;
+        name.setAttribute("aria-label", `${entry.kind === "folder" ? "打开文件夹" : "选择文件"}：${entry.name}`);
+        if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPath === entryPath));
         name.append(highlightedName(entry.name, query));
         name.addEventListener("click", () => openTarget(entry, entryPath));
-        nameCell.append(name);
-        const typeCell = el("div", "cell type meta",
-          entry.kind === "folder" ? "文件夹" : extKind(entry.name).label);
+        nameStack.append(name);
+        const typeLabel = isVirtualSpaceEntry(entry) ? "WPS 空间" : entry.kind === "folder" ? "文件夹" : extKind(entry.name).label;
+        const mobileMeta = el("div", "entry-mobile-meta",
+          entry.kind === "folder" ? `${typeLabel} · ${formatShortTime(entry.modified_at)}` :
+            `${typeLabel} · ${formatBytes(entry.size)} · ${formatShortTime(entry.modified_at)}`);
+        nameStack.append(mobileMeta);
+        nameCell.append(nameStack);
+        const typeCell = el("div", "cell type meta", typeLabel);
         typeCell.setAttribute("role", "cell");
         const sizeCell = el("div", "cell size meta",
           entry.kind === "folder" ? "—" : formatBytes(entry.size));
@@ -807,7 +1177,10 @@
         opsCell.append(entryActions(entry, entryPath));
         node.append(nameCell, typeCell, sizeCell, timeCell, opsCell);
       }
+      node.dataset.entryPath = entryPath;
+      if (state.selectedPath === entryPath) node.classList.add("is-selected");
       if (animate) node.style.setProperty("--i", String(Math.min(index, 14)));
+      if (state.pendingDeletes.has(entryPath)) node.classList.add("is-pending");
       holder.append(node);
     });
     updateControls();
@@ -826,71 +1199,117 @@
   }
 
   /* ============ 连接检查与加载 ============ */
+  let connectionCheck = null;
+
   async function checkConnection(quiet = false) {
-    const previousConnection = state.connection;
-    setConnection("checking");
+    if (connectionCheck) return connectionCheck;
+    connectionCheck = (async () => {
+      const previousConnection = state.connection;
+      setConnection("checking");
+      try {
+        const data = await apiRequest("status");
+        const value = data && typeof data.status === "string" ? data.status : "invalid_response";
+        if (value === "connected" && previousConnection !== "connected") {
+          clearDirectoryCache();
+        }
+        setConnection(value);
+        if (value !== "connected" && (!quiet || state.entries.length === 0)) {
+          setStatus(connectionMessage(state.connection), "error");
+        }
+        return state.connection;
+      } catch (error) {
+        showError(error, { notify: !quiet });
+        return state.connection;
+      }
+    })();
     try {
-      const data = await apiRequest("status");
-      const value = data && typeof data.status === "string" ? data.status : "invalid_response";
-      if (value === "connected" && previousConnection !== "connected") {
-        clearDirectoryCache();
-      }
-      setConnection(value);
-      if (value !== "connected" && (!quiet || state.entries.length === 0)) {
-        setStatus(connectionMessage(state.connection), "error");
-      }
-      return state.connection;
-    } catch (error) {
-      showError(error, { notify: !quiet });
-      return state.connection;
+      return await connectionCheck;
+    } finally {
+      connectionCheck = null;
     }
   }
 
   async function load(path, quiet = false, force = false) {
-    if (state.busy && !force) return;
     const targetPath = canonicalPath(path);
+    const previousPath = state.path;
+    const preserveCurrentList = targetPath === state.path && force && state.entries.length > 0;
     const requestGeneration = ++navigationGeneration;
+    closeActionMenu();
+    if (targetPath !== previousPath) state.selectedPath = "";
     state.path = targetPath;
     state.search = "";
     $("search-input").value = "";
+    updateSearchControls();
+    state.directoryError = null;
     syncHash(targetPath);
     renderBreadcrumbs();
     state.loading = true;
+    state.refreshing = preserveCurrentList;
     $("refresh-button").classList.add("busy");
-    if (!quiet) setStatus("正在读取...");
-    renderSkeleton();
+    $("refresh-progress").hidden = !state.refreshing;
+    if (!quiet) setStatus(state.refreshing ? "正在刷新..." : "正在读取...");
+    if (!state.refreshing) renderSkeleton();
     renderEntries({ animate: false });
     try {
       const connection = await checkConnection(quiet);
       if (connection !== "connected") {
         if (requestGeneration !== navigationGeneration) return;
         state.loading = false;
-        state.entries = [];
+        const cached = !force ? directoryCache.get(targetPath) : null;
+        const fallbackEntries = preserveCurrentList
+          ? state.entries
+          : cached && Array.isArray(cached.entries) ? cached.entries : [];
+        state.entries = fallbackEntries;
+        if (state.entries.length) {
+          if (targetPath === "/") renderSpaceNav(state.entries);
+          setStatus(`${connectionMessage(connection)}（显示缓存内容，尚未确认最新状态）`, "error");
+        }
         renderEntries({ animate: true });
         return;
       }
       const entries = await directoryEntries(targetPath, force);
       if (requestGeneration !== navigationGeneration) return;
       state.loading = false;
+      state.refreshing = false;
+      $("refresh-progress").hidden = true;
       state.entries = entries;
+      state.directoryError = null;
       setConnection("connected");
+      if (targetPath === "/") {
+        renderSpaceNav(entries);
+      } else if (state.spaces.length === 0) {
+        directoryEntries("/").then((rootEntries) => renderSpaceNav(rootEntries)).catch(() => {});
+      } else {
+        renderSpaceNav();
+      }
       renderEntries({ animate: true });
       prefetchChildDirectories(targetPath, state.entries);
       setStatus(`${state.entries.length} 个项目`, "success");
     } catch (error) {
       if (requestGeneration !== navigationGeneration) return;
       state.loading = false;
-      state.entries = [];
+      state.refreshing = false;
+      $("refresh-progress").hidden = true;
+      if (!preserveCurrentList) state.entries = [];
+      state.directoryError = directoryErrorFor(error);
       showError(error, { notify: !quiet });
       renderEntries({ animate: true });
     } finally {
       if (requestGeneration === navigationGeneration) {
+        state.loading = false;
+        state.refreshing = false;
+        $("refresh-progress").hidden = true;
         $("refresh-button").classList.remove("busy");
       }
     }
   }
 
-  function download(entry, path) {
+  function download(entry, path, button = null) {
+    if (button && button.disabled) return;
+    if (button) {
+      button.disabled = true;
+      button.classList.add("busy");
+    }
     const link = document.createElement("a");
     link.href = pathUrl("download", path).toString();
     // Let the server's Content-Disposition choose the filename. This
@@ -900,6 +1319,7 @@
     link.click();
     link.remove();
     toast(`已开始下载 “${entry.name}”`, "info", 2600);
+    if (button) setTimeout(() => { button.disabled = false; button.classList.remove("busy"); }, 900);
   }
 
   /* ============ 云盘名称 ============ */
@@ -921,42 +1341,24 @@
     }
   }
 
-  async function changeRootName() {
-    const name = await openInputModal("设置云盘名称", "云盘名称", rootName, "例如：我的云盘", "保存");
-    if (!name || name === rootName) return;
-    setBusy(true);
-    try {
-      const response = await fetch(apiUrl("settings"), {
-        method: "PATCH",
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      const data = await responseData(response);
-      if (!data || typeof data.name !== "string") throw new Error("服务器没有返回新的云盘名称");
-      rootName = data.name;
-      applyRootName();
-      setStatus("云盘名称已更新", "success");
-      toast("云盘名称已更新", "success");
-    } catch (error) { showError(error); }
-    finally { setBusy(false); renderBreadcrumbs(); }
-  }
-
   /* ============ 对话框（输入 / 确认） ============ */
   let modalResolve = null;
   let modalMode = "input";
+  let modalTrigger = null;
 
   function closeModal(value) {
     if (!modalResolve) return;
     const resolve = modalResolve;
     modalResolve = null;
     $("modal").close();
+    if (modalTrigger && document.contains(modalTrigger)) modalTrigger.focus();
+    modalTrigger = null;
     resolve(value);
   }
 
   function openInputModal(title, label, value = "", placeholder = "", submitText = "确定") {
     modalMode = "input";
+    modalTrigger = document.activeElement;
     $("modal-title").textContent = title;
     $("modal-message").classList.add("hidden");
     $("modal-label").classList.remove("hidden");
@@ -972,6 +1374,7 @@
 
   function openConfirmModal(title, message, submitText = "确定", danger = false) {
     modalMode = "confirm";
+    modalTrigger = document.activeElement;
     $("modal-title").textContent = title;
     $("modal-message").textContent = message;
     $("modal-message").classList.remove("hidden");
@@ -979,7 +1382,9 @@
     $("modal-submit").textContent = submitText;
     $("modal-submit").className = danger ? "danger-solid" : "primary";
     $("modal").showModal();
-    setTimeout(() => $("modal-submit").focus(), 0);
+    // Destructive actions and overwrite prompts both default to the
+    // non-destructive choice, so Enter cannot confirm them accidentally.
+    setTimeout(() => $("modal-cancel").focus(), 0);
     return new Promise((resolve) => { modalResolve = resolve; });
   }
 
@@ -990,12 +1395,21 @@
   let pickerLoading = false;
   let pickerFirstLoad = false;
   let pickerFallback = false;
+  let pickerTrigger = null;
+  let pickerGeneration = 0;
 
   function pickerCanMoveHere() {
     if (pickerLoading) return false;
     if (pickerCurrent === parentPath(pickerSourcePath)) return false;
     if (pickerCurrent === pickerSourcePath) return false;
     if (pickerSourcePath !== "/" && pickerCurrent.startsWith(pickerSourcePath + "/")) return false;
+    if (state.spaces.length > 0) {
+      const sourceSpace = pickerSourcePath.split("/").filter(Boolean)[0] || "";
+      const targetSpace = pickerCurrent.split("/").filter(Boolean)[0] || "";
+      // The current backend does not promise cross-space moves and the
+      // virtual root is not a writable destination.
+      if (!sourceSpace || sourceSpace !== targetSpace) return false;
+    }
     return true;
   }
 
@@ -1021,12 +1435,14 @@
 
   async function renderPickerList() {
     const list = $("picker-list");
+    const generation = ++pickerGeneration;
     const firstLoad = pickerFirstLoad;
+    pickerLoading = true;
     renderPickerSkeleton();
     renderPickerState();
     try {
       const entries = await directoryEntries(pickerCurrent);
-      if (pickerResolve === null) return;
+      if (pickerResolve === null || generation !== pickerGeneration) return;
       list.replaceChildren();
       const folders = entries.filter((entry) => {
         if (!entry || entry.kind !== "folder") return false;
@@ -1054,6 +1470,7 @@
       pickerFirstLoad = false;
       renderPickerState();
     } catch (error) {
+      if (generation !== pickerGeneration) return;
       pickerLoading = false;
       if (firstLoad && pickerResolve) {
         // 首次读取就失败说明目录接口不可用：关闭选择器，让移动操作
@@ -1070,21 +1487,27 @@
 
   function closePicker(value) {
     if (!pickerResolve) return null;
+    pickerGeneration += 1;
     const resolve = pickerResolve;
     pickerResolve = null;
     $("picker").close();
+    if (pickerTrigger && document.contains(pickerTrigger)) pickerTrigger.focus();
+    pickerTrigger = null;
     resolve(value);
   }
 
   function openFolderPicker(sourcePath) {
+    pickerTrigger = document.activeElement;
     pickerSourcePath = sourcePath;
     pickerCurrent = parentPath(sourcePath);
     pickerLoading = true;
     pickerFirstLoad = true;
     $("picker-subtitle").textContent = `选择 “${sourcePath.split("/").filter(Boolean).pop() || "项目"}” 的目标文件夹`;
     $("picker").showModal();
-    renderPickerList();
-    return new Promise((resolve) => { pickerResolve = resolve; });
+    return new Promise((resolve) => {
+      pickerResolve = resolve;
+      renderPickerList();
+    });
   }
 
   /* ============ 文件操作 ============ */
@@ -1139,19 +1562,42 @@
   async function remove(entry, path) {
     const confirmed = await openConfirmModal("删除项目", `确定删除“${entry.name}”吗？此操作会同步到 WPS。`, "删除", true);
     if (!confirmed) return;
+    const sourcePath = state.path;
+    state.pendingDeletes.add(path);
+    renderEntries({ animate: false });
+    setStatus("正在提交删除...", "pending");
     setBusy(true);
     try {
       await api("entries", path, { method: "DELETE" });
+      setStatus("删除已确认，正在刷新目录...", "pending");
       clearDirectoryCache();
+      state.pendingDeletes.delete(path);
+      if (state.path === sourcePath) await load(sourcePath, true, true);
       setStatus("项目已删除", "success");
       toast(`“${entry.name}” 已删除`, "success");
-      await load(state.path, true, true);
-    } catch (error) { showError(error); }
+    } catch (error) {
+      state.pendingDeletes.delete(path);
+      renderEntries({ animate: false });
+      showError(error);
+    }
     finally { setBusy(false); renderBreadcrumbs(); }
   }
 
   /* ============ 上传托盘 ============ */
-  const tray = { active: false, cancelled: false, xhr: null, files: [], states: [], done: 0 };
+  const tray = {
+    active: false,
+    cancelled: false,
+    xhr: null,
+    files: [],
+    states: [],
+    loaded: [],
+    speeds: [],
+    errors: [],
+    targets: [],
+    existingEntries: [],
+    cancelledItems: new Set(),
+    done: 0,
+  };
 
   function trayIconWrap(iconName, cls) {
     const wrap = el("span", "t-ic " + cls);
@@ -1164,50 +1610,87 @@
     if (!item) return;
     const st = tray.states[index];
     item.className = "tray-item " + st;
-    const left = item.children[0];
-    const right = item.children[2];
-    left.replaceChildren();
-    right.replaceChildren();
-    if (st === "active") {
-      left.append(el("span", "tray-spinner"));
-    } else if (st === "pending") {
-      left.append(el("span", "tray-dot"));
-    } else if (st === "done") {
-      left.append(trayIconWrap("check", "ok"));
-      right.append(el("span", "", "完成"));
-    } else if (st === "error") {
-      left.append(trayIconWrap("alert", "bad"));
-      right.append(el("span", "", "失败"));
-    } else if (st === "skipped") {
-      left.append(trayIconWrap("x", ""));
-      right.append(el("span", "", "跳过"));
+    const iconHolder = item.querySelector(".tray-state-icon");
+    iconHolder.replaceChildren();
+    const iconName = st === "active" || st === "confirming" ? null
+      : st === "done" ? "check"
+        : st === "error" ? "alert"
+          : st === "skipped" || st === "cancelled" ? "x" : "clock";
+    if (st === "active" || st === "confirming" || st === "cancelling") {
+      iconHolder.append(el("span", st === "cancelling" ? "tray-cancel-spinner" : "tray-spinner"));
     } else {
-      left.append(trayIconWrap("x", ""));
-      right.append(el("span", "", "已取消"));
+      iconHolder.append(trayIconWrap(iconName, st === "done" ? "ok" : st === "error" ? "bad" : ""));
     }
+    const file = tray.files[index];
+    const size = file ? formatBytes(file.size) : "-";
+    const loaded = Math.max(0, Number(tray.loaded[index]) || 0);
+    const percent = file && file.size > 0 ? Math.min(100, loaded * 100 / file.size) : 0;
+    const statusText = {
+      pending: "等待上传",
+      active: "上传中",
+      confirming: "正在确认上传结果",
+      cancelling: "正在取消",
+      done: "上传完成",
+      error: tray.errors[index] || "上传失败",
+      skipped: "已跳过",
+      cancelled: "已取消",
+    }[st] || "等待上传";
+    item.querySelector(".tray-status").textContent = statusText;
+    item.querySelector(".tray-target").textContent = `上传到 ${tray.targets[index] || "/"}`;
+    item.querySelector(".tray-size").textContent = `${formatBytes(loaded)} / ${size}`;
+    item.querySelector(".tray-rate").textContent = tray.speeds[index] || "计算中";
+    item.querySelector(".tray-progress-bar").style.width = `${percent}%`;
+    const cancel = item.querySelector(".tray-item-action");
+    const canCancel = st === "pending" || st === "active" || st === "confirming";
+    const canRetry = st === "error" || st === "skipped";
+    cancel.hidden = !canCancel && !canRetry;
+    cancel.disabled = st === "cancelling";
+    cancel.title = canRetry ? "重新上传此文件" : "取消此文件上传";
+    cancel.setAttribute("aria-label", cancel.title);
+    cancel.replaceChildren(icon(canRetry ? "refresh" : "x"));
   }
 
-  function trayReset(files) {
+  function trayReset(files, targetPath) {
     tray.active = true;
     tray.cancelled = false;
     tray.done = 0;
     tray.files = files.slice();
     tray.states = files.map(() => "pending");
+    tray.loaded = files.map(() => 0);
+    tray.speeds = files.map(() => "等待上传");
+    tray.errors = files.map(() => "");
+    tray.targets = files.map(() => targetPath);
+    tray.existingEntries = [];
+    tray.cancelledItems = new Set();
     const list = $("tray-list");
     list.replaceChildren();
-    files.forEach((file) => {
+    files.forEach((file, index) => {
       const item = el("li", "tray-item pending");
-      const left = el("span", "t-state");
-      left.append(el("span", "tray-dot"));
+      const top = el("div", "tray-item-top");
+      const left = el("span", "tray-state-icon");
       const name = el("span", "t-name", file.name);
       name.title = file.name;
-      const right = el("span", "t-state");
-      item.append(left, name, right);
+      const status = el("span", "tray-status", "等待上传");
+      top.append(left, name, status);
+      const target = el("div", "tray-target", `上传到 ${targetPath}`);
+      const progress = el("div", "tray-item-progress");
+      progress.append(el("span", "tray-progress-bar"));
+      const stats = el("div", "tray-item-stats");
+      stats.append(el("span", "tray-size", `0 B / ${formatBytes(file.size)}`), el("span", "tray-rate", "等待上传"));
+      const cancel = el("button", "tray-item-action");
+      cancel.type = "button";
+      cancel.dataset.index = String(index);
+      cancel.title = "取消此文件上传";
+      cancel.setAttribute("aria-label", cancel.title);
+      cancel.append(icon("x"));
+      item.append(top, target, progress, stats, cancel);
+      cancel.addEventListener("click", () => trayCancelItem(index));
       list.append(item);
+      traySetItem(index);
     });
     list.classList.toggle("has-multi", files.length > 1);
     $("tray-cancel").classList.remove("hidden");
-    $("tray-close").classList.add("hidden");
+    $("tray-close").classList.remove("hidden");
     $("tray-count").textContent = files.length > 1 ? `0 / ${files.length}` : "";
     $("tray-percent").textContent = "0%";
     setRing(0);
@@ -1230,14 +1713,11 @@
 
   function trayFinishAll(ok, message) {
     tray.active = false;
+    tray.xhr = null;
     $("tray-cancel").classList.add("hidden");
     $("tray-close").classList.remove("hidden");
-    if (ok) {
-      $("tray-speed").textContent = message || "全部完成";
-      setTimeout(() => {
-        if (!tray.active) trayHide();
-      }, 2400);
-    }
+    $("tray-speed").textContent = message || (ok ? "全部完成" : "队列已停止");
+    if (ok) setTimeout(() => { if (!tray.active) trayHide(); }, 2400);
   }
 
   function trayHide() {
@@ -1245,16 +1725,52 @@
     $("upload-tray").setAttribute("aria-hidden", "true");
   }
 
+  function trayCancelItem(index) {
+    const st = tray.states[index];
+    if (st === "pending") {
+      tray.cancelledItems.add(index);
+      tray.states[index] = "cancelled";
+      traySetItem(index);
+      return;
+    }
+    if (st === "error" || st === "skipped") {
+      if (state.connection !== "connected") {
+        toast("WPS 当前不可用，请恢复连接后重试", "warn", 5200);
+        return;
+      }
+      tray.states[index] = "pending";
+      tray.errors[index] = "";
+      tray.loaded[index] = 0;
+      tray.speeds[index] = "等待上传";
+      traySetItem(index);
+      uploadFiles([tray.files[index]], { targetPath: tray.targets[index], retryIndex: index });
+      return;
+    }
+    if (st === "active" || st === "confirming") {
+      tray.cancelledItems.add(index);
+      tray.states[index] = "cancelling";
+      traySetItem(index);
+      if (tray.xhr) tray.xhr.abort();
+    }
+  }
+
   function trayCancel() {
     if (!tray.active) return;
     tray.cancelled = true;
+    tray.states.forEach((st, index) => {
+      if (st === "pending") {
+        tray.cancelledItems.add(index);
+        tray.states[index] = "cancelled";
+        traySetItem(index);
+      }
+    });
     if (tray.xhr) tray.xhr.abort();
   }
 
   /* ============ 上传 ============ */
-  function uploadOne(file, overwrite) {
+  function uploadOne(file, overwrite, targetPath, index) {
     return new Promise((resolve, reject) => {
-      const url = pathUrl("upload", joinPath(state.path, file.name));
+      const url = pathUrl("upload", joinPath(targetPath, file.name));
       if (overwrite) url.searchParams.set("overwrite", "true");
       const startedAt = performance.now();
       const updateSpeed = (loaded) => {
@@ -1269,14 +1785,20 @@
       xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
+        tray.loaded[index] = event.loaded;
+        tray.speeds[index] = updateSpeed(event.loaded).split(" · ")[0];
         const percent = event.loaded * 100 / event.total;
         const speedText = updateSpeed(event.loaded);
+        tray.states[index] = event.loaded >= event.total ? "confirming" : "active";
+        traySetItem(index);
         setRing(percent);
         trayCurrent(file, percent, speedText);
         setStatus(`正在上传 ${file.name} · ${Math.round(percent)}%`);
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
+          tray.loaded[index] = file.size;
+          tray.speeds[index] = updateSpeed(file.size).split(" · ")[0];
           trayCurrent(file, 100, updateSpeed(file.size));
           resolve();
           return;
@@ -1293,64 +1815,102 @@
         reject(error);
       };
       xhr.onerror = () => reject(new Error("上传连接失败"));
-      xhr.onabort = () => reject(new Error("上传已取消"));
+      xhr.onabort = () => {
+        const error = new Error("上传已取消");
+        error.cancelled = true;
+        reject(error);
+      };
       xhr.send(file);
     });
   }
 
-  async function uploadFiles(files) {
-    if (!files.length || state.busy || state.connection !== "connected") return;
+  async function uploadQueueItem(index) {
+    if (tray.cancelled || tray.cancelledItems.has(index) || tray.states[index] === "cancelled") return true;
+    const file = tray.files[index];
+    if (!file) return true;
+    tray.states[index] = "active";
+    tray.errors[index] = "";
+    tray.speeds[index] = "计算中";
+    traySetItem(index);
+    const existing = tray.existingEntries.find((entry) => entry.name === file.name);
+    let overwrite = false;
+    if (existing) {
+      if (existing.kind !== "file") {
+        tray.states[index] = "skipped";
+        tray.errors[index] = "同名文件夹无法覆盖";
+        traySetItem(index);
+        toast(`“${file.name}” 与现有文件夹同名，已跳过`, "warn", 5200);
+        return true;
+      }
+      const confirmed = await openConfirmModal("文件已存在", `“${file.name}”已经存在，要覆盖它吗？`, "覆盖", false);
+      if (!confirmed) {
+        tray.states[index] = "skipped";
+        tray.errors[index] = "用户取消覆盖";
+        traySetItem(index);
+        return true;
+      }
+      overwrite = true;
+    }
+    try {
+      await uploadOne(file, overwrite, tray.targets[index], index);
+      tray.done += 1;
+      tray.states[index] = "done";
+      traySetItem(index);
+      clearDirectoryCache();
+      return true;
+    } catch (error) {
+      if (error.cancelled || tray.cancelledItems.has(index) || tray.cancelled) {
+        tray.states[index] = "cancelled";
+        traySetItem(index);
+        return !tray.cancelled;
+      }
+      tray.states[index] = "error";
+      tray.errors[index] = error.message || "上传失败";
+      traySetItem(index);
+      return false;
+    }
+  }
+
+  async function uploadFiles(files, options = {}) {
+    const retryIndex = Number.isInteger(options.retryIndex) ? options.retryIndex : null;
+    const retry = retryIndex !== null && tray.files[retryIndex] === files[0];
+    const targetPath = retry ? tray.targets[retryIndex] : state.path;
+    if (!files.length || state.connection !== "connected" || (!retry && state.path === "/" && state.spaces.length > 0)) {
+      if (files.length && !retry && state.path === "/" && state.spaces.length > 0) {
+        toast("请先进入一个 WPS 空间再上传文件", "warn", 4200);
+      }
+      return;
+    }
+    if (state.busy && !retry) return;
+    if (retry && tray.active) return;
     setBusy(true);
-    trayReset(files);
+    if (retry) {
+      tray.active = true;
+      tray.cancelled = false;
+      tray.cancelledItems.delete(retryIndex);
+      tray.states[retryIndex] = "pending";
+      tray.loaded[retryIndex] = 0;
+      tray.errors[retryIndex] = "";
+      tray.speeds[retryIndex] = "等待上传";
+      traySetItem(retryIndex);
+      $("tray-cancel").classList.remove("hidden");
+    } else {
+      trayReset(files, targetPath);
+      tray.existingEntries = state.entries.slice();
+    }
     let failure = null;
     try {
-      for (let index = 0; index < files.length; index += 1) {
-        if (tray.cancelled) {
-          for (let rest = index; rest < files.length; rest += 1) {
-            tray.states[rest] = "cancelled";
-            traySetItem(rest);
+      if (retry) {
+        if (!(await uploadQueueItem(retryIndex))) failure = new Error(tray.errors[retryIndex] || "上传失败");
+      } else {
+        for (let index = 0; index < tray.files.length; index += 1) {
+          if (tray.cancelled) break;
+          if (tray.states[index] !== "pending") continue;
+          if (tray.files.length > 1) setStatus(`准备上传第 ${index + 1}/${tray.files.length} 个文件`);
+          $("tray-count").textContent = tray.files.length > 1 ? `${tray.done} / ${tray.files.length}` : "";
+          if (!(await uploadQueueItem(index))) {
+            if (!failure) failure = new Error(tray.errors[index] || "上传失败");
           }
-          break;
-        }
-        const file = files[index];
-        if (files.length > 1) setStatus(`准备上传第 ${index + 1}/${files.length} 个文件`);
-        tray.states[index] = "active";
-        traySetItem(index);
-        $("tray-count").textContent = files.length > 1 ? `${index} / ${files.length}` : "";
-        const existing = state.entries.find((entry) => entry.name === file.name);
-        let overwrite = false;
-        if (existing) {
-          if (existing.kind !== "file") {
-            // 同名文件夹无法被文件覆盖：显式跳过而不是静默丢弃。
-            tray.states[index] = "skipped";
-            traySetItem(index);
-            toast(`“${file.name}” 与现有文件夹同名，已跳过`, "warn", 5200);
-            continue;
-          }
-          const confirmed = await openConfirmModal("文件已存在", `“${file.name}”已经存在，要覆盖它吗？`, "覆盖", false);
-          if (!confirmed) {
-            tray.states[index] = "skipped";
-            traySetItem(index);
-            continue;
-          }
-          overwrite = true;
-        }
-        try {
-          await uploadOne(file, overwrite);
-          tray.done += 1;
-          tray.states[index] = "done";
-          traySetItem(index);
-          $("tray-count").textContent = files.length > 1 ? `${tray.done} / ${files.length}` : "";
-          clearDirectoryCache();
-        } catch (error) {
-          if (tray.cancelled) {
-            tray.states[index] = "cancelled";
-          } else {
-            tray.states[index] = "error";
-            failure = error;
-          }
-          traySetItem(index);
-          break;
         }
       }
       if (tray.cancelled) {
@@ -1361,10 +1921,12 @@
         showError(failure);
         trayFinishAll(false);
       } else {
-        setStatus("上传完成", "success");
-        toast(tray.done > 1 ? `已上传 ${tray.done} 个文件` : "上传完成", "success");
-        trayFinishAll(true);
-        await load(state.path, true, true);
+        const hasSkipped = tray.states.some((item) => item === "cancelled" || item === "skipped");
+        const message = hasSkipped ? `已上传 ${tray.done} 个文件，其他项目未上传` : "上传完成";
+        setStatus(message, tray.done ? "success" : "");
+        toast(message, tray.done ? "success" : "info");
+        trayFinishAll(true, hasSkipped ? "队列已处理" : "全部完成");
+        if (state.path === targetPath) await load(targetPath, true, true);
       }
     } catch (error) {
       showError(error);
@@ -1383,7 +1945,7 @@
   }
 
   function showDropOverlay() {
-    if (state.busy || state.connection !== "connected") return;
+    if (state.busy || state.connection !== "connected" || (state.path === "/" && state.spaces.length > 0)) return;
     $("drop-target").textContent = state.path;
     $("drop-overlay").classList.add("active");
     $("drop-overlay").setAttribute("aria-hidden", "false");
@@ -1396,12 +1958,58 @@
 
   /* ============ 事件绑定 ============ */
   $("login-form").addEventListener("submit", submitAuth);
+  $("password-toggle").addEventListener("click", togglePassword);
   $("logout-button").addEventListener("click", logout);
+  $("connection").addEventListener("click", () => toggleStatusPanel());
+  $("status-panel-close").addEventListener("click", () => toggleStatusPanel(false));
+  $("status-refresh-button").addEventListener("click", async () => {
+    const button = $("status-refresh-button");
+    if (button.disabled) return;
+    button.disabled = true;
+    button.classList.add("busy");
+    try {
+      await checkConnection(false);
+      if (state.connection === "connected" && !state.loading) await load(state.path, true, true);
+    } finally {
+      button.disabled = false;
+      button.classList.remove("busy");
+    }
+  });
+  $("settings-form").addEventListener("submit", submitSettings);
+  $("settings-cancel").addEventListener("click", closeSettingsModal);
+  $("settings-modal").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeSettingsModal();
+  });
+  document.querySelectorAll(".theme-option").forEach((button) => {
+    button.addEventListener("click", () => {
+      settingsDraftTheme = button.dataset.theme;
+      renderThemeOptions();
+    });
+  });
+  $("nav-menu-button").addEventListener("click", () => {
+    if (document.body.classList.contains("nav-open")) closeMobileNav();
+    else openMobileNav();
+  });
+  $("sidebar-close").addEventListener("click", closeMobileNav);
+  $("mobile-scrim").addEventListener("click", closeMobileNav);
+  $("space-root").addEventListener("click", () => {
+    closeMobileNav();
+    load("/");
+  });
 
   $("modal-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    if (modalMode === "input") closeModal($("modal-input").value.trim());
-    else closeModal(true);
+    if (modalMode === "input") {
+      const value = $("modal-input").value.trim();
+      if (!value) {
+        $("modal-message").textContent = "名称不能为空";
+        $("modal-message").classList.remove("hidden");
+        $("modal-input").focus();
+        return;
+      }
+      closeModal(value);
+    } else closeModal(true);
   });
   $("modal-cancel").addEventListener("click", () => closeModal(null));
   $("modal").addEventListener("cancel", (event) => { event.preventDefault(); closeModal(null); });
@@ -1417,12 +2025,16 @@
     renderPickerList();
   });
 
-  $("theme-button").addEventListener("click", cycleTheme);
+  $("theme-button").addEventListener("click", openSettingsModal);
   $("view-list-button").addEventListener("click", () => setView("list"));
   $("view-grid-button").addEventListener("click", () => setView("grid"));
-  $("settings-button").addEventListener("click", changeRootName);
+  $("settings-button").addEventListener("click", openSettingsModal);
   $("up-button").addEventListener("click", () => load(parentPath(state.path)));
   $("refresh-button").addEventListener("click", () => load(state.path, false, true));
+  $("sidebar-refresh-button").addEventListener("click", () => { closeMobileNav(); load(state.path, false, true); });
+  $("sidebar-settings-button").addEventListener("click", () => { closeMobileNav(); openSettingsModal(); });
+  $("sidebar-theme-button").addEventListener("click", () => { closeMobileNav(); openSettingsModal(); });
+  $("sidebar-logout-button").addEventListener("click", logout);
   $("folder-button").addEventListener("click", createFolder);
   $("upload-button").addEventListener("click", () => $("file-input").click());
   $("tray-cancel").addEventListener("click", trayCancel);
@@ -1435,14 +2047,14 @@
 
   $("search-input").addEventListener("input", (event) => {
     state.search = event.target.value;
+    updateSearchControls();
     renderEntries({ animate: false });
   });
+  $("search-clear").addEventListener("click", clearSearch);
   $("search-input").addEventListener("keydown", (event) => {
     if (event.key === "Escape" && $("search-input").value) {
       event.stopPropagation();
-      state.search = "";
-      $("search-input").value = "";
-      renderEntries({ animate: false });
+      clearSearch();
     }
   });
 
@@ -1465,19 +2077,29 @@
     });
   });
 
+  document.addEventListener("click", (event) => {
+    if (openActionMenu && !openActionMenu.contains(event.target)) closeActionMenu();
+  });
+
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && openActionMenu) {
+      closeActionMenu(true);
+      return;
+    }
     const dialogOpen = document.querySelector("dialog[open]");
     const tag = document.activeElement ? document.activeElement.tagName : "";
     const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (event.key === "Escape" && !dialogOpen && !typing && !$('status-panel').hidden) {
+      toggleStatusPanel(false);
+      return;
+    }
     if (event.key === "/" && !dialogOpen && !typing) {
       event.preventDefault();
       $("search-input").focus();
       return;
     }
     if (event.key === "Escape" && !dialogOpen && !typing && state.search) {
-      state.search = "";
-      $("search-input").value = "";
-      renderEntries({ animate: false });
+      clearSearch();
       return;
     }
     if (event.altKey && event.key === "ArrowUp" && !dialogOpen && !typing) {
@@ -1525,8 +2147,13 @@
     const previous = state.connection;
     const current = await checkConnection(true);
     if (current !== "connected") {
-      state.entries = [];
-      renderEntries({ animate: true });
+      // Keep the last confirmed directory visible during a background
+      // failure. The status row and disabled controls make its freshness
+      // explicit without replacing useful content with a blank state.
+      if (previous === "connected" || state.entries.length === 0) {
+        setStatus(`${connectionMessage(current)}${state.entries.length ? "（当前列表尚未更新）" : ""}`, "error");
+      }
+      if (state.entries.length === 0) renderEntries({ animate: false });
     } else if (previous !== "connected") {
       await load(state.path, true, true);
     }

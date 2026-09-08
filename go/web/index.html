@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WPS Enterprise Drive</title>
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f5f7fc">
+  <meta name="theme-color" content="#f5f7f8">
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -47,13 +47,16 @@
       <symbol id="i-sort" viewBox="0 0 24 24"><polyline points="7 9 12 4 17 9"/><polyline points="7 15 12 20 17 15"/></symbol>
       <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
       <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></symbol>
+      <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 0 1 0 9Z"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18"/><path d="M10.58 10.58a2 2 0 0 0 2.83 2.83"/><path d="M9.88 5.09A10.94 10.94 0 0 1 12 5c6.5 0 10 7 10 7a18.5 18.5 0 0 1-3.02 4.08M6.61 6.61C3.98 8.4 2 12 2 12s3.5 7 10 7a10.9 10.9 0 0 0 3.12-.45"/></symbol>
       <symbol id="i-ill-empty" viewBox="0 0 120 96"><path d="M24 52 36 40h48l12 12" stroke-width="2.5"/><path d="M24 52v24a6 6 0 0 0 6 6h60a6 6 0 0 0 6-6V52" stroke-width="2.5"/><path d="M24 52h96" stroke-width="2.5" opacity=".4"/><rect x="47" y="12" width="26" height="34" rx="4" stroke-width="2.5"/><line x1="53" y1="22" x2="67" y2="22" stroke-width="2.5"/><line x1="53" y1="29" x2="63" y2="29" stroke-width="2.5"/><line x1="53" y1="36" x2="67" y2="36" stroke-width="2.5"/><line x1="101" y1="18" x2="101" y2="26" stroke-width="2.5"/><line x1="97" y1="22" x2="105" y2="22" stroke-width="2.5"/><line x1="17" y1="26" x2="17" y2="34" stroke-width="2.5"/><line x1="13" y1="30" x2="21" y2="30" stroke-width="2.5"/></symbol>
       <symbol id="i-ill-search" viewBox="0 0 120 96"><circle cx="52" cy="44" r="24" stroke-width="2.5"/><line x1="70" y1="62" x2="88" y2="80" stroke-width="3"/><line x1="42" y1="40" x2="62" y2="40" stroke-width="2.5"/><line x1="42" y1="48" x2="56" y2="48" stroke-width="2.5"/><line x1="103" y1="16" x2="103" y2="24" stroke-width="2.5"/><line x1="99" y1="20" x2="107" y2="20" stroke-width="2.5"/><line x1="16" y1="70" x2="16" y2="78" stroke-width="2.5"/><line x1="12" y1="74" x2="20" y2="74" stroke-width="2.5"/></symbol>
       <symbol id="i-ill-offline" viewBox="0 0 120 96"><g transform="translate(24 10) scale(3)" stroke-width=".85"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></g><line x1="34" y1="82" x2="90" y2="18" stroke-width="3"/></symbol>
     </defs>
   </svg>
-
-  <div id="aurora" aria-hidden="true"><span></span><span></span></div>
 
   <noscript><div class="noscript">此页面需要启用 JavaScript 才能管理文件。</div></noscript>
 
@@ -61,13 +64,13 @@
     <div class="auth-brand"><span class="brand-mark" aria-hidden="true">W</span><span>WPS Drive</span></div>
     <div class="auth-card">
       <div class="auth-heading">
-        <p class="auth-kicker">PRIVATE CLOUD</p>
+        <p class="auth-kicker">WPS 云盘</p>
         <h1 id="auth-title">欢迎回来</h1>
         <p id="auth-subtitle">登录后管理你的 WPS 文件</p>
       </div>
       <form id="login-form" class="auth-form" novalidate>
         <label class="auth-field"><span>用户名</span><input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none" required></label>
-        <label class="auth-field"><span>密码</span><input id="login-password" name="password" type="password" autocomplete="current-password" required></label>
+        <label class="auth-field"><span>密码</span><span class="password-control"><input id="login-password" name="password" type="password" autocomplete="current-password" required><button id="password-toggle" class="password-toggle" type="button" title="显示密码" aria-label="显示密码"><svg class="icon"><use id="password-toggle-icon" href="#i-eye"/></svg></button></span></label>
         <button id="login-submit" class="primary auth-submit" type="submit">登录</button>
       </form>
       <p id="auth-message" class="auth-message" role="alert" aria-live="polite"></p>
@@ -83,13 +86,14 @@
     <div class="drop-overlay-card" role="status" aria-live="polite">
       <span class="drop-overlay-icon" aria-hidden="true"><svg class="icon lg"><use href="#i-upload"/></svg></span>
       <strong>松开即可上传</strong>
-      <span>将保存到当前目录：<b id="drop-target">/</b></span>
+      <span>上传到当前目录：<b id="drop-target">/</b></span>
     </div>
   </div>
 
   <header class="app-header" id="app-header">
     <div class="header-inner">
       <div class="brand">
+        <button id="nav-menu-button" class="icon-button mobile-only" type="button" title="打开导航" aria-label="打开导航" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button>
         <span class="brand-mark" aria-hidden="true">W</span>
         <div class="brand-copy">
           <div class="brand-title" id="brand-title">WPS Enterprise Drive</div>
@@ -97,23 +101,42 @@
         </div>
       </div>
       <div class="header-actions">
-        <button id="up-button" class="icon-button" type="button" title="返回上一级（Alt+↑）" aria-label="返回上一级"><svg class="icon"><use href="#i-up"/></svg></button>
         <button id="refresh-button" class="icon-button" type="button" title="刷新目录" aria-label="刷新目录"><svg class="icon"><use href="#i-refresh"/></svg></button>
+        <button id="connection" class="connection checking" type="button" aria-haspopup="dialog" aria-expanded="false" title="查看 WPS 连接状态">
+          <svg id="connection-icon" class="icon" aria-hidden="true"><use href="#i-clock"/></svg><span id="connection-label">正在检查 WPS</span>
+        </button>
         <span class="header-divider" aria-hidden="true"></span>
         <button id="settings-button" class="icon-button" type="button" title="设置云盘名称" aria-label="设置云盘名称"><svg class="icon"><use href="#i-sliders"/></svg></button>
         <button id="theme-button" class="icon-button" type="button" title="切换主题" aria-label="切换主题"><svg class="icon"><use id="theme-icon" href="#i-sun"/></svg></button>
         <button id="logout-button" class="icon-button logout-button" type="button" title="退出登录" aria-label="退出登录"><svg class="icon"><use href="#i-x"/></svg></button>
-        <div id="view-toggle" class="view-toggle" data-view="list" role="group" aria-label="视图切换">
-          <span class="view-thumb" aria-hidden="true"></span>
-          <button id="view-list-button" type="button" title="列表视图" aria-label="列表视图" aria-pressed="true"><svg class="icon"><use href="#i-list"/></svg></button>
-          <button id="view-grid-button" type="button" title="卡片视图" aria-label="卡片视图" aria-pressed="false"><svg class="icon"><use href="#i-grid"/></svg></button>
-        </div>
-        <button id="folder-button" type="button"><svg class="icon"><use href="#i-plus"/></svg><span class="label">新建文件夹</span></button>
-        <button id="upload-button" class="primary" type="button"><svg class="icon"><use href="#i-upload"/></svg><span class="label">上传文件</span></button>
-        <input id="file-input" class="hidden" type="file" multiple>
       </div>
     </div>
   </header>
+
+  <div id="status-panel" class="status-panel" role="dialog" aria-label="WPS 连接状态" hidden>
+    <div class="status-panel-head"><strong>连接状态</strong><button id="status-panel-close" class="icon-button small" type="button" title="关闭状态面板" aria-label="关闭状态面板"><svg class="icon"><use href="#i-x"/></svg></button></div>
+    <div class="status-panel-service"><span class="status-indicator ok" aria-hidden="true"></span><div><strong>网页服务</strong><span>适配器正在运行</span></div></div>
+    <div id="status-panel-wps" class="status-panel-service"><span class="status-indicator checking" aria-hidden="true"></span><div><strong id="status-panel-wps-label">WPS</strong><span id="status-panel-wps-state">正在检查</span></div></div>
+    <p id="status-panel-message" class="status-panel-message">正在检查当前 WPS 会话。</p>
+    <button id="status-refresh-button" class="status-refresh" type="button"><svg class="icon"><use href="#i-refresh"/></svg><span>刷新连接状态</span></button>
+  </div>
+
+  <div id="mobile-scrim" class="mobile-scrim" hidden></div>
+  <div class="workspace-shell">
+    <aside id="sidebar" class="sidebar" aria-label="云盘导航">
+      <div class="sidebar-head"><span>空间</span><button id="sidebar-close" class="icon-button small mobile-only" type="button" title="关闭导航" aria-label="关闭导航"><svg class="icon"><use href="#i-x"/></svg></button></div>
+      <nav class="space-nav" aria-label="WPS 空间">
+        <button id="space-root" class="space-item active" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-home"/></svg></span><span class="space-item-name">全部空间</span></button>
+        <div id="space-list" class="space-list"></div>
+      </nav>
+      <div class="mobile-sidebar-actions" aria-label="全局操作">
+        <button id="sidebar-refresh-button" class="space-item" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-refresh"/></svg></span><span class="space-item-name">刷新目录</span></button>
+        <button id="sidebar-settings-button" class="space-item" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-sliders"/></svg></span><span class="space-item-name">设置</span></button>
+        <button id="sidebar-theme-button" class="space-item" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-monitor"/></svg></span><span class="space-item-name">主题</span></button>
+        <button id="sidebar-logout-button" class="space-item sidebar-logout" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-x"/></svg></span><span class="space-item-name">退出登录</span></button>
+      </div>
+      <div class="sidebar-note"><svg class="icon" aria-hidden="true"><use href="#i-cloud"/></svg><span>空间名来自 WPS 登录</span></div>
+    </aside>
 
   <main class="content">
     <section class="workspace-head" aria-labelledby="folder-title">
@@ -122,17 +145,16 @@
         <h1 id="folder-title">WPS Enterprise Drive</h1>
         <p id="folder-note" class="workspace-note">管理 WPS Enterprise Drive 中的文件和文件夹</p>
       </div>
-      <div id="connection" class="connection checking" role="status" aria-live="polite">
-        <span class="connection-dot" aria-hidden="true"></span><span id="connection-label">正在检查 WPS</span>
-      </div>
     </section>
 
     <div class="navigation-row">
-      <nav id="breadcrumbs" class="breadcrumbs" aria-label="当前位置"></nav>
-      <label class="search" for="search-input">
+      <div class="path-row"><button id="up-button" class="icon-button" type="button" title="返回上一级" aria-label="返回上一级"><svg class="icon"><use href="#i-up"/></svg></button><nav id="breadcrumbs" class="breadcrumbs" aria-label="当前位置"></nav></div>
+      <div class="search" role="search">
+        <label class="sr-only" for="search-input">搜索当前目录</label>
         <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
-        <input id="search-input" type="search" placeholder="搜索当前目录（按 / 聚焦）" autocomplete="off">
-      </label>
+        <input id="search-input" type="search" placeholder="搜索当前目录" autocomplete="off">
+        <button id="search-clear" class="icon-button small" type="button" title="清除搜索" aria-label="清除搜索" hidden><svg class="icon"><use href="#i-x"/></svg></button>
+      </div>
     </div>
 
     <section class="panel" aria-label="文件列表">
@@ -150,9 +172,17 @@
           </label>
           <button id="sort-dir-button" class="icon-button small" type="button" title="切换升降序" aria-label="切换升降序"><svg class="icon"><use id="sort-dir-icon" href="#i-chev-up"/></svg></button>
           <span class="toolbar-divider" aria-hidden="true"></span>
-          <span id="path-value" class="meta path-value">/</span>
+          <div id="view-toggle" class="view-toggle" data-view="list" role="group" aria-label="视图切换">
+            <span class="view-thumb" aria-hidden="true"></span>
+            <button id="view-list-button" type="button" title="列表视图" aria-label="列表视图" aria-pressed="true"><svg class="icon"><use href="#i-list"/></svg></button>
+            <button id="view-grid-button" type="button" title="卡片视图" aria-label="卡片视图" aria-pressed="false"><svg class="icon"><use href="#i-grid"/></svg></button>
+          </div>
+          <button id="folder-button" class="toolbar-action" type="button" title="新建文件夹"><svg class="icon"><use href="#i-plus"/></svg><span>新建文件夹</span></button>
+          <button id="upload-button" class="primary toolbar-action" type="button" title="上传文件"><svg class="icon"><use href="#i-upload"/></svg><span>上传文件</span></button>
+          <input id="file-input" class="hidden" type="file" multiple>
         </div>
       </div>
+      <div id="refresh-progress" class="refresh-progress" role="status" aria-live="polite" hidden><span class="refresh-progress-bar"></span><span>正在刷新当前目录</span></div>
       <div id="list-head" class="list-head" role="row">
         <div class="cell name" role="columnheader" aria-sort="none"><button type="button" data-sort="name" class="sort-button">名称<svg class="icon sort-ic" aria-hidden="true"><use href="#i-sort"/></svg></button></div>
         <div class="cell type" role="columnheader">类型</div>
@@ -166,16 +196,17 @@
     </section>
 
     <div class="status-row">
-      <span id="status" role="status" aria-live="polite">正在读取...</span>
+      <svg id="status-icon" class="icon" aria-hidden="true"><use href="#i-info"/></svg><span id="status" role="status" aria-live="polite">正在读取...</span>
     </div>
   </main>
+  </div>
 
   <aside id="upload-tray" class="upload-tray" role="region" aria-label="上传队列" aria-hidden="true">
     <div class="tray-head">
       <svg class="icon accent" aria-hidden="true"><use href="#i-upload"/></svg>
       <span class="tray-title">上传队列</span>
       <span id="tray-count" class="tray-count"></span>
-      <button id="tray-cancel" class="icon-button small" type="button" title="取消上传" aria-label="取消上传"><svg class="icon"><use href="#i-stop"/></svg></button>
+      <button id="tray-cancel" class="icon-button small" type="button" title="取消全部上传" aria-label="取消全部上传"><svg class="icon"><use href="#i-stop"/></svg></button>
       <button id="tray-close" class="icon-button small hidden" type="button" title="关闭" aria-label="关闭"><svg class="icon"><use href="#i-x"/></svg></button>
     </div>
     <div class="tray-current" id="tray-current">
@@ -211,6 +242,30 @@
     </form>
   </dialog>
 
+  <dialog id="settings-modal" aria-labelledby="settings-title">
+    <form id="settings-form" class="modal-card settings-card" method="dialog">
+      <h2 id="settings-title" class="modal-title">设置</h2>
+      <p class="modal-message">修改本地显示方式和云盘名称</p>
+      <label class="modal-label" for="settings-name">
+        <span>云盘名称</span>
+        <input id="settings-name" class="modal-input" type="text" autocomplete="off" maxlength="256">
+      </label>
+      <fieldset class="theme-field">
+        <legend>主题</legend>
+        <div id="theme-options" class="theme-options" role="radiogroup" aria-label="主题">
+          <button class="theme-option" type="button" data-theme="auto" role="radio" aria-checked="false"><svg class="icon"><use href="#i-monitor"/></svg><span>跟随系统</span></button>
+          <button class="theme-option" type="button" data-theme="light" role="radio" aria-checked="false"><svg class="icon"><use href="#i-sun"/></svg><span>浅色</span></button>
+          <button class="theme-option" type="button" data-theme="dark" role="radio" aria-checked="false"><svg class="icon"><use href="#i-moon"/></svg><span>深色</span></button>
+        </div>
+      </fieldset>
+      <p id="settings-error" class="modal-inline-error" role="alert" aria-live="polite"></p>
+      <div class="modal-actions">
+        <button id="settings-cancel" type="button">取消</button>
+        <button id="settings-submit" class="primary" type="submit">保存设置</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="picker">
     <form class="modal-card picker-card" method="dialog" onsubmit="return false;">
       <h2 class="modal-title">移动到…</h2>
@@ -226,8 +281,6 @@
       </div>
     </form>
   </dialog>
-
-  </div>
 
   <script src="/assets/app.js" defer></script>
 </body>

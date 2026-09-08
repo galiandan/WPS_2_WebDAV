@@ -10,6 +10,7 @@
 - [`login.md`](login.md)：独立 WPS 登录助手、空间选择和凭据同步。
 - [`integration.md`](integration.md)：浏览器、WebDAV 客户端和常见连接方式。
 - [`api.md`](api.md)：本地 REST、WebDAV 和状态接口。
+- [`fd.md`](fd.md)：前端视觉、布局、交互和动效设计依据。
 
 ## 维护文档
 
