@@ -26,17 +26,17 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/wps-adapter-lin
 
 ## 构建元数据
 
-默认版本为 `0.9.94`。发布构建应注入提交号和 UTC 构建时间：
+默认版本为 `0.9.95`。发布构建应注入提交号和 UTC 构建时间：
 
 ```sh
 CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-s -w -X main.version=0.9.94 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -ldflags "-s -w -X main.version=0.9.95 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
 ```sh
 /tmp/wps-adapter --version
-# 0.9.94 commit=<commit> build_time=<UTC时间>
+# 0.9.95 commit=<commit> build_time=<UTC时间>
 ```
 
 ## 命令
@@ -51,7 +51,7 @@ CGO_ENABLED=0 go build -trimpath \
 - `internal/config/`：环境变量、默认值和运行期校验。
 - `internal/app/`：凭据、workspace、WPS 客户端、预算、存储和 HTTP 组装。
 - `internal/wps/`：WPS 控制面、签名对象存储、上传、下载和 refresh。
-- `internal/storage/`：路径、单/多空间、分页、缓存和 COPY 中继。
+- `internal/storage/`：路径、当前空间映射、分页、缓存和 COPY 中继。
 - `internal/httpserver/`：REST、WebDAV、网页会话认证、Basic Auth、锁和静态资源路由。
 - `web/`：嵌入二进制的 `index.html`、`style.css`、`app.js`，没有前端构建步骤或外部资源。
 
@@ -70,7 +70,7 @@ Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。安�
 
 ## 前端
 
-前端由 Go `embed` 提供。它支持多空间根目录、列表/网格视图、目录预取、拖放
+前端由 Go `embed` 提供。它支持单空间根目录、列表/网格视图、目录预取、拖放
 上传、上传速度和进度、下载、重命名、移动、删除、新建文件夹、搜索、主题和
 云盘显示名称设置。资源保持原生 HTML/CSS/JavaScript，无浏览器扩展和第三方
 前端依赖。

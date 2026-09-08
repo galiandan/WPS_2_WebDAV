@@ -1610,12 +1610,16 @@ def _select_workspace_folder(
         )
         print(f"\n空间：{candidate.name}    当前目录：{current_path}", flush=True)
         print("  [0] 使用当前目录作为 WebDAV 根目录", flush=True)
+        print("  [s] 暂时跳过，登录后在网页设置中选择 WebDAV 根目录", flush=True)
         for index, (_folder_id, folder_name) in enumerate(folders, 1):
             print(f"  [{index}] {folder_name}", flush=True)
         if current_path != "/":
             print("  [b] 返回上一级", flush=True)
-        answer = input("选择文件夹 [0]: ").strip()
-        if not answer or answer == "0":
+        answer = input("选择文件夹 [s]: ").strip().casefold()
+        if not answer or answer in {"s", "skip"}:
+            print("已跳过目录选择；登录完成后可在网页“设置 → WebDAV 存储位置”中选择。", flush=True)
+            return replace(candidate, root_id="0", root_path="/")
+        if answer == "0":
             return replace(candidate, root_id=current_id, root_path=current_path)
         if answer.casefold() == "b" and current_path != "/":
             path_stack.pop()
@@ -1629,7 +1633,7 @@ def _select_workspace_folder(
         try:
             index = int(answer)
         except ValueError:
-            print("请输入文件夹序号，或输入 b 返回上一级。", flush=True)
+            print("请输入文件夹序号、s 跳过，或输入 b 返回上一级。", flush=True)
             continue
         if index < 1 or index > len(folders):
             print("请输入列表中的序号。", flush=True)
@@ -1648,20 +1652,18 @@ def select_workspace_folders(
     base_url: str,
     timeout: float,
 ) -> tuple[WpsWorkspaceCandidate, ...]:
-    """Select one folder for each selected WPS space."""
+    """Select the one WebDAV root folder for the one selected WPS space."""
 
-    selected: list[WpsWorkspaceCandidate] = []
-    for candidate in candidates:
-        print(f"\n请为 WPS 空间“{candidate.name}”选择 WebDAV 根文件夹。", flush=True)
-        selected.append(
-            _select_workspace_folder(
-                credentials,
-                candidate,
-                base_url=base_url,
-                timeout=timeout,
-            )
-        )
-    return tuple(selected)
+    if len(candidates) != 1:
+        raise LoginError("WebDAV 只能选择一个 WPS 空间")
+    return (
+        _select_workspace_folder(
+            credentials,
+            candidates[0],
+            base_url=base_url,
+            timeout=timeout,
+        ),
+    )
 
 
 def verify_workspace_access(
@@ -1868,14 +1870,13 @@ def login_and_sync(
             selected,
             discovered_workspaces,
         )
-        selected_names = "、".join(item.name for item in selected_candidates)
-        print(f"已选择 WPS 空间：{selected_names}", flush=True)
         selected_candidate = selected_candidates[0]
+        print(f"已选择 WPS 空间：{selected_candidate.name}", flush=True)
         workspace = WpsWorkspaceSelection(
             tenant_id=selected_candidate.tenant_id,
             group_id=selected_candidate.group_id,
-            root_id="0",
-            spaces=tuple(selected_candidates),
+            root_id=selected_candidate.root_id,
+            root_path=selected_candidate.root_path,
         )
         if workspace_folder_selector is not None:
             try:
@@ -1894,29 +1895,21 @@ def login_and_sync(
             workspace = WpsWorkspaceSelection(
                 tenant_id=selected_candidate.tenant_id,
                 group_id=selected_candidate.group_id,
-                root_id="0",
-                spaces=tuple(selected_with_folders),
+                root_id=selected_with_folders[0].root_id,
+                root_path=selected_with_folders[0].root_path,
             )
-            selected_names = "、".join(
-                f"{item.name}（{item.root_path}）" for item in selected_with_folders
-            )
-            print(f"已选择 WebDAV 根文件夹：{selected_names}", flush=True)
+            selected_folder = selected_with_folders[0]
+            if selected_folder.root_path == "/":
+                print("WebDAV 根目录暂使用该空间根目录；之后可在网页设置中重新选择。", flush=True)
+            else:
+                print(f"已选择 WebDAV 根文件夹：{selected_folder.root_path}", flush=True)
     print("正在验证 WPS 工作区访问权限...", flush=True)
-    if workspace.spaces:
-        for candidate in workspace.spaces:
-            verify_workspace_access(
-                credentials,
-                WpsWorkspaceSelection(candidate.tenant_id, candidate.group_id, candidate.root_id),
-                base_url=browser_url,
-                timeout=adapter_timeout,
-            )
-    else:
-        verify_workspace_access(
-            credentials,
-            workspace,
-            base_url=browser_url,
-            timeout=adapter_timeout,
-        )
+    verify_workspace_access(
+        credentials,
+        workspace,
+        base_url=browser_url,
+        timeout=adapter_timeout,
+    )
     print("工作区验证成功，准备同步凭据。", flush=True)
     if ssh_target:
         push_credentials_over_ssh(
@@ -2157,7 +2150,7 @@ def _apply_adapter_port(adapter_url: str, port: int | None) -> str:
 def _select_workspaces(
     candidates: tuple[WpsWorkspaceCandidate, ...],
 ) -> tuple[WpsWorkspaceCandidate, ...]:
-    """Select one, several, or all discovered spaces by display name."""
+    """Select the one WPS space that becomes the WebDAV root."""
 
     if len(candidates) == 1:
         print(f"已找到 WPS 空间：{candidates[0].name}，将自动使用它。", flush=True)
@@ -2165,22 +2158,17 @@ def _select_workspaces(
     print(f"发现 {len(candidates)} 个可用 WPS 空间：", flush=True)
     for index, candidate in enumerate(candidates, 1):
         print(f"  [{index}] {candidate.name}", flush=True)
-    print("可输入一个或多个序号（例如 1,3），也可以输入 all 使用全部空间。", flush=True)
     while True:
         answer = input("请选择空间 [1]: ").strip() or "1"
-        if answer.casefold() == "all":
-            return candidates
         try:
-            indexes = [int(value.strip()) for value in answer.split(",")]
+            index = int(answer)
         except ValueError:
-            print("请输入序号，例如 1,3，或输入 all。", flush=True)
+            print("请输入一个空间序号。", flush=True)
             continue
-        if not indexes or len(set(indexes)) != len(indexes) or any(
-            index < 1 or index > len(candidates) for index in indexes
-        ):
+        if index < 1 or index > len(candidates):
             print("请输入列表中的序号。", flush=True)
             continue
-        return tuple(candidates[index - 1] for index in indexes)
+        return (candidates[index - 1],)
 
 
 def _normalize_selected_workspaces(
@@ -2197,6 +2185,8 @@ def _normalize_selected_workspaces(
         raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
     if not selected_candidates:
         raise LoginError("未选择有效的 WPS 工作区，未同步新凭据")
+    if len(selected_candidates) != 1:
+        raise LoginError("WebDAV 只能选择一个 WPS 空间，未同步新凭据")
     available = {
         (item.tenant_id, item.group_id, item.name): item for item in candidates
     }
@@ -2214,8 +2204,6 @@ def _normalize_selected_workspaces(
             raise LoginError("WPS 工作区选择无效，未同步新凭据") from None
         normalized.append(replace(item, root_id=root_id, root_path=root_path))
     selected_candidates = tuple(normalized)
-    if len(selected_candidates) > MAX_WORKSPACE_SPACES:
-        raise LoginError("选择的 WPS 空间过多，请减少选择数量")
     if len({item.group_id for item in selected_candidates}) != len(selected_candidates):
         raise LoginError("选择的 WPS 空间重复，请重新选择")
     if len({item.name for item in selected_candidates}) != len(selected_candidates):
@@ -2336,7 +2324,7 @@ __all__ = [
 ]
 
 
-__version__ = "0.9.94"
+__version__ = "0.9.95"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

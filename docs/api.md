@@ -28,7 +28,7 @@
 
 WebDAV 使用 `MOVE` 和 `COPY` 请求的 `Destination` 目标地址。`MOVE` 同目录时表示重命名，跨目录时目标路径最后一个组件必须与原名称相同；`COPY` 的目标路径是复制后的完整路径。`Overwrite: F` 在目标存在时返回 `412`；目标已存在且要求覆盖时返回 `501`，避免 WPS 私有接口的非原子操作造成数据丢失。跨目录同时改名暂不支持。删除和移动都使用 WPS 的异步任务接口；适配器只在任务报告成功后才返回成功。
 
-登录助手选择多个 WPS 空间时，适配器会在 `/dav/` 和网页根目录下创建对应的虚拟空间文件夹，例如 `/dav/<空间名称>/`。空间名称完全来自当前登录 WPS 账号，文档中的尖括号只是占位符。空间文件夹只用于路由，不会在 WPS 中创建新目录；跨空间 `MOVE`、`COPY` 和直接对根目录执行写操作会被拒绝。单个具体文件夹模式不创建虚拟空间层。
+登录助手每次只绑定一个 WPS 空间，因此 `/dav/` 直接对应这个空间的当前 WebDAV 根目录，不会创建虚拟空间层。需要切换空间时重新运行登录助手，或在网页设置中重新选择空间/目录；上传、`MOVE` 和 `COPY` 的目标始终明确落在同一个空间中。
 
 锁是适配器本地的兼容层：它不会调用未确认的 WPS 锁接口，只在当前进程内阻止没有对应 `If`/`Lock-Token` 的写操作。服务重启或锁超时后锁会消失。锁默认最长 24 小时，同时最多保留 4096 把活动锁；超过数量时返回 `503`。
 
@@ -111,17 +111,17 @@ Content-Type: application/json
 ```json
 {
   "status": "ok",
-  "mode": "spaces",
+  "mode": "single",
   "locations": [
-    {"name": "项目空间", "path": "/项目空间", "root_path": "/WebDAV文件"}
+    {"name": "当前 WPS 空间", "path": "/", "root_path": "/WebDAV文件"}
   ]
 }
 ```
 
-网页设置中的“选择文件夹”使用 `GET /api/v1/storage/entries?path=...` 浏览 WPS 原始空间根目录下的文件夹。`PATCH /api/v1/storage` 只接受一个已经在该接口中浏览到的虚拟路径，例如：
+网页设置中的“选择文件夹”使用 `GET /api/v1/storage/entries?path=...` 浏览当前 WPS 空间原始根目录下的文件夹。`PATCH /api/v1/storage` 只接受一个已经在该接口中浏览到的路径，例如：
 
 ```json
-{"path":"/项目空间/WebDAV文件/归档"}
+{"path":"/WebDAV文件/归档"}
 ```
 
 保存后，WebDAV 地址仍然是 `/dav/`，但它映射到新的 WPS 文件夹。这个操作不会在 WPS 中移动、复制或删除任何文件；它只更新 `/etc/wps-adapter/secrets/wps-workspace.json` 中的 `root_id`、`root_path` 或空间 mount 信息。服务会立即清理目录缓存并使用新位置，无需重启。
