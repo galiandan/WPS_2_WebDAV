@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/budget"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/config"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/credentials"
@@ -47,6 +48,7 @@ type Application struct {
 
 	// Assembled services, in construction order.
 	Settings *workspace.WebSettings
+	Users    *auth.Store
 	State    *workspace.WorkspaceState // nil without an auto/workspace setup
 	Source   credentials.Source        // nil without any credential source
 	Client   *wps.Client
@@ -139,6 +141,11 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		return fail(err)
 	}
 	application.Settings = settings
+	users, err := auth.NewStore(cfg.UserDBFile)
+	if err != nil {
+		return fail(err)
+	}
+	application.Users = users
 	rootName, err := settings.Name()
 	if err != nil {
 		return fail(err)
@@ -250,6 +257,7 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	if err != nil {
 		return fail(err)
 	}
+	rest.SetWebAuth(application.Users, cfg.RegistrationEnabled)
 	dav, err := httpserver.NewDAVDispatcher(multi, limits,
 		httpserver.DAVLimits{
 			MaxPropfindEntries: cfg.MaxPropfindEntries,
@@ -523,7 +531,7 @@ func (a *Application) Handler() (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return httpserver.NewChain(httpserver.ChainConfig{
+	chainConfig := httpserver.ChainConfig{
 		Router: router,
 		Health: a.serveHealth,
 		Auth: httpserver.BasicAuthConfig{
@@ -540,7 +548,17 @@ func (a *Application) Handler() (http.Handler, error) {
 		PanicLog: func(recovered any, stack []byte) {
 			log.Printf("request failed: %v\n%s", recovered, stack)
 		},
-	})
+	}
+	// Direct test/embedded configurations can leave UserDBFile empty to
+	// retain the legacy Basic Auth-only surface. Normal environment loading
+	// always supplies the persistent database path and enables web sessions.
+	if a.Config.UserDBFile != "" {
+		chainConfig.WebAuth = &httpserver.WebAuthConfig{
+			Store:      a.Users,
+			RESTPrefix: a.Config.RESTPrefix,
+		}
+	}
+	return httpserver.NewChain(chainConfig)
 }
 
 // DAVPrefix returns the normalized WebDAV prefix for the startup summary.

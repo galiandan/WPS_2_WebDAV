@@ -4,7 +4,9 @@
 
 ## 浏览器页面
 
-打开 `http://<服务器地址>:<端口>/` 并通过适配器 Basic Auth 后，可以在网页中浏览目录、打开文件夹、上传文件、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以受限并发预取最多 24 个直接子文件夹，缓存 30 秒；进入已预取的文件夹时不再重复等待 WPS 列目录请求。刷新目录或执行写操作会清理这批缓存。
+打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页登录/注册使用适配器自己的本地账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以受限并发预取最多 24 个直接子文件夹，缓存 30 秒；进入已预取的文件夹时不再重复等待 WPS 列目录请求。刷新目录或执行写操作会清理这批缓存。
+
+网页账号由 `ADAPTER_USER_DB` 指向的私有 JSON 文件保存，默认是 `/etc/wps-adapter/secrets/users.json`。密码使用 PBKDF2-SHA256 哈希，浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。`ADAPTER_REGISTRATION_ENABLED=false` 可关闭注册。当前版本已经为每个请求建立了用户 ID 上下文，后续可以把 WPS Cookie、工作区和网页设置迁移为每用户 profile；当前 WPS 凭据仍是服务级配置，所有已登录网页用户共享同一组 WPS 映射。
 
 ## WebDAV
 
@@ -38,7 +40,19 @@ WebDAV `PUT` 对同名文件执行覆盖更新；REST `PUT` 默认不覆盖同�
 
 ## REST
 
-所有 `path` 都是 URL 查询参数，值是以 `/` 开头的远端路径：
+所有 `path` 都是 URL 查询参数，值是以 `/` 开头的远端路径。网页认证接口如下：
+
+```text
+GET  /api/v1/auth/me
+GET  /api/v1/auth/config
+POST /api/v1/auth/register
+POST /api/v1/auth/login
+POST /api/v1/auth/logout
+```
+
+`register` 和 `login` 接收 `{"username":"...","password":"..."}`，成功后通过 HttpOnly `wps_session` Cookie 建立会话。认证接口和网页资源可以匿名访问；文件、设置和 WPS 状态接口必须有网页会话或适配器 Basic Auth。WebDAV 始终使用 Basic Auth，不接受网页会话 Cookie。
+
+文件 API：
 
 ```text
 GET  /api/v1/entries?path=/
@@ -61,7 +75,7 @@ POST  /api/v1/session/import
 
 ### WPS status
 
-`GET /api/v1/status` 使用适配器 Basic Auth，执行低频、只读的 WPS 会话预检。它先请求账号服务的 `api/v3/islogin`，再对当前映射的群组根目录做一次最小列表验证。成功结果会缓存 30 秒，失败结果会短暂退避；并发请求会共享同一次预检。状态检查本身不会主动调用刷新令牌，文件接口遇到上游 `401` 时仍按原有规则执行自动续期。
+`GET /api/v1/status` 使用网页会话或适配器 Basic Auth，执行低频、只读的 WPS 会话预检。它先请求账号服务的 `api/v3/islogin`，再对当前映射的群组根目录做一次最小列表验证。成功结果会缓存 30 秒，失败结果会短暂退避；并发请求会共享同一次预检。状态检查本身不会主动调用刷新令牌，文件接口遇到上游 `401` 时仍按原有规则执行自动续期。
 
 ```json
 {
@@ -78,7 +92,7 @@ POST  /api/v1/session/import
 
 ### Web settings
 
-`GET /api/v1/settings` 返回当前网页显示名称。使用适配器 Basic Auth 发送下面的请求即可修改名称；网页按钮会自动完成同样的请求：
+`GET /api/v1/settings` 返回当前网页显示名称。使用网页会话或适配器 Basic Auth 发送下面的请求即可修改名称；网页按钮会自动完成同样的请求：
 
 ```http
 PATCH /api/v1/settings

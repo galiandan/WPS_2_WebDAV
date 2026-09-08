@@ -138,6 +138,107 @@
     return responseData(response);
   }
 
+  /* ============ 网页账号会话 ============ */
+  let webUser = null;
+  let authInFlight = false;
+
+  function setAuthMessage(message, kind = "") {
+    const node = $("auth-message");
+    node.textContent = message || "";
+    node.className = "auth-message" + (kind ? " " + kind : "");
+  }
+
+  function showAppForUser(user) {
+    webUser = user || null;
+    $("auth-screen").classList.add("hidden");
+    $("app-ui").classList.remove("hidden");
+    const name = webUser && webUser.username ? webUser.username : "退出登录";
+    $("logout-button").title = `退出登录（${name}）`;
+    $("logout-button").setAttribute("aria-label", `退出登录（${name}）`);
+  }
+
+  function showLoginScreen() {
+    $("auth-screen").classList.remove("hidden");
+    $("app-ui").classList.add("hidden");
+  }
+
+  function switchAuthMode(mode) {
+    const register = mode === "register";
+    $("login-tab").classList.toggle("active", !register);
+    $("login-tab").setAttribute("aria-selected", String(!register));
+    $("register-tab").classList.toggle("active", register);
+    $("register-tab").setAttribute("aria-selected", String(register));
+    $("login-form").classList.toggle("hidden", register);
+    $("register-form").classList.toggle("hidden", !register);
+    $("auth-title").textContent = register ? "创建账号" : "欢迎回来";
+    $("auth-subtitle").textContent = register ? "创建一个账号来保护你的文件" : "登录后管理你的 WPS 文件";
+    setAuthMessage("");
+    const first = register ? $("register-username") : $("login-username");
+    setTimeout(() => first.focus(), 0);
+  }
+
+  async function submitAuth(mode, event) {
+    event.preventDefault();
+    if (authInFlight) return;
+    const register = mode === "register";
+    const username = $(`${mode}-username`).value.trim();
+    const password = $(`${mode}-password`).value;
+    if (register && password !== $("register-confirm").value) {
+      setAuthMessage("两次输入的密码不一致");
+      return;
+    }
+    if (!username || !password) {
+      setAuthMessage("请输入用户名和密码");
+      return;
+    }
+    authInFlight = true;
+    const submit = $(`${mode}-submit`);
+    submit.disabled = true;
+    setAuthMessage(register ? "正在创建账号…" : "正在登录…", "pending");
+    try {
+      const data = await apiRequest(`auth/${register ? "register" : "login"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      showAppForUser(data && data.user);
+      setAuthMessage("");
+      await startDrive();
+    } catch (error) {
+      setAuthMessage(error.message || "操作失败，请稍后重试");
+    } finally {
+      authInFlight = false;
+      submit.disabled = false;
+    }
+  }
+
+  async function initWebAuth() {
+    try {
+      const data = await apiRequest("auth/me");
+      if (data && data.registration_enabled === false) $("register-tab").classList.add("hidden");
+      if (!data || data.authenticated !== true) {
+        showLoginScreen();
+        return false;
+      }
+      showAppForUser(data.user);
+      return true;
+    } catch (error) {
+      showLoginScreen();
+      setAuthMessage("无法连接服务，请刷新页面重试");
+      return false;
+    }
+  }
+
+  async function logout() {
+    if (authInFlight) return;
+    try {
+      await apiRequest("auth/logout", { method: "POST" });
+    } catch (_) {
+      // The local session is unusable even when the network is already down.
+    }
+    window.location.reload();
+  }
+
   /* ============ 目录缓存与预取 ============ */
   const directoryCache = new Map();
   let directoryCacheEpoch = 0;
@@ -1309,6 +1410,12 @@
   }
 
   /* ============ 事件绑定 ============ */
+  $("login-tab").addEventListener("click", () => switchAuthMode("login"));
+  $("register-tab").addEventListener("click", () => switchAuthMode("register"));
+  $("login-form").addEventListener("submit", (event) => submitAuth("login", event));
+  $("register-form").addEventListener("submit", (event) => submitAuth("register", event));
+  $("logout-button").addEventListener("click", logout);
+
   $("modal-form").addEventListener("submit", (event) => {
     event.preventDefault();
     if (modalMode === "input") closeModal($("modal-input").value.trim());
@@ -1444,7 +1551,7 @@
   }, 30000);
 
   /* ============ 启动 ============ */
-  async function boot() {
+  async function startDrive() {
     applyTheme(false);
     loadSort();
     renderSortControls();
@@ -1458,6 +1565,10 @@
     }
     renderBreadcrumbs();
     load(initial);
+  }
+
+  async function boot() {
+    if (await initWebAuth()) await startDrive();
   }
   boot();
 })();

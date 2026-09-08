@@ -4,7 +4,7 @@
 
 ## One-command install
 
-下面两个脚本都可以通过一行命令启动。首次运行会通过当前终端询问适配器 Basic Auth 用户名/密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。云盘显示名称安装后直接在网页右上角齿轮中修改，不需要编辑配置文件。
+下面两个脚本都可以通过一行命令启动。首次运行会通过当前终端询问 WebDAV/REST 兼容接口使用的 Basic Auth 用户名、密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。云盘显示名称安装后直接在网页右上角齿轮中修改，不需要编辑配置文件。
 
 ```bash
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
@@ -122,6 +122,8 @@ WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
 WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
 ADAPTER_USERNAME_FILE=/etc/wps-adapter/secrets/adapter-username
 ADAPTER_PASSWORD_FILE=/etc/wps-adapter/secrets/adapter-password
+ADAPTER_USER_DB=/etc/wps-adapter/secrets/users.json
+ADAPTER_REGISTRATION_ENABLED=true
 ADAPTER_BIND=127.0.0.1
 ADAPTER_PORT=18080
 ```
@@ -131,6 +133,8 @@ ADAPTER_PORT=18080
 `WPS_ROOT_NAME` 是网页设置尚未保存时使用的默认名称；名称会显示在网页标题、左上角品牌、根目录面包屑、根目录标题以及适配器返回的根目录元数据中，不会重命名 WPS 远端文件夹。修改配置文件后重启服务即可生效：Native 执行 `sudo systemctl restart wps-adapter`，Docker 执行 `sudo docker restart wps-adapter`。
 
 更推荐直接打开网页点击右上角齿轮修改名称。网页保存的值位于 `/etc/wps-adapter/secrets/web-settings.json`，优先级高于 `WPS_ROOT_NAME`，并且不需要重启服务。
+
+打开网页后先在内置页面注册本地账号。网页账号与 WPS 登录账号分开，密码以 PBKDF2 哈希保存，会话使用 HttpOnly Cookie；WebDAV 客户端仍使用 Basic Auth。`ADAPTER_REGISTRATION_ENABLED=false` 可关闭注册，账号数据库默认是 `/etc/wps-adapter/secrets/users.json`。当前版本已经建立每用户 ID 上下文，但 WPS Cookie、工作区和文件映射仍是服务级配置，尚未实现不同网页账号之间的 WPS 数据隔离。
 
 检查配置不会访问 WPS：
 

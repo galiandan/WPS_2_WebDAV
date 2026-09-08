@@ -30,7 +30,8 @@ const (
 	DefaultMaxConnections = 64
 	DefaultRequestTimeout = 60.0
 
-	DefaultWebSettingsFile = "/etc/wps-adapter/secrets/web-settings.json"
+	DefaultWebSettingsFile  = "/etc/wps-adapter/secrets/web-settings.json"
+	DefaultUserDatabaseFile = "/etc/wps-adapter/secrets/users.json"
 
 	kib int64 = 1024
 	mib int64 = 1024 * 1024
@@ -101,17 +102,19 @@ type Config struct {
 	MaxLocks           int
 
 	// Adapter Basic Auth and networking.
-	Username       string
-	Password       string
-	UsernameFile   string
-	PasswordFile   string
-	WebSettingsDir string
-	DAVPrefix      string
-	RESTPrefix     string
-	Bind           string
-	Port           int
-	MaxConnections int
-	RequestTimeout float64
+	Username            string
+	Password            string
+	UsernameFile        string
+	PasswordFile        string
+	UserDBFile          string
+	RegistrationEnabled bool
+	WebSettingsDir      string
+	DAVPrefix           string
+	RESTPrefix          string
+	Bind                string
+	Port                int
+	MaxConnections      int
+	RequestTimeout      float64
 }
 
 // Load reads the environment with the Python reference's evaluation order:
@@ -271,6 +274,18 @@ func Load() (Config, error) {
 	if err := validateWebSettingsPath(cfg.WebSettingsDir); err != nil {
 		return Config{}, err
 	}
+	cfg.UserDBFile = os.Getenv("ADAPTER_USER_DB")
+	if cfg.UserDBFile == "" {
+		cfg.UserDBFile = DefaultUserDatabaseFile
+	}
+	if err := validateWebSettingsPath(cfg.UserDBFile); err != nil {
+		return Config{}, fmt.Errorf("adapter user database path is invalid")
+	}
+	registrationEnabled, err := envBool("ADAPTER_REGISTRATION_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.RegistrationEnabled = registrationEnabled
 
 	// --- WpsDriveClient.__init__ validation ---
 	if err := cfg.validateClient(); err != nil {

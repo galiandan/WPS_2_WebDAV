@@ -52,7 +52,7 @@ CGO_ENABLED=0 go build -trimpath \
 - `internal/app/`：凭据、workspace、WPS 客户端、预算、存储和 HTTP 组装。
 - `internal/wps/`：WPS 控制面、签名对象存储、上传、下载和 refresh。
 - `internal/storage/`：路径、单/多空间、分页、缓存和 COPY 中继。
-- `internal/httpserver/`：REST、WebDAV、Basic Auth、锁和静态资源路由。
+- `internal/httpserver/`：REST、WebDAV、网页会话认证、Basic Auth、锁和静态资源路由。
 - `web/`：嵌入二进制的 `index.html`、`style.css`、`app.js`，没有前端构建步骤或外部资源。
 
 ## 运行约束
@@ -63,9 +63,11 @@ Native 才使用主机 Go `1.25+` 或下载固定版本的 Go 工具链，Docker
 Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。安装器不执行发布归档、二进制
 或工具链哈希校验。
 
-网页登录和 WebDAV 共用同一个 Basic Auth。WPS Cookie、CSRF、workspace 和
-refresh 轮换文件由配置指定，服务不会把它们写入日志。所有上传、下载、目录
-递归、并发和临时磁盘操作都经过预算限制。
+网页使用本地账号登录和 HttpOnly 会话 Cookie；WebDAV 继续使用 Basic Auth。
+账号密码以 PBKDF2-SHA256 哈希保存，用户 ID 已进入请求上下文，为后续每用户
+WPS profile 隔离预留边界。当前 WPS Cookie、CSRF、workspace 和 refresh 轮换文件
+仍是服务级配置，服务不会把它们写入日志。所有上传、下载、目录递归、并发和临时
+磁盘操作都经过预算限制。
 
 ## 前端
 

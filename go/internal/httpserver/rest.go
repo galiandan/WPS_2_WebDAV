@@ -122,6 +122,7 @@ type RESTDispatcher struct {
 	limits    ControlLimits
 	rootName  *RootNameController
 	session   *SessionImporter
+	webAuth   *WebAuthController
 	read      RESTReadStorage
 	status    *StatusController
 	download  DownloadLimits
@@ -170,6 +171,9 @@ func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, sessi
 
 // ServeREST fits Handlers.REST in the router.
 func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
+	if strings.HasPrefix(route.Suffix, "auth/") || route.Suffix == "auth" {
+		return d.serveWebAuth(w, r, route)
+	}
 	switch r.Method {
 	case "GET":
 		return d.doGet(w, r, route)

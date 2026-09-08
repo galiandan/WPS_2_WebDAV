@@ -57,6 +57,37 @@
 
   <noscript><div class="noscript">此页面需要启用 JavaScript 才能管理文件。</div></noscript>
 
+  <section id="auth-screen" class="auth-screen" aria-labelledby="auth-title">
+    <div class="auth-brand"><span class="brand-mark" aria-hidden="true">W</span><span>WPS Drive</span></div>
+    <div class="auth-card">
+      <div class="auth-heading">
+        <p class="auth-kicker">PRIVATE CLOUD</p>
+        <h1 id="auth-title">欢迎回来</h1>
+        <p id="auth-subtitle">登录后管理你的 WPS 文件</p>
+      </div>
+      <div class="auth-tabs" role="tablist" aria-label="账户操作">
+        <button id="login-tab" class="auth-tab active" type="button" role="tab" aria-selected="true">登录</button>
+        <button id="register-tab" class="auth-tab" type="button" role="tab" aria-selected="false">注册</button>
+      </div>
+      <form id="login-form" class="auth-form" novalidate>
+        <label class="auth-field"><span>用户名</span><input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none" required></label>
+        <label class="auth-field"><span>密码</span><input id="login-password" name="password" type="password" autocomplete="current-password" required></label>
+        <button id="login-submit" class="primary auth-submit" type="submit">登录</button>
+      </form>
+      <form id="register-form" class="auth-form hidden" novalidate>
+        <label class="auth-field"><span>用户名</span><input id="register-username" name="username" type="text" autocomplete="username" autocapitalize="none" required></label>
+        <label class="auth-field"><span>密码</span><input id="register-password" name="password" type="password" autocomplete="new-password" required></label>
+        <label class="auth-field"><span>确认密码</span><input id="register-confirm" name="confirm" type="password" autocomplete="new-password" required></label>
+        <button id="register-submit" class="primary auth-submit" type="submit">创建账号</button>
+      </form>
+      <p id="auth-message" class="auth-message" role="alert" aria-live="polite"></p>
+      <p class="auth-footnote">账号只用于保护此适配器网页，WPS 登录仍由服务端凭据管理。</p>
+    </div>
+    <p class="auth-security"><span class="connection-dot connected" aria-hidden="true"></span>你的连接由当前服务保护</p>
+  </section>
+
+  <div id="app-ui" class="app-ui hidden">
+
   <div id="drop-overlay" class="drop-overlay" aria-hidden="true">
     <svg class="drop-frame" aria-hidden="true"><rect pathLength="1000"/></svg>
     <div class="drop-overlay-card" role="status" aria-live="polite">
@@ -81,6 +112,7 @@
         <span class="header-divider" aria-hidden="true"></span>
         <button id="settings-button" class="icon-button" type="button" title="设置云盘名称" aria-label="设置云盘名称"><svg class="icon"><use href="#i-sliders"/></svg></button>
         <button id="theme-button" class="icon-button" type="button" title="切换主题" aria-label="切换主题"><svg class="icon"><use id="theme-icon" href="#i-sun"/></svg></button>
+        <button id="logout-button" class="icon-button logout-button" type="button" title="退出登录" aria-label="退出登录"><svg class="icon"><use href="#i-x"/></svg></button>
         <div id="view-toggle" class="view-toggle" data-view="list" role="group" aria-label="视图切换">
           <span class="view-thumb" aria-hidden="true"></span>
           <button id="view-list-button" type="button" title="列表视图" aria-label="列表视图" aria-pressed="true"><svg class="icon"><use href="#i-list"/></svg></button>
@@ -204,6 +236,8 @@
       </div>
     </form>
   </dialog>
+
+  </div>
 
   <script src="/assets/app.js" defer></script>
 </body>

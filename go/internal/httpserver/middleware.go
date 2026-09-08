@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
 )
 
 // Middleware wraps one handler into the next.
@@ -39,6 +41,9 @@ type ChainConfig struct {
 	Health http.HandlerFunc
 	// Auth configures adapter-side Basic authentication.
 	Auth BasicAuthConfig
+	// WebAuth enables same-origin browser sessions for the embedded web UI.
+	// It does not replace Basic Auth for WebDAV clients.
+	WebAuth *WebAuthConfig
 	// Log receives one line per request: request ID, method, and the
 	// query-stripped path. It is the security log sink; query values,
 	// headers, and credentials never reach it.
@@ -64,7 +69,7 @@ func NewChain(config ChainConfig) (http.Handler, error) {
 	if config.NewRequestID == nil {
 		config.NewRequestID = randomRequestID
 	}
-	auth, err := newBasicAuth(config.Auth)
+	auth, err := newBasicAuth(config.Auth, config.WebAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -243,15 +248,27 @@ type BasicAuthConfig struct {
 	ReadSecret func(path string) (string, error)
 }
 
-type basicAuth struct {
-	config BasicAuthConfig
+// WebAuthConfig describes the browser-session boundary. The REST prefix is
+// needed to suppress a native Basic Auth prompt for unauthenticated browser
+// fetches; WebDAV still receives the normal challenge.
+type WebAuthConfig struct {
+	Store      *auth.Store
+	RESTPrefix string
 }
 
-func newBasicAuth(config BasicAuthConfig) (basicAuth, error) {
+type basicAuth struct {
+	config  BasicAuthConfig
+	webAuth *WebAuthConfig
+}
+
+func newBasicAuth(config BasicAuthConfig, webAuth *WebAuthConfig) (basicAuth, error) {
 	if (config.UsernameFile != "" || config.PasswordFile != "") && config.ReadSecret == nil {
 		return basicAuth{}, errChainConfig("a secret reader is required for credential files")
 	}
-	return basicAuth{config: config}, nil
+	if webAuth != nil && webAuth.Store == nil {
+		return basicAuth{}, errChainConfig("a web authentication store is required")
+	}
+	return basicAuth{config: config, webAuth: webAuth}, nil
 }
 
 // enabled mirrors the Python property: any configured credential source
@@ -330,12 +347,24 @@ func (a basicAuth) middleware() Middleware {
 			path, _ := SplitRequestTarget(r.RequestURI)
 			// Python's _authorise exempts the health path for every method;
 			// non-GET health requests still route (and 404) later.
-			if IsHealthPath(path) || !a.enabled() {
+			if IsHealthPath(path) || (a.webAuth == nil && !a.enabled()) || a.isPublicWebPath(path) {
 				next.ServeHTTP(w, r)
 				return
 			}
+			if a.webAuth != nil && a.isBrowserAPIRequest(r) {
+				if token := webSessionToken(r); token != "" {
+					if user, ok := a.webAuth.Store.Current(token); ok && !a.isBasicOnlyPath(path) {
+						next.ServeHTTP(w, r.WithContext(withWebUser(r.Context(), user)))
+						return
+					}
+				}
+			}
 			if a.accepts(r.Header.Get("Authorization")) {
 				next.ServeHTTP(w, r)
+				return
+			}
+			if a.webAuth != nil && a.isBrowserAPIRequest(r) {
+				sendWebUnauthorized(w)
 				return
 			}
 			sendUnauthorized(w)
@@ -343,14 +372,73 @@ func (a basicAuth) middleware() Middleware {
 	}
 }
 
+func (a basicAuth) isPublicWebPath(path string) bool {
+	if a.webAuth == nil {
+		return false
+	}
+	if path == "/" || path == "/web" || path == "/web/" {
+		return true
+	}
+	if _, ok := webAssetName(path); ok {
+		return true
+	}
+	prefix := NormalizePrefix(a.webAuth.RESTPrefix)
+	return path == prefix+"/auth" || strings.HasPrefix(path, prefix+"/auth/")
+}
+
+func (a basicAuth) isBrowserAPIRequest(r *http.Request) bool {
+	if a.webAuth == nil {
+		return false
+	}
+	path, _ := SplitRequestTarget(r.RequestURI)
+	prefix := NormalizePrefix(a.webAuth.RESTPrefix)
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+func (a basicAuth) isBasicOnlyPath(path string) bool {
+	if a.webAuth == nil {
+		return false
+	}
+	prefix := NormalizePrefix(a.webAuth.RESTPrefix)
+	return path == prefix+"/session/import"
+}
+
+func webSessionToken(r *http.Request) string {
+	cookie, err := r.Cookie(auth.SessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+type webUserContextKey struct{}
+
+func withWebUser(ctx context.Context, user auth.User) context.Context {
+	return context.WithValue(ctx, webUserContextKey{}, user)
+}
+
+// WebUserFromContext returns the local account that authenticated a browser
+// request. Future per-user WPS profiles can use this stable boundary.
+func WebUserFromContext(ctx context.Context) (auth.User, bool) {
+	user, ok := ctx.Value(webUserContextKey{}).(auth.User)
+	return user, ok
+}
+
+func sendWebUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"login required","code":"auth_required"}` + "\n"))
+}
+
 // sendUnauthorized mirrors Python's _authorise rejection byte for byte:
 // challenge, close, and an empty body with no Content-Type and no
 // Cache-Control header.
 func sendUnauthorized(w http.ResponseWriter) {
 	header := w.Header()
-	// The raw map keeps Python's exact "WWW-Authenticate" spelling on the
-	// wire (Set would canonicalize it to "Www-Authenticate").
-	header["WWW-Authenticate"] = []string{`Basic realm="wps-adapter"`}
+	// Header names are case-insensitive on the wire. Set also keeps the
+	// challenge visible to httptest and reverse-proxy adapters.
+	header.Set("WWW-Authenticate", `Basic realm="wps-adapter"`)
 	header.Set("Connection", "close")
 	header.Set("Content-Length", "0")
 	w.WriteHeader(http.StatusUnauthorized)

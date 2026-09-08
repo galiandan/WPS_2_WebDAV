@@ -35,7 +35,7 @@ Docker：
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ~~~
 
-安装器会显示阶段进度和下载进度，并在首次安装时询问网页/WebDAV 共用的 Basic Auth 用户名和密码。密码不会显示，请记住它。
+安装器会显示阶段进度和下载进度，并在首次安装时询问 WebDAV 及兼容 REST 接口使用的 Basic Auth 用户名和密码。密码不会显示，请记住它；网页使用自己的登录/注册页面。
 
 Native 安装器不要求 VPS 预装 Go：它会先从国内加速的 GitHub Release 下载对应 Linux 架构的预编译静态二进制。只有预编译文件下载失败、无法执行或当前架构没有资产时，才会从源码现场编译；这时优先使用主机已有的 Go 1.25+，否则临时下载 Go 工具链，完成后删除。服务运行时只使用编译好的 Go 二进制，不需要 Python、Node.js 或 Go 运行时。
 
@@ -85,7 +85,11 @@ WebDAV：
 http://<VPS地址>:54321/dav/
 ~~~
 
-用户名和密码就是安装时设置的 Basic Auth。自定义端口时，把地址中的 54321 换成实际端口。服务显示 WPS 未连接 时，表示适配器进程正常但 WPS 凭据尚未同步、已过期或当前空间无权访问；重新运行 wps_login.py 即可。
+网页现在使用内置的登录/注册页面，不会再弹出浏览器原生的用户名密码窗口。第一次打开网页时注册一个适配器账号，之后用该账号登录；账号和网页会话与 WPS 账号分开，密码只以 PBKDF2 哈希保存。登录后的网页会话使用 HttpOnly Cookie，服务重启后需要重新登录。
+
+WebDAV 客户端仍使用安装时设置的 Basic Auth 用户名和密码，这是为了兼容 Windows、手机、NAS 和同步软件。自定义端口时，把地址中的 54321 换成实际端口。服务显示 WPS 未连接时，表示适配器进程正常但 WPS 凭据尚未同步、已过期或当前空间无权访问；重新运行 wps_login.py 即可。
+
+如果不允许新用户注册，将 `ADAPTER_REGISTRATION_ENABLED` 设为 `false`；已经注册的账号仍可登录。浏览器账号数据库默认位于 `/etc/wps-adapter/secrets/users.json`，可通过 `ADAPTER_USER_DB` 更改。
 
 ## 登录助手的三种同步方式
 
@@ -208,7 +212,7 @@ contract_tests/  脱敏 JSON 契约金标准，供 Go 回归测试读取
 不要把以下内容提交到 GitHub、Issue、聊天或日志：
 
 - WPS Cookie、rtk、CSRF、refresh token；
-- WebDAV/网页 Basic Auth 密码；
+- WebDAV/REST Basic Auth 密码；
 - 签名对象存储 URL；
 - 原始 HAR、PCAP 和真实文件内容。
 

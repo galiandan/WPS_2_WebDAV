@@ -332,15 +332,23 @@ func TestServeServesWebPageAndAssets(t *testing.T) {
 	process.waitListening(t)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
-	// Unauthenticated page access gets the Basic Auth challenge.
+	// The browser shell is public so it can render the in-page login form.
 	response, err := http.Get(base + "/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if response.StatusCode != http.StatusUnauthorized {
-		t.Errorf("unauthenticated / = %d", response.StatusCode)
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("public / = %d", response.StatusCode)
 	}
+	response, err = http.Get(base + "/api/v1/auth/me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("anonymous auth/me = %d", response.StatusCode)
+	}
+	response.Body.Close()
 
 	request, err := http.NewRequest(http.MethodGet, base+"/assets/app.js", nil)
 	if err != nil {

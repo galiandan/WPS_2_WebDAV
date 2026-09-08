@@ -29,7 +29,7 @@ var allEnvNames = []string{
 	"WPS_MAX_RESPONSE_BODY_BYTES", "WPS_MAX_LOCKS",
 	"ADAPTER_USERNAME", "ADAPTER_PASSWORD", "ADAPTER_USERNAME_FILE",
 	"ADAPTER_PASSWORD_FILE", "ADAPTER_DAV_PREFIX", "ADAPTER_REST_PREFIX",
-	"ADAPTER_BIND", "ADAPTER_PORT", "ADAPTER_MAX_CONNECTIONS",
+	"ADAPTER_USER_DB", "ADAPTER_REGISTRATION_ENABLED", "ADAPTER_BIND", "ADAPTER_PORT", "ADAPTER_MAX_CONNECTIONS",
 	"ADAPTER_REQUEST_TIMEOUT",
 }
 
@@ -130,6 +130,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MaxConnections != 64 || cfg.RequestTimeout != 60 {
 		t.Error("server runtime defaults drifted")
+	}
+	if cfg.UserDBFile != DefaultUserDatabaseFile || !cfg.RegistrationEnabled {
+		t.Errorf("web auth defaults drifted: db=%q registration=%v", cfg.UserDBFile, cfg.RegistrationEnabled)
 	}
 	if cfg.AuthEnabled() {
 		t.Error("auth must be disabled without any credential setting")
