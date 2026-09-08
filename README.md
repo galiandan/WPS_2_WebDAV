@@ -45,7 +45,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
-预编译 Release 默认使用 `v0.9.92`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v0.9.93`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
@@ -87,6 +87,14 @@ http://<VPS地址>:54321/dav/
 ~~~
 
 网页现在使用内置登录页面，不会再弹出浏览器原生的用户名密码窗口。直接使用安装时设置的适配器用户名和密码登录；这也是 WebDAV 客户端使用的同一组凭据。登录后的网页会话使用 HttpOnly Cookie，服务重启后需要重新登录。
+
+网页支持可选的两步验证和 Passkey。登录网页后打开“设置 → 登录安全”：
+
+- 两步验证使用兼容 TOTP 的验证器应用。启用时先把密钥加入验证器，再输入当前验证码；页面只显示一次恢复码，请离线保存。以后密码登录需要验证码或未使用过的恢复码。
+- Passkey 使用浏览器原生 WebAuthn，可添加多个设备并单独删除。启用后登录页会出现“使用 Passkey 登录”。Passkey 通常要求 HTTPS；直接使用 IP 的 HTTP 页面可能被浏览器拒绝，这是浏览器安全策略。
+- 两种方式都是可选的，互不强制；Passkey 登录不会改变 WebDAV 客户端仍使用 Basic Auth 的事实。
+
+2FA 和 Passkey 的状态保存在 `/etc/wps-adapter/secrets/auth-settings.json`，服务重启后仍然有效。卸载脚本会连同该文件一起删除。不要复制、提交或公开这个文件。
 
 WebDAV 客户端仍使用安装时设置的 Basic Auth 用户名和密码，这是为了兼容 Windows、手机、NAS 和同步软件。自定义端口时，把地址中的 54321 换成实际端口。服务显示 WPS 未连接时，表示适配器进程正常但 WPS 凭据尚未同步、已过期或当前空间无权访问；重新运行 wps_login.py 即可。
 

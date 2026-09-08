@@ -120,8 +120,93 @@
     setSettingsError("");
     renderThemeOptions();
     loadStorageLocations();
+    loadSecuritySettings();
     $("settings-modal").showModal();
     setTimeout(() => $("settings-name").focus(), 0);
+  }
+
+  async function loadSecuritySettings() {
+    try {
+      const data = await apiRequest("auth/security");
+      const enabled = Boolean(data && data.totp_enabled);
+      $("security-summary").textContent = enabled ? "两步验证已启用" : "密码之外的安全验证尚未启用";
+      $("totp-enable-button").classList.toggle("hidden", enabled);
+      $("totp-disable-button").classList.toggle("hidden", !enabled);
+      const list = $("passkey-list");
+      list.replaceChildren();
+      const passkeys = Array.isArray(data && data.passkeys) ? data.passkeys : [];
+      if (!passkeys.length) {
+        list.append(el("p", "security-empty", "尚未添加 Passkey"));
+        return;
+      }
+      passkeys.forEach((passkey) => {
+        const row = el("div", "passkey-row");
+        row.append(el("span", "passkey-name", passkey.name || "Passkey"));
+        const remove = el("button", "icon-button small", "");
+        remove.type = "button";
+        remove.title = "删除 Passkey";
+        remove.setAttribute("aria-label", "删除 Passkey");
+        remove.append(icon("trash"));
+        remove.addEventListener("click", () => deletePasskey(passkey.id));
+        row.append(remove);
+        list.append(row);
+      });
+    } catch (error) {
+      if (error && error.status !== 404) setSettingsError(error.message || "无法读取安全设置");
+    }
+  }
+
+  async function enableTOTP() {
+    try {
+      const setup = await apiRequest("auth/totp/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const code = window.prompt(`请将此密钥添加到验证器：\n\n${setup.secret}\n\n然后输入当前 6 位验证码以启用：`);
+      if (!code) return;
+      const result = await apiRequest("auth/totp/enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ secret: setup.secret, code: code.trim() }) });
+      window.alert(`两步验证已启用。请保存这些一次性恢复码：\n\n${result.recovery_codes.join("\n")}`);
+      await loadSecuritySettings();
+    } catch (error) {
+      setSettingsError(error.message || "无法启用两步验证");
+    }
+  }
+
+  async function disableTOTP() {
+    const code = window.prompt("请输入当前验证码或恢复码以关闭两步验证：");
+    if (!code) return;
+    try {
+      await apiRequest("auth/totp/disable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.trim() }) });
+      await loadSecuritySettings();
+    } catch (error) {
+      setSettingsError(error.message || "无法关闭两步验证");
+    }
+  }
+
+  async function registerPasskey() {
+    if (!window.PublicKeyCredential || !navigator.credentials) {
+      setSettingsError("当前浏览器不支持 Passkey，或当前页面不是安全连接");
+      return;
+    }
+    try {
+      const data = await apiRequest("auth/passkey/register/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const credential = await navigator.credentials.create({ publicKey: publicKeyCreationOptions(data.publicKey) });
+      if (!credential) throw new Error("Passkey 注册已取消");
+      await apiRequest("auth/passkey/register", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challenge: data.challenge, name: "Passkey", credential: passkeyCredentialJSON(credential, true) }),
+      });
+      await loadSecuritySettings();
+    } catch (error) {
+      setSettingsError(error.message || "Passkey 注册失败，请重试");
+    }
+  }
+
+  async function deletePasskey(id) {
+    if (!window.confirm("确定删除这个 Passkey 吗？")) return;
+    try {
+      await apiRequest("auth/passkey/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      await loadSecuritySettings();
+    } catch (error) {
+      setSettingsError(error.message || "无法删除 Passkey");
+    }
   }
 
   function storageLocationLabel(location) {
@@ -382,6 +467,7 @@
   /* ============ 网页账号会话 ============ */
   let webUser = null;
   let authInFlight = false;
+  let pendingTwoFactorChallenge = "";
 
   function setAuthMessage(message, kind = "") {
     const node = $("auth-message");
@@ -403,12 +489,117 @@
     $("app-ui").classList.add("hidden");
   }
 
+  function setTwoFactorChallenge(challenge) {
+    pendingTwoFactorChallenge = challenge || "";
+    const codeField = $("login-code-field");
+    const username = $("login-username");
+    const password = $("login-password");
+    codeField.classList.toggle("hidden", !pendingTwoFactorChallenge);
+    username.disabled = Boolean(pendingTwoFactorChallenge);
+    password.disabled = Boolean(pendingTwoFactorChallenge);
+    $("login-submit").textContent = pendingTwoFactorChallenge ? "验证并登录" : "登录";
+    if (pendingTwoFactorChallenge) {
+      $("login-code").value = "";
+      $("login-code").focus();
+    }
+  }
+
+  function arrayBufferToBase64URL(value) {
+    const bytes = new Uint8Array(value);
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function base64URLToArrayBuffer(value) {
+    const padded = String(value).replace(/-/g, "+").replace(/_/g, "/") + "===".slice((String(value).length + 3) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes.buffer;
+  }
+
+  function passkeyCredentialJSON(credential, registration) {
+    const response = credential.response;
+    const result = {
+      id: credential.id,
+      rawId: arrayBufferToBase64URL(credential.rawId),
+      type: credential.type,
+      response: {
+        clientDataJSON: arrayBufferToBase64URL(response.clientDataJSON),
+      },
+    };
+    if (registration) {
+      result.response.attestationObject = arrayBufferToBase64URL(response.attestationObject);
+    } else {
+      result.response.authenticatorData = arrayBufferToBase64URL(response.authenticatorData);
+      result.response.signature = arrayBufferToBase64URL(response.signature);
+      if (response.userHandle) result.response.userHandle = arrayBufferToBase64URL(response.userHandle);
+    }
+    return result;
+  }
+
+  function publicKeyRequestOptions(options) {
+    const publicKey = { ...options };
+    publicKey.challenge = base64URLToArrayBuffer(publicKey.challenge);
+    if (Array.isArray(publicKey.allowCredentials)) {
+      publicKey.allowCredentials = publicKey.allowCredentials.map((item) => ({ ...item, id: base64URLToArrayBuffer(item.id) }));
+    }
+    return publicKey;
+  }
+
+  function publicKeyCreationOptions(options) {
+    const publicKey = { ...options };
+    publicKey.challenge = base64URLToArrayBuffer(publicKey.challenge);
+    publicKey.user = { ...publicKey.user, id: base64URLToArrayBuffer(publicKey.user.id) };
+    if (Array.isArray(publicKey.excludeCredentials)) {
+      publicKey.excludeCredentials = publicKey.excludeCredentials.map((item) => ({ ...item, id: base64URLToArrayBuffer(item.id) }));
+    }
+    return publicKey;
+  }
+
+  async function passkeyLogin() {
+    if (authInFlight) return;
+    if (!window.PublicKeyCredential || !navigator.credentials) {
+      setAuthMessage("当前浏览器不支持 Passkey");
+      return;
+    }
+    authInFlight = true;
+    $("passkey-login-button").disabled = true;
+    $("login-submit").disabled = true;
+    setAuthMessage("正在等待 Passkey 验证…", "pending");
+    try {
+      const data = await apiRequest("auth/passkey/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const credential = await navigator.credentials.get({ publicKey: publicKeyRequestOptions(data.publicKey) });
+      if (!credential) throw new Error("Passkey 验证已取消");
+      const result = await apiRequest("auth/passkey/verify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challenge: data.challenge, credential: passkeyCredentialJSON(credential, false) }),
+      });
+      setTwoFactorChallenge("");
+      showAppForUser(result && result.user);
+      setAuthMessage("");
+      await startDrive();
+    } catch (error) {
+      setAuthMessage(error.message || "Passkey 登录失败，请重试");
+    } finally {
+      authInFlight = false;
+      $("passkey-login-button").disabled = false;
+      $("login-submit").disabled = false;
+    }
+  }
+
   async function submitAuth(event) {
     event.preventDefault();
     if (authInFlight) return;
     const username = $("login-username").value.trim();
     const password = $("login-password").value;
-    if (!username || !password) {
+    const code = $("login-code").value.trim();
+    if (pendingTwoFactorChallenge && !code) {
+      setAuthMessage("请输入两步验证码");
+      return;
+    }
+    if (!pendingTwoFactorChallenge && (!username || !password)) {
       setAuthMessage("请输入用户名和密码");
       return;
     }
@@ -417,16 +608,30 @@
     submit.disabled = true;
     setAuthMessage("正在登录…", "pending");
     try {
-      const data = await apiRequest("auth/login", {
+      const data = await apiRequest(pendingTwoFactorChallenge ? "auth/2fa/verify" : "auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(pendingTwoFactorChallenge
+          ? { challenge: pendingTwoFactorChallenge, code }
+          : { username, password }),
       });
+      if (!pendingTwoFactorChallenge && data && data.status === "two_factor_required") {
+        setTwoFactorChallenge(data.challenge);
+        setAuthMessage("请输入验证器中的验证码，或使用一次性恢复码", "pending");
+        return;
+      }
+      setTwoFactorChallenge("");
       showAppForUser(data && data.user);
       setAuthMessage("");
       await startDrive();
     } catch (error) {
+      if (error && error.code === "auth_invalid_factor") $("login-code").focus();
       setAuthMessage(error.message || "操作失败，请稍后重试");
+      if (pendingTwoFactorChallenge && error && error.code === "auth_challenge_expired") {
+        setTwoFactorChallenge("");
+        $("login-password").focus();
+      }
+      if (pendingTwoFactorChallenge && error && error.code === "auth_invalid_factor") return;
     } finally {
       authInFlight = false;
       submit.disabled = false;
@@ -2116,6 +2321,7 @@
   /* ============ 事件绑定 ============ */
   $("login-form").addEventListener("submit", submitAuth);
   $("password-toggle").addEventListener("click", togglePassword);
+  $("passkey-login-button").addEventListener("click", passkeyLogin);
   $("logout-button").addEventListener("click", logout);
   $("connection").addEventListener("click", () => toggleStatusPanel());
   $("status-panel-close").addEventListener("click", () => toggleStatusPanel(false));
@@ -2134,6 +2340,9 @@
   });
   $("settings-form").addEventListener("submit", submitSettings);
   $("storage-location-button").addEventListener("click", chooseStorageLocation);
+  $("totp-enable-button").addEventListener("click", enableTOTP);
+  $("totp-disable-button").addEventListener("click", disableTOTP);
+  $("passkey-register-button").addEventListener("click", registerPasskey);
   $("settings-cancel").addEventListener("click", closeSettingsModal);
   $("settings-modal").addEventListener("cancel", (event) => {
     event.preventDefault();

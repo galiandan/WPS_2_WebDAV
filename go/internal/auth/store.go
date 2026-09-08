@@ -46,6 +46,13 @@ type Store struct {
 
 	mu       sync.Mutex
 	sessions map[string]session
+
+	// factorState and pending are protected by the same mutex as sessions.
+	// Keeping the factor state in this store makes password, TOTP, and
+	// passkey authentication share one session boundary.
+	securityPath string
+	factorState  factorState
+	pending      map[string]factorChallenge
 }
 
 // NewStore creates a session store. A nil source is allowed for embedded
@@ -55,7 +62,21 @@ func NewStore(credentials CredentialSource) *Store {
 		credentials: credentials,
 		now:         time.Now,
 		sessions:    make(map[string]session),
+		pending:     make(map[string]factorChallenge),
 	}
+}
+
+// NewPersistentStore creates a browser authentication store whose optional
+// second factors survive service restarts. An empty path keeps factor state
+// in memory, which is useful for focused tests and preserves NewStore's
+// legacy behaviour.
+func NewPersistentStore(credentials CredentialSource, path string) (*Store, error) {
+	store := NewStore(credentials)
+	store.securityPath = path
+	if err := store.loadFactorState(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 // Login verifies the supplied credentials against the installation account

@@ -2,6 +2,19 @@
 
 本项目遵循 Keep a Changelog 风格。版本号用于记录适配器行为变化，不代表 WPS 官方兼容性承诺。
 
+## [0.9.93] - 2026-09-08
+
+### Added
+
+- 网页登录支持可选 TOTP 两步验证、一次性恢复码和 Passkey/WebAuthn 登录。
+- 网页安全设置支持启用/关闭 TOTP、添加/删除 Passkey；安全状态持久化到私密目录，服务重启后保持有效。
+- Passkey 校验包含挑战、来源、RP ID、认证器签名和签名计数检查；实现不增加第三方运行时依赖。
+
+### Security
+
+- 恢复码只保存 SHA-256 哈希，使用后立即失效；Passkey 私钥不会离开浏览器或硬件设备。
+- 2FA/Passkey 只作用于网页登录，不改变 WebDAV 客户端使用 Basic Auth 的兼容行为。
+
 ## [Unreleased]
 
 ### Added

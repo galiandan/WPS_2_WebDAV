@@ -32,7 +32,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 
 安装器会按 `[当前阶段/总阶段]` 输出进度。预编译二进制和源码归档下载都会显示进度；只有进入回退路径时，Native 才会检查/下载 Go `1.25+` 并现场构建。Docker 会在发行版提供时自动安装 Buildx，预编译路径和源码路径都优先使用 Buildx 和逐行构建输出；旧发行版没有插件时使用兼容构建器。源码回退时 Docker 才会下载配置的 Go 构建镜像。若地址无响应，会在超时后退出，不会无限卡住。
 
-预编译 Release 默认标签为 `v0.9.92`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
+预编译 Release 默认标签为 `v0.9.93`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
 
 手动使用 Compose 且 Docker Hub 访问不稳定时，可在构建前指定镜像：
 
@@ -133,6 +133,8 @@ ADAPTER_PORT=18080
 更推荐直接打开网页点击右上角齿轮修改名称。网页保存的值位于 `/etc/wps-adapter/secrets/web-settings.json`，优先级高于 `WPS_ROOT_NAME`，并且不需要重启服务。
 
 打开网页后直接使用安装时设置的适配器用户名和密码登录。网页和 WebDAV 共用这一组凭据，网页登录成功后使用 HttpOnly Cookie；服务不创建用户数据库，也没有注册入口。替换 `/etc/wps-adapter/secrets/adapter-username` 或 `/etc/wps-adapter/secrets/adapter-password` 后，网页和 WebDAV 会同时使用新凭据，无需重启服务。
+
+网页登录后可在“设置 → 登录安全”启用 TOTP 两步验证或注册 Passkey。状态保存在 `/etc/wps-adapter/secrets/auth-settings.json`，不会写入环境文件；TOTP 恢复码只在启用时显示一次，Passkey 私钥始终留在浏览器或硬件设备中。TOTP 可在 HTTP 下工作，但 HTTP 不适合公网；Passkey 通常要求 HTTPS。
 
 检查配置不会访问 WPS：
 

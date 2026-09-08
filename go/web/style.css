@@ -214,6 +214,8 @@ input, select {
 .primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); color: var(--accent-ink); }
 .auth-submit { box-shadow: var(--shadow-accent); min-height: 44px; margin-top: 2px; width: 100%; }
+.auth-submit.secondary { align-items: center; display: flex; gap: 8px; justify-content: center; }
+.auth-submit.secondary .icon { height: 17px; width: 17px; }
 .auth-message { color: var(--bad); min-height: 22px; margin: 15px 0 0; }
 .auth-footnote { border-top: 1px solid var(--line); color: var(--text-3); font-size: 12px; margin: 16px 0 0; padding-top: 14px; }
 .auth-security { display: none; }
@@ -511,6 +513,12 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
 .storage-setting h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .storage-setting p { color: var(--text-3); font-size: 12px; line-height: 18px; margin: 4px 0 0; max-width: 270px; overflow-wrap: anywhere; }
 .storage-setting .secondary { flex: 0 0 auto; min-height: 36px; padding: 7px 11px; }
+.security-setting { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
+.security-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.passkey-list { display: grid; gap: 8px; margin-top: 12px; }
+.passkey-row { align-items: center; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-s); display: flex; justify-content: space-between; padding: 7px 8px 7px 11px; }
+.passkey-name { color: var(--text); font-size: 13px; }
+.security-empty { color: var(--text-3); font-size: 12px; margin: 12px 0 0; }
 .storage-picker-card { display: flex; flex-direction: column; max-height: min(640px, calc(100vh - 36px)); }
 .storage-picker-spaces { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; max-height: 112px; overflow-y: auto; }
 .storage-picker-space { background: var(--surface-2); border-color: var(--line); color: var(--text-2); min-height: 38px; padding: 7px 11px; }

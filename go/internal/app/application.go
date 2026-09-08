@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
@@ -143,7 +144,11 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	application.Settings = settings
 	if cfg.AuthEnabled() {
 		adapterAuth := adapterAuthConfig(cfg)
-		application.Sessions = auth.NewStore(adapterAuth.Credentials)
+		authStatePath := filepath.Join(filepath.Dir(cfg.WebSettingsDir), "auth-settings.json")
+		application.Sessions, err = auth.NewPersistentStore(adapterAuth.Credentials, authStatePath)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	rootName, err := settings.Name()
 	if err != nil {

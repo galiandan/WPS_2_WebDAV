@@ -131,6 +131,19 @@ curl 会提示输入适配器 Basic Auth 密码。不要把密码写在命令中
 
 首次同步得到的 `rtk` 会保存在 VPS secret 文件中，群组和目录选择保存在 `wps-workspace.json`。默认目录是企业云盘根目录 `0`；选择子文件夹后会保存具体文件夹 ID 和显示路径。适配器遇到 WPS `401` 时，会按已经观察到的 `grant_token` 刷新流程更新轮换 Cookie，并重试原请求。只有 WPS 撤销刷新票据、要求重新登录或登录策略改变时，才需要再次运行助手。
 
+## Web login security
+
+网页登录仍使用安装时创建的唯一 Basic Auth 账号。WebDAV 客户端、REST 客户端和网页的账号密码不分离；2FA 和 Passkey 只增加网页登录方式，不会让 Windows、手机、NAS 等 WebDAV 客户端支持交互式二次验证。
+
+登录网页后打开“设置 → 登录安全”即可选择：
+
+1. 启用 TOTP 两步验证。把页面显示的密钥添加到验证器应用，输入当前 6 位验证码确认。随后页面一次性显示 8 个恢复码；恢复码只保存哈希，必须离线保存原文。
+2. 添加 Passkey。浏览器会调用系统的指纹、人脸、设备 PIN 或安全密钥。注册和登录要求浏览器提供 WebAuthn 安全上下文，生产环境应使用 HTTPS 域名。
+
+2FA/Passkey 状态文件是 `/etc/wps-adapter/secrets/auth-settings.json`，权限与其他私密状态文件相同。不要手工编辑；忘记验证器时使用尚未使用的恢复码关闭 2FA，再重新配置。Passkey 可以在网页安全设置中逐个删除。若所有 Passkey 都被删除，密码登录仍然可用。
+
+如果使用纯 HTTP 访问公网 IP，TOTP 仍可工作，但密码、验证码和会话本身都会经过明文连接；Passkey 通常会被浏览器禁用。没有域名和证书时建议只在可信网络使用 HTTP，或先配置 HTTPS 反向代理。
+
 ## Troubleshooting
 
 ### 找不到 Chrome
