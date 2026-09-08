@@ -373,25 +373,28 @@ func basicAuth(username, password string) string {
 	return out.String()
 }
 
-func TestWebRoutesRequireAuthentication(t *testing.T) {
+func TestWebShellIsPublicAndProtectedRoutesRequireAuthentication(t *testing.T) {
 	cfg := withAuth(t, fixtureConfig(t))
 	server, _ := newTestServer(t, cfg)
 	for _, path := range []string{"/", "/web", "/web/", "/assets/style.css", "/assets/app.js"} {
 		response := get(t, server.URL+path, nil)
 		body, _ := io.ReadAll(response.Body)
 		response.Body.Close()
-		if response.StatusCode != http.StatusUnauthorized {
+		if response.StatusCode != http.StatusOK {
 			t.Errorf("%s without auth = %d", path, response.StatusCode)
 		}
-		if challenge := response.Header.Get("WWW-Authenticate"); challenge != `Basic realm="wps-adapter"` {
-			t.Errorf("%s challenge = %q", path, challenge)
-		}
-		if len(body) != 0 {
-			t.Errorf("%s unauthorized body = %q", path, body)
+		if len(body) == 0 {
+			t.Errorf("%s public body is empty", path)
 		}
 	}
+	response := get(t, server.URL+"/api/v1/settings", nil)
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized || response.Header.Get("WWW-Authenticate") != "" || len(body) == 0 {
+		t.Errorf("protected browser API = %d challenge=%q body=%q", response.StatusCode, response.Header.Get("WWW-Authenticate"), body)
+	}
 	// /healthz stays public.
-	response := get(t, server.URL+"/healthz", nil)
+	response = get(t, server.URL+"/healthz", nil)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Errorf("healthz = %d", response.StatusCode)

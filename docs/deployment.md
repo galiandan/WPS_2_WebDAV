@@ -122,8 +122,6 @@ WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
 WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
 ADAPTER_USERNAME_FILE=/etc/wps-adapter/secrets/adapter-username
 ADAPTER_PASSWORD_FILE=/etc/wps-adapter/secrets/adapter-password
-ADAPTER_USER_DB=/etc/wps-adapter/secrets/users.json
-ADAPTER_REGISTRATION_ENABLED=true
 ADAPTER_BIND=127.0.0.1
 ADAPTER_PORT=18080
 ```
@@ -134,7 +132,7 @@ ADAPTER_PORT=18080
 
 更推荐直接打开网页点击右上角齿轮修改名称。网页保存的值位于 `/etc/wps-adapter/secrets/web-settings.json`，优先级高于 `WPS_ROOT_NAME`，并且不需要重启服务。
 
-打开网页后先在内置页面注册本地账号。网页账号与 WPS 登录账号分开，密码以 PBKDF2 哈希保存，会话使用 HttpOnly Cookie；WebDAV 客户端仍使用 Basic Auth。`ADAPTER_REGISTRATION_ENABLED=false` 可关闭注册，账号数据库默认是 `/etc/wps-adapter/secrets/users.json`。当前版本已经建立每用户 ID 上下文，但 WPS Cookie、工作区和文件映射仍是服务级配置，尚未实现不同网页账号之间的 WPS 数据隔离。
+打开网页后直接使用安装时设置的适配器用户名和密码登录。网页和 WebDAV 共用这一组凭据，网页登录成功后使用 HttpOnly Cookie；服务不创建用户数据库，也没有注册入口。替换 `/etc/wps-adapter/secrets/adapter-username` 或 `/etc/wps-adapter/secrets/adapter-password` 后，网页和 WebDAV 会同时使用新凭据，无需重启服务。
 
 检查配置不会访问 WPS：
 

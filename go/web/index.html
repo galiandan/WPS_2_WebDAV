@@ -65,23 +65,13 @@
         <h1 id="auth-title">欢迎回来</h1>
         <p id="auth-subtitle">登录后管理你的 WPS 文件</p>
       </div>
-      <div class="auth-tabs" role="tablist" aria-label="账户操作">
-        <button id="login-tab" class="auth-tab active" type="button" role="tab" aria-selected="true">登录</button>
-        <button id="register-tab" class="auth-tab" type="button" role="tab" aria-selected="false">注册</button>
-      </div>
       <form id="login-form" class="auth-form" novalidate>
         <label class="auth-field"><span>用户名</span><input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none" required></label>
         <label class="auth-field"><span>密码</span><input id="login-password" name="password" type="password" autocomplete="current-password" required></label>
         <button id="login-submit" class="primary auth-submit" type="submit">登录</button>
       </form>
-      <form id="register-form" class="auth-form hidden" novalidate>
-        <label class="auth-field"><span>用户名</span><input id="register-username" name="username" type="text" autocomplete="username" autocapitalize="none" required></label>
-        <label class="auth-field"><span>密码</span><input id="register-password" name="password" type="password" autocomplete="new-password" required></label>
-        <label class="auth-field"><span>确认密码</span><input id="register-confirm" name="confirm" type="password" autocomplete="new-password" required></label>
-        <button id="register-submit" class="primary auth-submit" type="submit">创建账号</button>
-      </form>
       <p id="auth-message" class="auth-message" role="alert" aria-live="polite"></p>
-      <p class="auth-footnote">账号只用于保护此适配器网页，WPS 登录仍由服务端凭据管理。</p>
+      <p class="auth-footnote">使用安装时设置的适配器账号登录；该账号同时用于 WebDAV。</p>
     </div>
     <p class="auth-security"><span class="connection-dot connected" aria-hidden="true"></span>你的连接由当前服务保护</p>
   </section>

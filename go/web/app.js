@@ -162,41 +162,21 @@
     $("app-ui").classList.add("hidden");
   }
 
-  function switchAuthMode(mode) {
-    const register = mode === "register";
-    $("login-tab").classList.toggle("active", !register);
-    $("login-tab").setAttribute("aria-selected", String(!register));
-    $("register-tab").classList.toggle("active", register);
-    $("register-tab").setAttribute("aria-selected", String(register));
-    $("login-form").classList.toggle("hidden", register);
-    $("register-form").classList.toggle("hidden", !register);
-    $("auth-title").textContent = register ? "创建账号" : "欢迎回来";
-    $("auth-subtitle").textContent = register ? "创建一个账号来保护你的文件" : "登录后管理你的 WPS 文件";
-    setAuthMessage("");
-    const first = register ? $("register-username") : $("login-username");
-    setTimeout(() => first.focus(), 0);
-  }
-
-  async function submitAuth(mode, event) {
+  async function submitAuth(event) {
     event.preventDefault();
     if (authInFlight) return;
-    const register = mode === "register";
-    const username = $(`${mode}-username`).value.trim();
-    const password = $(`${mode}-password`).value;
-    if (register && password !== $("register-confirm").value) {
-      setAuthMessage("两次输入的密码不一致");
-      return;
-    }
+    const username = $("login-username").value.trim();
+    const password = $("login-password").value;
     if (!username || !password) {
       setAuthMessage("请输入用户名和密码");
       return;
     }
     authInFlight = true;
-    const submit = $(`${mode}-submit`);
+    const submit = $("login-submit");
     submit.disabled = true;
-    setAuthMessage(register ? "正在创建账号…" : "正在登录…", "pending");
+    setAuthMessage("正在登录…", "pending");
     try {
-      const data = await apiRequest(`auth/${register ? "register" : "login"}`, {
+      const data = await apiRequest("auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -215,7 +195,6 @@
   async function initWebAuth() {
     try {
       const data = await apiRequest("auth/me");
-      if (data && data.registration_enabled === false) $("register-tab").classList.add("hidden");
       if (!data || data.authenticated !== true) {
         showLoginScreen();
         return false;
@@ -223,6 +202,12 @@
       showAppForUser(data.user);
       return true;
     } catch (error) {
+      // A local-only deployment may intentionally disable Basic Auth. In
+      // that mode the auth route is absent and the file manager stays open.
+      if (error && error.status === 404) {
+        showAppForUser(null);
+        return true;
+      }
       showLoginScreen();
       setAuthMessage("无法连接服务，请刷新页面重试");
       return false;
@@ -1410,10 +1395,7 @@
   }
 
   /* ============ 事件绑定 ============ */
-  $("login-tab").addEventListener("click", () => switchAuthMode("login"));
-  $("register-tab").addEventListener("click", () => switchAuthMode("register"));
-  $("login-form").addEventListener("submit", (event) => submitAuth("login", event));
-  $("register-form").addEventListener("submit", (event) => submitAuth("register", event));
+  $("login-form").addEventListener("submit", submitAuth);
   $("logout-button").addEventListener("click", logout);
 
   $("modal-form").addEventListener("submit", (event) => {

@@ -48,7 +48,7 @@ type Application struct {
 
 	// Assembled services, in construction order.
 	Settings *workspace.WebSettings
-	Users    *auth.Store
+	Sessions *auth.Store
 	State    *workspace.WorkspaceState // nil without an auto/workspace setup
 	Source   credentials.Source        // nil without any credential source
 	Client   *wps.Client
@@ -141,11 +141,10 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		return fail(err)
 	}
 	application.Settings = settings
-	users, err := auth.NewStore(cfg.UserDBFile)
-	if err != nil {
-		return fail(err)
+	if cfg.AuthEnabled() {
+		adapterAuth := adapterAuthConfig(cfg)
+		application.Sessions = auth.NewStore(adapterAuth.Credentials)
 	}
-	application.Users = users
 	rootName, err := settings.Name()
 	if err != nil {
 		return fail(err)
@@ -257,7 +256,9 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	if err != nil {
 		return fail(err)
 	}
-	rest.SetWebAuth(application.Users, cfg.RegistrationEnabled)
+	if application.Sessions != nil {
+		rest.SetWebAuth(application.Sessions)
+	}
 	dav, err := httpserver.NewDAVDispatcher(multi, limits,
 		httpserver.DAVLimits{
 			MaxPropfindEntries: cfg.MaxPropfindEntries,
@@ -513,6 +514,16 @@ func newCredentialSource(cfg config.Config) credentials.Source {
 	return &fallbackCredentialSource{file: file, cookie: cfg.InlineCookie, csrfToken: cfg.InlineCSRFToken}
 }
 
+func adapterAuthConfig(cfg config.Config) httpserver.BasicAuthConfig {
+	return httpserver.BasicAuthConfig{
+		Username:     cfg.Username,
+		Password:     cfg.Password,
+		UsernameFile: cfg.UsernameFile,
+		PasswordFile: cfg.PasswordFile,
+		ReadSecret:   securefile.ReadSecret,
+	}
+}
+
 // Handler builds the full middleware chain around the router. The health
 // and web handlers never touch storage; REST and DAV errors map through
 // the domain status table inside the router dispatch.
@@ -534,13 +545,7 @@ func (a *Application) Handler() (http.Handler, error) {
 	chainConfig := httpserver.ChainConfig{
 		Router: router,
 		Health: a.serveHealth,
-		Auth: httpserver.BasicAuthConfig{
-			Username:     a.Config.Username,
-			Password:     a.Config.Password,
-			UsernameFile: a.Config.UsernameFile,
-			PasswordFile: a.Config.PasswordFile,
-			ReadSecret:   securefile.ReadSecret,
-		},
+		Auth:   adapterAuthConfig(a.Config),
 		Log: func(requestID, method, path string) {
 			// Python's log_message prints method and sanitized path only.
 			log.Printf("%s %s", method, path)
@@ -549,12 +554,9 @@ func (a *Application) Handler() (http.Handler, error) {
 			log.Printf("request failed: %v\n%s", recovered, stack)
 		},
 	}
-	// Direct test/embedded configurations can leave UserDBFile empty to
-	// retain the legacy Basic Auth-only surface. Normal environment loading
-	// always supplies the persistent database path and enables web sessions.
-	if a.Config.UserDBFile != "" {
+	if a.Sessions != nil {
 		chainConfig.WebAuth = &httpserver.WebAuthConfig{
-			Store:      a.Users,
+			Store:      a.Sessions,
 			RESTPrefix: a.Config.RESTPrefix,
 		}
 	}

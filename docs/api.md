@@ -4,9 +4,9 @@
 
 ## 浏览器页面
 
-打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页登录/注册使用适配器自己的本地账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以受限并发预取最多 24 个直接子文件夹，缓存 30 秒；进入已预取的文件夹时不再重复等待 WPS 列目录请求。刷新目录或执行写操作会清理这批缓存。
+打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页直接使用安装时设置的适配器 Basic Auth 账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以受限并发预取最多 24 个直接子文件夹，缓存 30 秒；进入已预取的文件夹时不再重复等待 WPS 列目录请求。刷新目录或执行写操作会清理这批缓存。
 
-网页账号由 `ADAPTER_USER_DB` 指向的私有 JSON 文件保存，默认是 `/etc/wps-adapter/secrets/users.json`。密码使用 PBKDF2-SHA256 哈希，浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。`ADAPTER_REGISTRATION_ENABLED=false` 可关闭注册。当前版本已经为每个请求建立了用户 ID 上下文，后续可以把 WPS Cookie、工作区和网页设置迁移为每用户 profile；当前 WPS 凭据仍是服务级配置，所有已登录网页用户共享同一组 WPS 映射。
+网页不提供注册功能，也不创建额外的用户数据库。唯一网页登录账号就是安装时写入 `/etc/wps-adapter/secrets/adapter-username` 和 `/etc/wps-adapter/secrets/adapter-password` 的适配器账号；浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。替换这两个文件后，网页登录和 WebDAV 会同时使用新凭据。
 
 ## WebDAV
 
@@ -44,13 +44,11 @@ WebDAV `PUT` 对同名文件执行覆盖更新；REST `PUT` 默认不覆盖同�
 
 ```text
 GET  /api/v1/auth/me
-GET  /api/v1/auth/config
-POST /api/v1/auth/register
 POST /api/v1/auth/login
 POST /api/v1/auth/logout
 ```
 
-`register` 和 `login` 接收 `{"username":"...","password":"..."}`，成功后通过 HttpOnly `wps_session` Cookie 建立会话。认证接口和网页资源可以匿名访问；文件、设置和 WPS 状态接口必须有网页会话或适配器 Basic Auth。WebDAV 始终使用 Basic Auth，不接受网页会话 Cookie。
+`login` 接收 `{"username":"...","password":"..."}`，凭据必须与安装时的适配器账号一致；成功后通过 HttpOnly `wps_session` Cookie 建立会话。认证接口和网页资源可以匿名访问；文件、设置和 WPS 状态接口必须有网页会话或适配器 Basic Auth。WebDAV 始终使用 Basic Auth，不接受网页会话 Cookie。
 
 文件 API：
 

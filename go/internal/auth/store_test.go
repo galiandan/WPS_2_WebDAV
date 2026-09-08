@@ -2,75 +2,40 @@ package auth
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
 
-func TestRegisterPersistsOnlyPasswordHash(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "users.json")
-	store, err := NewStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	user, err := store.Register("alice@example.com", "correct horse battery")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.ID == "" || user.Username != "alice@example.com" {
-		t.Fatalf("user = %+v", user)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "correct horse battery") {
-		t.Fatal("password was persisted in plaintext")
-	}
-	if !strings.Contains(string(raw), "pbkdf2-sha256") {
-		t.Fatal("password hash is missing")
-	}
+func TestStoreUsesInstallationCredentialsAndKeepsNoDatabase(t *testing.T) {
+	username, password := "adapter", "installation secret"
+	store := NewStore(func() (string, string) { return username, password })
 
-	reloaded, err := NewStore(path)
-	if err != nil {
-		t.Fatal(err)
+	if _, _, err := store.Login("other", password); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("wrong username error = %v", err)
 	}
-	if _, _, err := reloaded.Login("alice@example.com", "wrong password"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, _, err := store.Login(username, "wrong"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("wrong password error = %v", err)
 	}
-	token, loggedIn, err := reloaded.Login("ALICE@EXAMPLE.COM", "correct horse battery")
-	if err != nil || token == "" || loggedIn.ID != user.ID {
-		t.Fatalf("login = %q, %+v, %v", token, loggedIn, err)
+	token, user, err := store.Login(username, password)
+	if err != nil || token == "" || user.Username != username {
+		t.Fatalf("login = %q, %+v, %v", token, user, err)
 	}
-	if current, ok := reloaded.Current(token); !ok || current.ID != user.ID {
+	if current, ok := store.Current(token); !ok || current.Username != username {
 		t.Fatalf("current = %+v, %v", current, ok)
+	}
+
+	username, password = "new-adapter", "new secret"
+	if _, _, err := store.Login("adapter", "installation secret"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("old credentials remained valid: %v", err)
+	}
+	if _, _, err := store.Login("new-adapter", "new secret"); err != nil {
+		t.Fatalf("reloaded credentials failed: %v", err)
 	}
 }
 
-func TestStoreValidatesRegistrationAndExpiresSessions(t *testing.T) {
-	store, err := NewStore("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Register("ab", "long enough password"); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("short username error = %v", err)
-	}
-	if _, err := store.Register("alice", "short"); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("short password error = %v", err)
-	}
-	if _, err := store.Register("alice", "long enough password"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Register("ALICE", "another password"); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("duplicate error = %v", err)
-	}
-	token, _, err := store.Login("alice", "long enough password")
+func TestStoreExpiresAndLogsOutSessions(t *testing.T) {
+	store := NewStore(func() (string, string) { return "adapter", "long secret" })
+	token, _, err := store.Login("adapter", "long secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,5 +44,15 @@ func TestStoreValidatesRegistrationAndExpiresSessions(t *testing.T) {
 	store.mu.Unlock()
 	if _, ok := store.Current(token); ok {
 		t.Fatal("expired session was accepted")
+	}
+
+	store = NewStore(func() (string, string) { return "adapter", "long secret" })
+	token, _, err = store.Login("adapter", "long secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Logout(token)
+	if _, ok := store.Current(token); ok {
+		t.Fatal("logged out session was accepted")
 	}
 }

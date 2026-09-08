@@ -14,7 +14,7 @@
 | Health | `https://<adapter-host>/healthz` |
 | WPS status | `https://<adapter-host>/api/v1/status` |
 
-网页入口和 `auth/*` 接口用于本地账号登录；登录后的网页 REST 请求使用 HttpOnly 会话 Cookie。WebDAV 和登录助手的 REST 请求继续使用适配器 Basic Auth。健康检查不需要认证，但只用于检查进程状态，不代表 WPS 会话有效。
+网页入口和 `auth/*` 接口用于安装时唯一适配器账号登录；登录后的网页 REST 请求使用 HttpOnly 会话 Cookie。WebDAV 和登录助手的 REST 请求继续使用同一组适配器 Basic Auth。健康检查不需要认证，但只用于检查进程状态，不代表 WPS 会话有效。
 
 ## Recommended rollout
 

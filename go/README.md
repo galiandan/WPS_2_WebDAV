@@ -63,11 +63,10 @@ Native 才使用主机 Go `1.25+` 或下载固定版本的 Go 工具链，Docker
 Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。安装器不执行发布归档、二进制
 或工具链哈希校验。
 
-网页使用本地账号登录和 HttpOnly 会话 Cookie；WebDAV 继续使用 Basic Auth。
-账号密码以 PBKDF2-SHA256 哈希保存，用户 ID 已进入请求上下文，为后续每用户
-WPS profile 隔离预留边界。当前 WPS Cookie、CSRF、workspace 和 refresh 轮换文件
-仍是服务级配置，服务不会把它们写入日志。所有上传、下载、目录递归、并发和临时
-磁盘操作都经过预算限制。
+网页使用安装时设置的唯一适配器账号登录和 HttpOnly 会话 Cookie；WebDAV 继续使用
+同一组 Basic Auth 凭据。账号不写入额外数据库，凭据仍由安装器创建的受限 secret
+文件管理；服务不会把它们写入日志。所有上传、下载、目录递归、并发和临时磁盘
+操作都经过预算限制。
 
 ## 前端
 

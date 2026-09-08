@@ -153,10 +153,6 @@ button, input, select { font: inherit; }
 .auth-kicker { color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .16em; margin: 0 0 9px; }
 .auth-heading h1 { font-size: 29px; letter-spacing: 0; margin: 0; }
 .auth-heading p:last-child { color: var(--text-2); margin: 7px 0 0; }
-.auth-tabs { border-bottom: 1px solid var(--line); display: flex; gap: 22px; margin: 26px 0 21px; }
-.auth-tab { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--text-3); margin-bottom: -1px; min-height: 38px; padding: 0 2px; }
-.auth-tab:hover { background: transparent; color: var(--text); }
-.auth-tab.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 700; }
 .auth-form { display: flex; flex-direction: column; gap: 15px; }
 .auth-field { color: var(--text-2); display: flex; flex-direction: column; font-size: 13px; font-weight: 650; gap: 7px; }
 .auth-field input { background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--radius-s); color: var(--text); min-height: 44px; outline: 0; padding: 9px 12px; width: 100%; }

@@ -248,6 +248,34 @@ type BasicAuthConfig struct {
 	ReadSecret func(path string) (string, error)
 }
 
+// Credentials hot-reads the same account used by Basic Auth. Browser login
+// and WebDAV therefore always share one installation-managed credential pair.
+func (c BasicAuthConfig) Credentials() (string, string) {
+	username := c.Username
+	if c.UsernameFile != "" {
+		if c.ReadSecret == nil {
+			return "", ""
+		}
+		value, err := c.ReadSecret(c.UsernameFile)
+		if err != nil {
+			return "", ""
+		}
+		username = value
+	}
+	password := c.Password
+	if c.PasswordFile != "" {
+		if c.ReadSecret == nil {
+			return "", ""
+		}
+		value, err := c.ReadSecret(c.PasswordFile)
+		if err != nil {
+			return "", ""
+		}
+		password = value
+	}
+	return username, password
+}
+
 // WebAuthConfig describes the browser-session boundary. The REST prefix is
 // needed to suppress a native Basic Auth prompt for unauthenticated browser
 // fetches; WebDAV still receives the normal challenge.
@@ -281,23 +309,7 @@ func (a basicAuth) enabled() bool {
 
 // values hot-reads the credential files on every call.
 func (a basicAuth) values() (string, string) {
-	username := a.config.Username
-	if a.config.UsernameFile != "" {
-		username = a.readCredential(a.config.UsernameFile)
-	}
-	password := a.config.Password
-	if a.config.PasswordFile != "" {
-		password = a.readCredential(a.config.PasswordFile)
-	}
-	return username, password
-}
-
-func (a basicAuth) readCredential(path string) string {
-	value, err := a.config.ReadSecret(path)
-	if err != nil {
-		return ""
-	}
-	return value
+	return a.config.Credentials()
 }
 
 // accepts mirrors Python's BasicAuth.accepts including the strict base64
@@ -353,8 +365,8 @@ func (a basicAuth) middleware() Middleware {
 			}
 			if a.webAuth != nil && a.isBrowserAPIRequest(r) {
 				if token := webSessionToken(r); token != "" {
-					if user, ok := a.webAuth.Store.Current(token); ok && !a.isBasicOnlyPath(path) {
-						next.ServeHTTP(w, r.WithContext(withWebUser(r.Context(), user)))
+					if _, ok := a.webAuth.Store.Current(token); ok && !a.isBasicOnlyPath(path) {
+						next.ServeHTTP(w, r)
 						return
 					}
 				}
@@ -409,19 +421,6 @@ func webSessionToken(r *http.Request) string {
 		return ""
 	}
 	return cookie.Value
-}
-
-type webUserContextKey struct{}
-
-func withWebUser(ctx context.Context, user auth.User) context.Context {
-	return context.WithValue(ctx, webUserContextKey{}, user)
-}
-
-// WebUserFromContext returns the local account that authenticated a browser
-// request. Future per-user WPS profiles can use this stable boundary.
-func WebUserFromContext(ctx context.Context) (auth.User, bool) {
-	user, ok := ctx.Value(webUserContextKey{}).(auth.User)
-	return user, ok
 }
 
 func sendWebUnauthorized(w http.ResponseWriter) {

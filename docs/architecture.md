@@ -26,7 +26,7 @@ WebDAV clients / REST clients / browser UI
 ## Request flow
 
 1. 客户端请求进入 WebDAV、REST 或同源文件管理页。
-2. 网页资源和 `auth/*` 接口公开用于显示登录页；网页登录成功后通过 HttpOnly 会话 Cookie 进入用户上下文。文件 REST/设置接口接受该会话或 Basic Auth；WebDAV 仍只接受 Basic Auth，保证桌面和 NAS 客户端兼容。
+2. 网页资源和 `auth/*` 接口公开用于显示登录页；使用安装时的唯一适配器账号登录后，通过 HttpOnly 会话 Cookie 访问文件 REST/设置接口。Basic Auth 仍直接保护 WebDAV，并继续兼容桌面和 NAS 客户端。
 3. 服务完成认证、路径校验、并发槽和请求大小检查。
 4. `WpsStorage` 将远端路径解析为 WPS 文件夹/文件 ID，并使用短 TTL 元数据缓存减少重复列表请求；选择多个空间时，`MultiSpaceStorage` 先按根目录下的虚拟空间文件夹路由，再交给对应的 `WpsStorage`。
 5. `WpsDriveClient` 从 secret 文件读取当前 Cookie/CSRF，调用已经从本人账号观察并记录的 WPS 请求形状。
@@ -39,7 +39,7 @@ WebDAV clients / REST clients / browser UI
 
 ## Authentication boundaries
 
-- 网页本地账号数据库保存用户身份，密码为 PBKDF2-SHA256 哈希；会话令牌只存在进程内，服务重启后失效。每个已认证请求都带有稳定的用户 ID 上下文，为未来每用户 WPS profile 隔离预留边界。
+- 网页不创建本地用户数据库；网页登录直接校验安装时的 Basic Auth 凭据，会话令牌只存在进程内，服务重启后失效。网页与 WebDAV 始终使用同一组账号。
 - Basic Auth 继续保护 WebDAV，并作为 REST、设置和登录助手的兼容凭据通道。
 - WPS Cookie 和 CSRF 只存放在本机或 VPS 的权限受限 secret 文件中。
 - 交互式登录由本地 `wps_login.py` 助手启动官方 WPS 页面完成，并可通过 HTTP/HTTPS 同步到服务；远程 HTTP 需要用户确认风险；服务器不代填密码、SSO、验证码或风控。

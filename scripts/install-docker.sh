@@ -581,6 +581,18 @@ set_env_value() {
     mv -f "$temporary" "$target"
 }
 
+remove_env_value() {
+    local key="$1"
+    local target="${ENV_TARGET_FILE:-$ENV_FILE}"
+    local temporary
+    [[ -f "$target" ]] || return 0
+    temporary="$(mktemp)"
+    awk -v key="$key" '$0 ~ "^[[:space:]]*" key "[[:space:]]*=" { next } { print }' \
+        "$target" >"$temporary"
+    chmod 600 "$temporary"
+    mv -f "$temporary" "$target"
+}
+
 validate_port() {
     [[ "$1" =~ ^[0-9]+$ ]] || die "端口必须是数字"
     ((1 <= 10#$1 && 10#$1 <= 65535)) || die "端口必须在 1 到 65535 之间"
@@ -838,6 +850,8 @@ set_env_value WPS_COOKIE_FILE "$COOKIE_FILE"
 set_env_value WPS_CSRF_TOKEN_FILE "$CSRF_FILE"
 set_env_value ADAPTER_USERNAME_FILE "$USER_FILE"
 set_env_value ADAPTER_PASSWORD_FILE "$PASSWORD_FILE"
+remove_env_value ADAPTER_USER_DB
+remove_env_value ADAPTER_REGISTRATION_ENABLED
 set_env_value ADAPTER_BIND "$BIND"
 set_env_value ADAPTER_PORT "$PORT"
 chown "$RUN_USER:$RUN_GROUP" "$ENV_TARGET_FILE"

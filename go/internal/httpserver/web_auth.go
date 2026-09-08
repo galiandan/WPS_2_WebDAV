@@ -11,34 +11,24 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
 )
 
-// WebAuthController exposes the local browser account flow. The account
-// store is optional at the dispatcher level so the older REST test fixtures
-// can continue to exercise file operations without setting up users.
+// WebAuthController exposes the one-account browser login flow. The account
+// credentials are the same credentials used by WebDAV Basic Auth.
 type WebAuthController struct {
-	store               *auth.Store
-	registrationEnabled bool
+	store *auth.Store
 }
 
-// SetWebAuth enables the browser login/register endpoints on a dispatcher.
-func (d *RESTDispatcher) SetWebAuth(store *auth.Store, registrationEnabled bool) {
-	d.webAuth = &WebAuthController{store: store, registrationEnabled: registrationEnabled}
+// SetWebAuth enables the browser login/logout endpoints on a dispatcher.
+func (d *RESTDispatcher) SetWebAuth(store *auth.Store) {
+	d.webAuth = &WebAuthController{store: store}
 }
 
 type authUserPayload struct {
-	ID        string `json:"id"`
-	Username  string `json:"username"`
-	CreatedAt int64  `json:"created_at"`
+	Username string `json:"username"`
 }
 
 type authMePayload struct {
-	Authenticated       bool             `json:"authenticated"`
-	RegistrationEnabled bool             `json:"registration_enabled"`
-	User                *authUserPayload `json:"user,omitempty"`
-}
-
-type authConfigPayload struct {
-	RegistrationEnabled bool `json:"registration_enabled"`
-	UserCount           int  `json:"user_count"`
+	Authenticated bool             `json:"authenticated"`
+	User          *authUserPayload `json:"user,omitempty"`
 }
 
 func (d *RESTDispatcher) serveWebAuth(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
@@ -51,29 +41,16 @@ func (d *RESTDispatcher) serveWebAuth(w http.ResponseWriter, r *http.Request, ro
 			return sendAuthError(w, r, http.StatusMethodNotAllowed, "auth_method_not_allowed", "method not allowed")
 		}
 		user, ok := d.webAuth.currentUser(r)
-		payload := authMePayload{Authenticated: ok, RegistrationEnabled: d.webAuth.registrationEnabled}
+		payload := authMePayload{Authenticated: ok}
 		if ok {
 			payload.User = publicAuthUser(user)
 		}
 		return sendJSON(w, r, http.StatusOK, payload, d.limits, nil)
-	case "auth/config":
-		if r.Method != http.MethodGet {
-			return sendAuthError(w, r, http.StatusMethodNotAllowed, "auth_method_not_allowed", "method not allowed")
-		}
-		return sendJSON(w, r, http.StatusOK, authConfigPayload{
-			RegistrationEnabled: d.webAuth.registrationEnabled,
-			UserCount:           d.webAuth.store.UserCount(),
-		}, d.limits, nil)
 	case "auth/login":
 		if r.Method != http.MethodPost {
 			return sendAuthError(w, r, http.StatusMethodNotAllowed, "auth_method_not_allowed", "method not allowed")
 		}
 		return d.login(w, r)
-	case "auth/register":
-		if r.Method != http.MethodPost {
-			return sendAuthError(w, r, http.StatusMethodNotAllowed, "auth_method_not_allowed", "method not allowed")
-		}
-		return d.register(w, r)
 	case "auth/logout":
 		if r.Method != http.MethodPost {
 			return sendAuthError(w, r, http.StatusMethodNotAllowed, "auth_method_not_allowed", "method not allowed")
@@ -104,38 +81,6 @@ func (d *RESTDispatcher) login(w http.ResponseWriter, r *http.Request) error {
 	}
 	http.SetCookie(w, sessionCookie(r, token))
 	return sendJSON(w, r, http.StatusOK, map[string]any{"status": "ok", "user": publicAuthUser(user)}, d.limits, nil)
-}
-
-func (d *RESTDispatcher) register(w http.ResponseWriter, r *http.Request) error {
-	if !d.webAuth.registrationEnabled {
-		return sendAuthError(w, r, http.StatusForbidden, "auth_registration_disabled", "注册功能已关闭")
-	}
-	payload, err := readAuthJSONBody(w, r, d.limits)
-	if err != nil || payload == nil {
-		return err
-	}
-	username, password, ok := accountFields(payload)
-	if !ok {
-		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_input", "请输入用户名和密码")
-	}
-	user, err := d.webAuth.store.Register(username, password)
-	if errors.Is(err, auth.ErrUsernameTaken) {
-		return sendAuthError(w, r, http.StatusConflict, "auth_username_taken", "用户名已存在")
-	}
-	if errors.Is(err, auth.ErrInvalidInput) {
-		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_input", "用户名需为 3-64 位，密码至少 8 位")
-	}
-	if err != nil {
-		return sendAuthError(w, r, http.StatusInternalServerError, "auth_register_failed", "注册失败，请稍后重试")
-	}
-	// Registration is immediately useful: the new account is signed in so a
-	// first-time visitor never has to repeat the same credentials.
-	token, _, err := d.webAuth.store.Login(username, password)
-	if err != nil {
-		return sendAuthError(w, r, http.StatusInternalServerError, "auth_login_failed", "注册成功，但自动登录失败")
-	}
-	http.SetCookie(w, sessionCookie(r, token))
-	return sendJSON(w, r, http.StatusCreated, map[string]any{"status": "ok", "user": publicAuthUser(user)}, d.limits, nil)
 }
 
 func accountFields(payload map[string]any) (string, string, bool) {
@@ -173,7 +118,7 @@ func readAuthJSONBody(w http.ResponseWriter, r *http.Request, limits ControlLimi
 }
 
 func publicAuthUser(user auth.User) *authUserPayload {
-	return &authUserPayload{ID: user.ID, Username: user.Username, CreatedAt: user.CreatedAt}
+	return &authUserPayload{Username: user.Username}
 }
 
 func (a *WebAuthController) currentUser(r *http.Request) (auth.User, bool) {
