@@ -325,7 +325,8 @@ h1 { font-size: 22px; font-weight: 600; line-height: 30px; margin: 0; }
 .sort-button[data-dir="desc"] .sort-ic { transform: rotate(180deg); }
 .ops-head { color: var(--text-2); font-size: 12px; font-weight: 600; padding-right: 4px; }
 .list-body[role="table"] { display: block; }
-.list-body > .list-row { align-items: center; border-bottom: 1px solid var(--line); min-height: 48px; padding-bottom: 6px; padding-top: 6px; transition: background-color .14s ease, box-shadow .14s ease; }
+.list-body > .list-row { align-items: center; border-bottom: 1px solid var(--line); min-height: 48px; padding-bottom: 6px; padding-top: 6px; position: relative; transition: background-color .14s ease, box-shadow .14s ease; z-index: 0; }
+.list-body > .list-row.has-open-menu, .list-body > .card.has-open-menu { z-index: 50; }
 .list-body > .list-row:last-child { border-bottom: 0; }
 .list-body > .list-row:hover { background: var(--surface-2); }
 .list-row.is-selected { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
@@ -356,7 +357,7 @@ h1 { font-size: 22px; font-weight: 600; line-height: 30px; margin: 0; }
 .action-menu { flex: 0 0 auto; position: relative; }
 .action-menu-trigger { min-height: 32px; width: 32px; }
 .action-menu-trigger .icon { height: 16px; width: 16px; }
-.action-menu-popover { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s); box-shadow: var(--shadow-2); display: none; min-width: 148px; padding: 4px; position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; }
+.action-menu-popover { background-color: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s); box-shadow: var(--shadow-2); display: none; min-width: 148px; opacity: 1; padding: 4px; position: absolute; right: 0; top: calc(100% + 4px); z-index: 60; }
 .action-menu.open .action-menu-popover { display: grid; }
 .menu-item { background: transparent; border: 0; border-radius: var(--radius-s); color: var(--text-2); justify-content: flex-start; min-height: 36px; padding: 7px 9px; text-align: left; width: 100%; }
 .menu-item:hover, .menu-item:focus-visible { background: var(--surface-2); color: var(--text); }

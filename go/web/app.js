@@ -1315,7 +1315,9 @@
   function closeActionMenu(restoreFocus = false) {
     if (!openActionMenu) return;
     const menu = openActionMenu;
+    const row = menu.closest(".list-row, .card");
     menu.classList.remove("open");
+    if (row) row.classList.remove("has-open-menu");
     const trigger = menu.querySelector(".action-menu-trigger");
     if (trigger) trigger.setAttribute("aria-expanded", "false");
     openActionMenu = null;
@@ -1361,6 +1363,8 @@
       }
       closeActionMenu();
       openActionMenu = menu;
+      const row = menu.closest(".list-row, .card");
+      if (row) row.classList.add("has-open-menu");
       menu.classList.add("open");
       trigger.setAttribute("aria-expanded", "true");
       const first = popover.querySelector(".menu-item");
