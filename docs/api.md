@@ -28,7 +28,7 @@
 
 WebDAV 使用 `MOVE` 和 `COPY` 请求的 `Destination` 目标地址。`MOVE` 同目录时表示重命名，跨目录时目标路径最后一个组件必须与原名称相同；`COPY` 的目标路径是复制后的完整路径。`Overwrite: F` 在目标存在时返回 `412`；目标已存在且要求覆盖时返回 `501`，避免 WPS 私有接口的非原子操作造成数据丢失。跨目录同时改名暂不支持。删除和移动都使用 WPS 的异步任务接口；适配器只在任务报告成功后才返回成功。
 
-登录助手每次只绑定一个 WPS 空间，因此 `/dav/` 直接对应这个空间的当前 WebDAV 根目录，不会创建虚拟空间层。需要切换空间时重新运行登录助手；网页设置只负责在当前空间内重新选择目录。上传、`MOVE` 和 `COPY` 的目标始终明确落在同一个空间中。
+登录助手可以绑定多个 WPS 空间。网页把这些空间挂载为 `/空间名称/`，例如 `/A/` 和 `/B/`；WebDAV 不使用这个多空间根，而是只映射到一个已选空间中的一个目录。例如顶层配置为 `/A/web` 时，`/dav/test.txt` 实际写入 A 的 `web/test.txt`。上传、`MOVE` 和 `COPY` 都被限制在这个唯一 WebDAV 子树内。
 
 锁是适配器本地的兼容层：它不会调用未确认的 WPS 锁接口，只在当前进程内阻止没有对应 `If`/`Lock-Token` 的写操作。服务重启或锁超时后锁会消失。锁默认最长 24 小时，同时最多保留 4096 把活动锁；超过数量时返回 `503`。
 
@@ -111,20 +111,22 @@ Content-Type: application/json
 ```json
 {
   "status": "ok",
-  "mode": "single",
+  "mode": "spaces",
   "locations": [
-    {"name": "当前 WPS 空间", "path": "/", "root_path": "/WebDAV文件"}
-  ]
+    {"name": "A", "path": "/A", "root_path": "/"},
+    {"name": "B", "path": "/B", "root_path": "/"}
+  ],
+  "current": {"name": "A", "path": "/A", "root_path": "/web"}
 }
 ```
 
-网页设置中的“选择文件夹”使用 `GET /api/v1/storage/entries?path=...` 浏览当前 WPS 空间原始根目录下的文件夹。`PATCH /api/v1/storage` 只接受一个已经在该接口中浏览到的路径，例如：
+`locations` 是网页可浏览的空间列表，不是多个 WebDAV 根目录。`current` 是唯一的 WebDAV 根目录。网页设置中的“选择文件夹”使用 `GET /api/v1/storage/entries?path=...` 浏览任意一个已选空间的原始根目录，例如：
 
 ```json
-{"path":"/WebDAV文件/归档"}
+{"path":"/A/web"}
 ```
 
-保存后，WebDAV 地址仍然是 `/dav/`，但它映射到新的 WPS 文件夹。这个操作不会在 WPS 中移动、复制或删除任何文件；它只更新 `/etc/wps-adapter/secrets/wps-workspace.json` 中的 `root_id`、`root_path` 或空间 mount 信息。服务会立即清理目录缓存并使用新位置，无需重启。
+保存后，WebDAV 地址仍然是 `/dav/`，但它映射到新的 WPS 文件夹；网页的 A、B 空间根目录不会改变。这个操作不会在 WPS 中移动、复制或删除任何文件；它只更新 `/etc/wps-adapter/secrets/wps-workspace.json` 的顶层 `group_id`、`root_id`、`root_path`，并保留 `spaces` 数组不变。服务会立即清理目录缓存并使用新位置，无需重启。
 
 ### Importing a WPS session
 
@@ -138,12 +140,17 @@ Content-Type: application/json
   ],
   "workspace": {
     "group_id": "<group-id-from-current-space-url>",
-    "root_id": "0"
+    "root_id": "<single-webdav-folder-id>",
+    "root_path": "/web",
+    "spaces": [
+      {"group_id": "<group-a>", "root_id": "0", "name": "A"},
+      {"group_id": "<group-b>", "root_id": "0", "name": "B"}
+    ]
   }
 }
 ```
 
-登录助手默认发送 `root_id=0`，表示企业云盘根目录；只有使用 `--workspace-url` 时才发送具体文件夹 ID。服务端会再次限制 WPS 域名、检查 `rtk`/`csrf` 和工作区 ID，然后更新配置的 `WPS_COOKIE_FILE`、`WPS_CSRF_TOKEN_FILE` 和 `WPS_WORKSPACE_FILE`。发送 `workspace` 时必须已配置 `WPS_GROUP_ID=auto` 或 `WPS_ROOT_ID=auto`；成功响应为 `200` JSON，服务会立即切换自动根目录并清理目录缓存。凭据更新后不需要重启服务。通过 HTTP 访问时，Cookie 和 Basic Auth 会明文传输。
+登录助手默认使用所选 WebDAV 空间的 `root_id=0`；如果选了文件夹，则顶层 `root_id/root_path` 指向该文件夹。`spaces` 中的每个空间始终使用 `root_id=0`，供网页从空间根目录开始浏览。输入 `s` 或直接回车可以省略目录选择，之后在网页设置中选择唯一的 WebDAV 根目录。服务端会再次限制 WPS 域名、检查 `rtk`/`csrf` 和工作区 ID，然后更新配置的 `WPS_COOKIE_FILE`、`WPS_CSRF_TOKEN_FILE` 和 `WPS_WORKSPACE_FILE`。发送 `workspace` 时必须已配置 `WPS_GROUP_ID=auto` 或 `WPS_ROOT_ID=auto`；成功响应为 `200` JSON，服务会立即切换自动根目录并清理目录缓存。凭据更新后不需要重启服务。通过 HTTP 访问时，Cookie 和 Basic Auth 会明文传输。
 
 所有写操作如果带有 `Origin` 或 `Referer`，适配器会要求其主机与当前请求的 `Host` 一致，用于阻止浏览器缓存 Basic Auth 后的跨站写入；没有这两个头的 WebDAV、curl 和 NAS 请求仍可正常使用。
 

@@ -28,7 +28,7 @@ WebDAV clients / REST clients / browser UI
 1. 客户端请求进入 WebDAV、REST 或同源文件管理页。
 2. 网页资源和 `auth/*` 接口公开用于显示登录页；使用安装时的唯一适配器账号登录后，通过 HttpOnly 会话 Cookie 访问文件 REST/设置接口。Basic Auth 仍直接保护 WebDAV，并继续兼容桌面和 NAS 客户端。
 3. 服务完成认证、路径校验、并发槽和请求大小检查。
-4. `WpsStorage` 将当前唯一 WPS 空间的远端路径解析为文件夹/文件 ID，并使用短 TTL 元数据缓存减少重复列表请求；`/dav/` 不再承担多个空间的虚拟路由。
+4. `MultiSpace` 将所有选中的 WPS 空间挂载为网页虚拟目录 `/A/`、`/B/`，并使用短 TTL 元数据缓存减少重复列表请求；`DAVView` 再把 `/dav/` 请求映射到唯一配置的子树，例如 `/A/web`，因此 WebDAV 不会越过该目录访问其他空间。
 5. `WpsDriveClient` 从 secret 文件读取当前 Cookie/CSRF，调用已经从本人账号观察并记录的 WPS 请求形状。
 6. 文件上传和下载尽量通过流式中继完成；签名对象存储请求不会收到 WPS Cookie。
 7. 上游 `401` 时，文件凭据源优先检测管理员替换，然后按已观察的 SDK `grant_token` 流程尝试续期并重试一次。

@@ -26,17 +26,17 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/wps-adapter-lin
 
 ## 构建元数据
 
-默认版本为 `0.9.95`。发布构建应注入提交号和 UTC 构建时间：
+默认版本为 `0.9.96`。发布构建应注入提交号和 UTC 构建时间：
 
 ```sh
 CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-s -w -X main.version=0.9.95 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -ldflags "-s -w -X main.version=0.9.96 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
 ```sh
 /tmp/wps-adapter --version
-# 0.9.95 commit=<commit> build_time=<UTC时间>
+# 0.9.96 commit=<commit> build_time=<UTC时间>
 ```
 
 ## 命令
@@ -70,7 +70,7 @@ Docker 最终镜像为 `scratch`，只包含服务二进制和 CA 证书。安�
 
 ## 前端
 
-前端由 Go `embed` 提供。它支持单空间根目录、列表/网格视图、目录预取、拖放
+前端由 Go `embed` 提供。它支持多空间虚拟目录、独立的单 WebDAV 子树、列表/网格视图、目录预取、拖放
 上传、上传速度和进度、下载、重命名、移动、删除、新建文件夹、搜索、主题和
 云盘显示名称设置。资源保持原生 HTML/CSS/JavaScript，无浏览器扩展和第三方
 前端依赖。

@@ -231,6 +231,10 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		return fail(err)
 	}
 	application.Storage = multi
+	davStorage, err := storage.NewDAVView(multi, application.davPrefixSource())
+	if err != nil {
+		return fail(err)
+	}
 
 	// --- handlers ---
 	locks, err := httpserver.NewDavLockStore(httpserver.DefaultLockMaxTimeout, cfg.MaxLocks)
@@ -265,12 +269,13 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		rest.SetWebAuth(application.Sessions)
 	}
 	rest.SetStorageLocations(application.storageLocations())
-	dav, err := httpserver.NewDAVDispatcher(multi, limits,
+	davDownloads := downloadStorage{storage: davStorage}
+	dav, err := httpserver.NewDAVDispatcher(davStorage, limits,
 		httpserver.DAVLimits{
 			MaxPropfindEntries: cfg.MaxPropfindEntries,
 			MaxPropfindDepth:   cfg.MaxPropfindDepth,
 		},
-		downloadLimits, downloads, multi, multi, locks, cfg.MaxUploadBytes, cfg.DAVPrefix)
+		downloadLimits, davDownloads, davStorage, davStorage, locks, cfg.MaxUploadBytes, cfg.DAVPrefix)
 	if err != nil {
 		return fail(err)
 	}
@@ -343,7 +348,9 @@ func (a *Application) mountsSource() func() ([]storage.Mount, string, error) {
 		}
 		mounts := make([]storage.Mount, len(spaces))
 		for index, mount := range spaces {
-			mounts[index] = storage.Mount{Name: mount.Name, GroupID: mount.GroupID, RootID: mount.RootID}
+			// Browser mounts always start at each WPS space root. The top-level
+			// state fields, rather than Mount.RootID, own the one DAV target.
+			mounts[index] = storage.Mount{Name: mount.Name, GroupID: mount.GroupID, RootID: "0"}
 		}
 		return mounts, groupID, nil
 	}
@@ -448,11 +455,7 @@ func (c *storageLocationController) Locations() (string, []httpserver.StorageLoc
 		if err != nil {
 			return "", nil, err
 		}
-		rootPath, err := c.state.RootPath()
-		if err != nil {
-			return "", nil, err
-		}
-		return "single", []httpserver.StorageLocation{{Name: root.Name, Path: "/", RootPath: rootPath}}, nil
+		return "single", []httpserver.StorageLocation{{Name: root.Name, Path: "/", RootPath: "/"}}, nil
 	}
 	locations := make([]httpserver.StorageLocation, 0, len(spaces))
 	for _, mount := range spaces {
@@ -460,15 +463,48 @@ func (c *storageLocationController) Locations() (string, []httpserver.StorageLoc
 		if err != nil {
 			return "", nil, err
 		}
-		rootPath := mount.Path
-		if rootPath == "" {
-			rootPath = "/"
-		}
 		locations = append(locations, httpserver.StorageLocation{
-			Name: mount.Name, Path: path, RootPath: rootPath,
+			Name: mount.Name, Path: path, RootPath: "/",
 		})
 	}
 	return "spaces", locations, nil
+}
+
+// CurrentLocation returns the one WebDAV mapping. The locations list above
+// intentionally describes only the browser-visible space roots; this method
+// keeps the selected folder separate so A and B are never mistaken for two
+// independent DAV roots.
+func (c *storageLocationController) CurrentLocation() (httpserver.StorageLocation, error) {
+	spaces, err := c.state.Spaces()
+	if err != nil {
+		return httpserver.StorageLocation{}, err
+	}
+	rootPath, err := c.state.RootPath()
+	if err != nil {
+		return httpserver.StorageLocation{}, err
+	}
+	if len(spaces) == 0 {
+		root, err := c.storage.Root()
+		if err != nil {
+			return httpserver.StorageLocation{}, err
+		}
+		return httpserver.StorageLocation{Name: root.Name, Path: "/", RootPath: rootPath}, nil
+	}
+	groupID, err := c.state.GroupID()
+	if err != nil {
+		return httpserver.StorageLocation{}, err
+	}
+	for _, mount := range spaces {
+		if mount.GroupID != groupID {
+			continue
+		}
+		path, err := storage.JoinRemotePath([]string{mount.Name}, false)
+		if err != nil {
+			return httpserver.StorageLocation{}, err
+		}
+		return httpserver.StorageLocation{Name: mount.Name, Path: path, RootPath: rootPath}, nil
+	}
+	return httpserver.StorageLocation{}, model.NewStorageError(model.KindEntryNotFound, "WebDAV 根目录所属 WPS 空间不存在")
 }
 
 func (c *storageLocationController) Browse(path string) ([]model.RemoteEntry, error) {
@@ -513,14 +549,16 @@ func (c *storageLocationController) Select(path string) error {
 	if len(parts) == 0 {
 		return model.NewStorageError(model.KindBadRequest, "请选择一个 WPS 空间和文件夹")
 	}
-	mountIndex := -1
-	for index, mount := range spaces {
+	var selected workspace.Mount
+	found := false
+	for _, mount := range spaces {
 		if mount.Name == parts[0] {
-			mountIndex = index
+			selected = mount
+			found = true
 			break
 		}
 	}
-	if mountIndex < 0 {
+	if !found {
 		return model.NewStorageError(model.KindEntryNotFound, "WPS space not found: "+parts[0])
 	}
 	rootID := "0"
@@ -539,10 +577,19 @@ func (c *storageLocationController) Select(path string) error {
 			return err
 		}
 	}
-	updated := append([]workspace.Mount(nil), spaces...)
-	updated[mountIndex].RootID = rootID
-	updated[mountIndex].Path = rootPath
-	return c.state.UpdateWithPaths(groupID, "0", "/", updated)
+	// Keep every browser mount at its original WPS root. Only the top-level
+	// workspace fields change, because they describe the single DAV target.
+	// Normalize mounts written by the old single-space flow as well.
+	browserSpaces := make([]workspace.Mount, len(spaces))
+	for index, mount := range spaces {
+		browserSpaces[index] = workspace.Mount{
+			GroupID: mount.GroupID,
+			RootID:  "0",
+			Name:    mount.Name,
+			Path:    "/",
+		}
+	}
+	return c.state.UpdateWithPaths(selected.GroupID, rootID, rootPath, browserSpaces)
 }
 
 // roots exposes the storage surface that follows an imported workspace.
@@ -553,6 +600,47 @@ func (a *Application) roots() httpserver.RootIDSetter {
 		return nil
 	}
 	return a.Storage
+}
+
+// davPrefixSource resolves the single WebDAV root into the browser-facing
+// MultiSpace namespace. For spaces A and B with the top-level mapping A/web,
+// DAV /x is delegated as MultiSpace /A/web/x. A fixed single-space setup has
+// no virtual mount prefix and therefore keeps using /.
+func (a *Application) davPrefixSource() func() (string, error) {
+	if a.State == nil {
+		return func() (string, error) { return "/", nil }
+	}
+	state := a.State
+	return func() (string, error) {
+		spaces, err := state.Spaces()
+		if err != nil {
+			return "", err
+		}
+		if len(spaces) == 0 {
+			return "/", nil
+		}
+		groupID, err := state.GroupID()
+		if err != nil {
+			return "", err
+		}
+		rootPath, err := state.RootPath()
+		if err != nil {
+			return "", err
+		}
+		for _, mount := range spaces {
+			if mount.GroupID != groupID {
+				continue
+			}
+			prefixParts := []string{mount.Name}
+			rootParts, err := storage.SplitRemotePath(rootPath)
+			if err != nil {
+				return "", err
+			}
+			prefixParts = append(prefixParts, rootParts...)
+			return storage.JoinRemotePath(prefixParts, false)
+		}
+		return "", model.NewStorageError(model.KindEntryNotFound, "WebDAV 根目录所属 WPS 空间不存在")
+	}
 }
 
 // credentialReplacer adapts the file source to the import route. Without a
@@ -719,7 +807,10 @@ func (a *Application) Close() {
 // The two DownloadStream interfaces are structurally identical; the wrapper
 // keeps the httpserver contract self-contained for its test fakes.
 type downloadStorage struct {
-	storage *storage.MultiSpace
+	storage interface {
+		Metadata(path string) (model.RemoteEntry, error)
+		OpenPath(ctx context.Context, path string, offset int64, length *int64) (storage.DownloadStream, error)
+	}
 }
 
 func (d downloadStorage) Metadata(path string) (model.RemoteEntry, error) {

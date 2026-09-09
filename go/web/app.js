@@ -97,7 +97,7 @@
   let settingsInFlight = false;
   let settingsTrigger = null;
   let storageLocations = [];
-  let storageMode = "";
+  let storageCurrent = null;
   let storageLocationLoading = false;
 
   function renderThemeOptions() {
@@ -222,15 +222,11 @@
       node.textContent = "正在读取存储位置...";
       return;
     }
-    if (!storageLocations.length) {
+    if (!storageCurrent) {
       node.textContent = "尚未配置 WPS 工作区";
       return;
     }
-    if (storageMode === "single") {
-      node.textContent = storageLocationLabel(storageLocations[0]);
-    } else {
-      node.textContent = storageLocations.map(storageLocationLabel).join("；");
-    }
+    node.textContent = storageLocationLabel(storageCurrent);
   }
 
   async function loadStorageLocations() {
@@ -238,10 +234,11 @@
     renderStorageLocation();
     try {
       const data = await apiRequest("storage");
-      storageMode = data && typeof data.mode === "string" ? data.mode : "";
       storageLocations = data && Array.isArray(data.locations) ? data.locations : [];
+      storageCurrent = data && data.current && typeof data.current === "object" ? data.current : null;
     } catch (error) {
       storageLocations = [];
+      storageCurrent = null;
       setSettingsError(error.message || "存储位置读取失败");
     } finally {
       storageLocationLoading = false;

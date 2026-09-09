@@ -34,12 +34,17 @@ type recordingRootNameStorage struct {
 type recordingStorageLocations struct {
 	mode      string
 	locations []StorageLocation
+	current   StorageLocation
 	entries   map[string][]model.RemoteEntry
 	selected  []string
 }
 
 func (s *recordingStorageLocations) Locations() (string, []StorageLocation, error) {
 	return s.mode, s.locations, nil
+}
+
+func (s *recordingStorageLocations) CurrentLocation() (StorageLocation, error) {
+	return s.current, nil
 }
 
 func (s *recordingStorageLocations) Browse(path string) ([]model.RemoteEntry, error) {
@@ -108,6 +113,7 @@ func newSettingsHarness(t *testing.T) *settingsHarness {
 	locations := &recordingStorageLocations{
 		mode:      "single",
 		locations: []StorageLocation{{Name: "Drive", Path: "/", RootPath: "/Archive"}},
+		current:   StorageLocation{Name: "Drive", Path: "/", RootPath: "/Archive"},
 		entries: map[string][]model.RemoteEntry{
 			"/": {{ID: "folder-1", Name: "Archive", Kind: model.KindFolder}},
 		},
@@ -189,7 +195,7 @@ func TestStorageLocationRoutes(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("storage GET status = %d (%q)", recorder.Code, recorder.Body.String())
 	}
-	if body := recorder.Body.String(); body != `{"status":"ok","mode":"single","locations":[{"name":"Drive","path":"/","root_path":"/Archive"}]}` {
+	if body := recorder.Body.String(); body != `{"status":"ok","mode":"single","locations":[{"name":"Drive","path":"/","root_path":"/Archive"}],"current":{"name":"Drive","path":"/","root_path":"/Archive"}}` {
 		t.Fatalf("storage GET body = %q", body)
 	}
 	recorder = harness.request(t, "GET", "/api/v1/storage/entries?path=%2F", "", nil)

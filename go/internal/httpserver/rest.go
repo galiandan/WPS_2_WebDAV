@@ -22,9 +22,9 @@ type RootNameSetter interface {
 	SetRootName(name string) error
 }
 
-// StorageLocation is the public description of one WebDAV mount. WPS IDs
-// stay server-side; the UI only needs the virtual mount path and the folder
-// selected inside that space.
+// StorageLocation is the public description of a browser-visible WPS space or
+// the one current WebDAV mapping. WPS IDs stay server-side; the UI only needs
+// the virtual path and the selected folder path.
 type StorageLocation struct {
 	Name     string `json:"name"`
 	Path     string `json:"path"`
@@ -38,6 +38,13 @@ type StorageLocationController interface {
 	Locations() (mode string, locations []StorageLocation, err error)
 	Browse(path string) ([]model.RemoteEntry, error)
 	Select(path string) error
+}
+
+// CurrentStorageLocationController optionally supplies the one location
+// currently mapped to WebDAV. It is separate so small test controllers and
+// older integrations can keep the original Locations contract.
+type CurrentStorageLocationController interface {
+	CurrentLocation() (StorageLocation, error)
 }
 
 // RootNameController mirrors AdapterApplication's web root name glue: the
@@ -308,6 +315,7 @@ type storageLocationsPayload struct {
 	Status    string            `json:"status"`
 	Mode      string            `json:"mode"`
 	Locations []StorageLocation `json:"locations"`
+	Current   *StorageLocation  `json:"current,omitempty"`
 }
 
 func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
@@ -367,10 +375,19 @@ func (d *RESTDispatcher) doStorageLocations(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return err
 	}
+	var current *StorageLocation
+	if controller, ok := d.locations.(CurrentStorageLocationController); ok {
+		location, err := controller.CurrentLocation()
+		if err != nil {
+			return err
+		}
+		current = &location
+	}
 	return sendJSON(w, r, http.StatusOK, storageLocationsPayload{
 		Status:    "ok",
 		Mode:      mode,
 		Locations: locations,
+		Current:   current,
 	}, d.limits, nil)
 }
 
