@@ -465,6 +465,7 @@
   let webUser = null;
   let authInFlight = false;
   let pendingTwoFactorChallenge = "";
+  let loginMethod = "password";
 
   function setAuthMessage(message, kind = "") {
     const node = $("auth-message");
@@ -486,15 +487,36 @@
     $("app-ui").classList.add("hidden");
   }
 
+  function setLoginMethod(method) {
+    if (pendingTwoFactorChallenge) method = "password";
+    loginMethod = method === "passkey" ? "passkey" : "password";
+    const passwordMethod = $("auth-method-password");
+    const passkeyMethod = $("auth-method-passkey");
+    const passwordPanel = $("password-login-panel");
+    const passkeyPanel = $("passkey-login-panel");
+    const passwordActive = loginMethod === "password";
+    passwordMethod.classList.toggle("active", passwordActive);
+    passkeyMethod.classList.toggle("active", !passwordActive);
+    passwordMethod.setAttribute("aria-selected", String(passwordActive));
+    passkeyMethod.setAttribute("aria-selected", String(!passwordActive));
+    passwordPanel.classList.toggle("hidden", !passwordActive);
+    passkeyPanel.classList.toggle("hidden", passwordActive);
+    passkeyPanel.setAttribute("aria-hidden", String(passwordActive));
+    if (passwordActive) $("login-username").focus();
+  }
+
   function setTwoFactorChallenge(challenge) {
     pendingTwoFactorChallenge = challenge || "";
+    setLoginMethod("password");
     const codeField = $("login-code-field");
     const username = $("login-username");
     const password = $("login-password");
+    $("auth-method-password").disabled = Boolean(pendingTwoFactorChallenge);
+    $("auth-method-passkey").disabled = Boolean(pendingTwoFactorChallenge);
     codeField.classList.toggle("hidden", !pendingTwoFactorChallenge);
     username.disabled = Boolean(pendingTwoFactorChallenge);
     password.disabled = Boolean(pendingTwoFactorChallenge);
-    $("login-submit").textContent = pendingTwoFactorChallenge ? "验证并登录" : "登录";
+    $("login-submit").querySelector(".auth-submit-label").textContent = pendingTwoFactorChallenge ? "验证并登录" : "登录";
     if (pendingTwoFactorChallenge) {
       $("login-code").value = "";
       $("login-code").focus();
@@ -562,7 +584,9 @@
       return;
     }
     authInFlight = true;
-    $("passkey-login-button").disabled = true;
+    const passkeyButton = $("passkey-login-button");
+    passkeyButton.disabled = true;
+    passkeyButton.classList.add("is-loading");
     $("login-submit").disabled = true;
     setAuthMessage("正在等待 Passkey 验证…", "pending");
     try {
@@ -581,14 +605,15 @@
       setAuthMessage(error.message || "Passkey 登录失败，请重试");
     } finally {
       authInFlight = false;
-      $("passkey-login-button").disabled = false;
+      passkeyButton.disabled = false;
+      passkeyButton.classList.remove("is-loading");
       $("login-submit").disabled = false;
     }
   }
 
   async function submitAuth(event) {
     event.preventDefault();
-    if (authInFlight) return;
+    if (authInFlight || loginMethod !== "password") return;
     const username = $("login-username").value.trim();
     const password = $("login-password").value;
     const code = $("login-code").value.trim();
@@ -603,6 +628,7 @@
     authInFlight = true;
     const submit = $("login-submit");
     submit.disabled = true;
+    submit.classList.add("is-loading");
     setAuthMessage("正在登录…", "pending");
     try {
       const data = await apiRequest(pendingTwoFactorChallenge ? "auth/2fa/verify" : "auth/login", {
@@ -632,6 +658,7 @@
     } finally {
       authInFlight = false;
       submit.disabled = false;
+      submit.classList.remove("is-loading");
     }
   }
 
@@ -2321,6 +2348,8 @@
 
   /* ============ 事件绑定 ============ */
   $("login-form").addEventListener("submit", submitAuth);
+  $("auth-method-password").addEventListener("click", () => setLoginMethod("password"));
+  $("auth-method-passkey").addEventListener("click", () => setLoginMethod("passkey"));
   $("password-toggle").addEventListener("click", togglePassword);
   $("passkey-login-button").addEventListener("click", passkeyLogin);
   $("logout-button").addEventListener("click", logout);
