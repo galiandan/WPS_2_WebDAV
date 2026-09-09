@@ -253,7 +253,8 @@ input, select {
 .auth-method { background: transparent; border-color: transparent; color: var(--text-2); font-size: 13px; min-height: 38px; padding: 6px 10px; position: relative; z-index: 1; }
 .auth-method:hover { background: var(--surface-3); border-color: transparent; color: var(--text); }
 .auth-method.active { background: transparent; border-color: transparent; box-shadow: none; color: var(--text); font-weight: 600; }
-.auth-method-panel { display: flex; flex-direction: column; gap: 16px; }
+.auth-method-panel { display: flex; flex-direction: column; gap: 16px; min-height: 228px; }
+.auth-method-panel#passkey-login-panel { justify-content: space-between; }
 .auth-method-panel:not(.hidden) { animation: auth-panel-in .28s var(--ease-out) both; }
 .auth-form { display: flex; flex-direction: column; }
 .auth-field { color: var(--text-2); display: flex; flex-direction: column; font-size: 13px; gap: 7px; }
