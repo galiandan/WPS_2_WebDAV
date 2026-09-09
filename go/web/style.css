@@ -247,11 +247,14 @@ input, select {
 .auth-badge-dot { background: var(--ok); border-radius: 50%; height: 6px; width: 6px; }
 .auth-heading h1 { font-size: 28px; font-weight: 600; line-height: 36px; margin: 0; }
 .auth-heading p:last-child { color: var(--text-2); margin: 7px 0 0; }
-.auth-methods { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 3px; grid-template-columns: 1fr 1fr; margin-bottom: 22px; padding: 3px; }
-.auth-method { background: transparent; border-color: transparent; color: var(--text-2); font-size: 13px; min-height: 38px; padding: 6px 10px; }
+.auth-methods { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 3px; grid-template-columns: 1fr 1fr; margin-bottom: 22px; overflow: hidden; padding: 3px; position: relative; }
+.auth-method-slider { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s); box-shadow: var(--shadow-1); inset: 3px auto 3px 3px; position: absolute; transition: transform .32s var(--ease-out); width: calc(50% - 4.5px); }
+.auth-methods[data-method="passkey"] .auth-method-slider { transform: translateX(calc(100% + 3px)); }
+.auth-method { background: transparent; border-color: transparent; color: var(--text-2); font-size: 13px; min-height: 38px; padding: 6px 10px; position: relative; z-index: 1; }
 .auth-method:hover { background: var(--surface-3); border-color: transparent; color: var(--text); }
-.auth-method.active { background: var(--surface); border-color: var(--line); box-shadow: var(--shadow-1); color: var(--text); font-weight: 600; }
+.auth-method.active { background: transparent; border-color: transparent; box-shadow: none; color: var(--text); font-weight: 600; }
 .auth-method-panel { display: flex; flex-direction: column; gap: 16px; }
+.auth-method-panel:not(.hidden) { animation: auth-panel-in .28s var(--ease-out) both; }
 .auth-form { display: flex; flex-direction: column; }
 .auth-field { color: var(--text-2); display: flex; flex-direction: column; font-size: 13px; gap: 7px; }
 .auth-input-control { align-items: center; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-s); display: flex; gap: 10px; min-height: 46px; padding: 4px 12px; transition: border-color .16s ease, box-shadow .16s ease; }
@@ -608,6 +611,7 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
 
 /* 动效 */
 @keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes auth-panel-in { from { opacity: .4; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes toast-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(4px); } }
 @keyframes row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

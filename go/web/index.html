@@ -81,7 +81,8 @@
         <h1 id="auth-title">欢迎回来</h1>
         <p id="auth-subtitle">登录后管理你的 WPS 文件</p>
       </div>
-      <div class="auth-methods" role="tablist" aria-label="登录方式">
+      <div id="auth-methods" class="auth-methods" data-method="password" role="tablist" aria-label="登录方式">
+        <span class="auth-method-slider" aria-hidden="true"></span>
         <button id="auth-method-password" class="auth-method active" type="button" role="tab" aria-selected="true" aria-controls="password-login-panel">密码登录</button>
         <button id="auth-method-passkey" class="auth-method" type="button" role="tab" aria-selected="false" aria-controls="passkey-login-panel">Passkey 登录</button>
       </div>

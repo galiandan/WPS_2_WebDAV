@@ -495,6 +495,7 @@
     const passwordPanel = $("password-login-panel");
     const passkeyPanel = $("passkey-login-panel");
     const passwordActive = loginMethod === "password";
+    $("auth-methods").dataset.method = loginMethod;
     passwordMethod.classList.toggle("active", passwordActive);
     passkeyMethod.classList.toggle("active", !passwordActive);
     passwordMethod.setAttribute("aria-selected", String(passwordActive));
