@@ -25,7 +25,7 @@ curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/
 
 如果已经 clone 了项目，也可以直接运行仓库根目录中的 `wps_login.py`。若仓库是 Private，GitHub Raw 地址需要相应访问权限。
 
-脚本会依次询问 VPS 地址、连接方式和连接信息。连接方式有三种：
+脚本会依次询问 VPS 地址、连接方式和连接信息。地址、端口、用户名和路径输入支持方向键、退格、删除和 Home/End 编辑；`[]` 中的值是默认值，直接回车即可使用。连接方式有三种：
 
 1. SSH 私钥：输入 SSH 用户名、端口和私钥路径。
 2. SSH 密码：输入 SSH 用户名和端口；登录完成后由系统 `ssh` 提示密码。

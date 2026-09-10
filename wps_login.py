@@ -27,6 +27,10 @@ import math
 import os
 import posixpath
 import re
+try:
+    import readline  # noqa: F401  # Enables arrow keys and line editing for input().
+except ImportError:
+    readline = None  # type: ignore[assignment]
 import secrets
 import shlex
 import shutil
@@ -2534,7 +2538,7 @@ __all__ = [
 ]
 
 
-__version__ = "0.9.106"
+__version__ = "0.9.107"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:
