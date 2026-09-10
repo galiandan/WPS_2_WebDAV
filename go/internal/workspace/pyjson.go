@@ -9,12 +9,19 @@ import (
 // JSON: compact separators, ensure_ascii escaping, and the old field set
 // plus spaces. The trailing newline is added by the atomic write.
 func buildStatePayload(groupID string, rootID string, rootPath string, spaces []Mount) string {
+	return buildStatePayloadWithMode(groupID, rootID, rootPath, spaces, ModeAuto)
+}
+
+func buildStatePayloadWithMode(groupID string, rootID string, rootPath string, spaces []Mount, mode string) string {
 	var b strings.Builder
 	b.WriteString(`{"group_id":"`)
 	b.WriteString(pyEscape(groupID))
 	b.WriteString(`","root_id":"`)
 	b.WriteString(pyEscape(rootID))
 	b.WriteString(`"`)
+	if mode == ModePersonal {
+		b.WriteString(`,"mode":"personal"`)
+	}
 	if rootPath != "" && rootPath != "/" {
 		b.WriteString(`,"root_path":"`)
 		b.WriteString(pyEscape(rootPath))

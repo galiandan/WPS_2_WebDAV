@@ -44,7 +44,7 @@ func (c *Client) WaitForTask(
 			return err
 		}
 		payload, err := c.RequestJSONContext(ctx, JSONRequest{
-			Path:  "/3rd/drive/api/v5/files/batch/task/progress",
+			Path:  c.drivePath("/3rd/drive/api/v5/files/batch/task/progress"),
 			Query: []QueryPair{{Key: "taskuuid", Value: taskUUID}},
 		})
 		if err != nil {

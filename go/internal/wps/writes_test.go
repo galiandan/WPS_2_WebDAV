@@ -459,6 +459,30 @@ func TestMovePostsTaskAndWaitsForSuccess(t *testing.T) {
 	}
 }
 
+func TestPersonalMoveUsesDirectV3Endpoint(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) {
+		c.GroupID = "1"
+		c.Mode = ModePersonal
+	})
+	if err := client.Move("7", "3", "8"); err != nil {
+		t.Fatalf("personal Move failed: %v", err)
+	}
+	if len(opener.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(opener.requests))
+	}
+	request := opener.requests[0]
+	if request.URL.Host != "drive.wps.cn" || request.URL.Path != "/api/v3/groups/1/files/batch/move" {
+		t.Fatalf("url = %q", request.URL.String())
+	}
+	wantBody := `{"fileids":[7],"target_groupid":1,"target_parentid":8}`
+	if string(opener.bodies[0]) != wantBody {
+		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
+	}
+}
+
 func TestMoveRejectsBadArgumentsBeforeAnyRequest(t *testing.T) {
 	opener := &fakeControlOpener{}
 	client := newWriteClient(t, opener, nil)
@@ -573,6 +597,30 @@ func TestDeletePostsTaskAndWaitsForSuccess(t *testing.T) {
 	}
 	if query := progressRequest.URL.Query(); query.Get("taskuuid") != "task-uuid" {
 		t.Fatalf("progress query = %v", query)
+	}
+}
+
+func TestPersonalDeleteUsesDirectV3Endpoint(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: 200, body: []byte(`{"result":"ok"}`)},
+	}}
+	client := newWriteClient(t, opener, func(c *Config) {
+		c.GroupID = "1"
+		c.Mode = ModePersonal
+	})
+	if err := client.Delete("7"); err != nil {
+		t.Fatalf("personal Delete failed: %v", err)
+	}
+	if len(opener.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(opener.requests))
+	}
+	request := opener.requests[0]
+	if request.URL.Host != "drive.wps.cn" || request.URL.Path != "/api/v3/groups/1/files/batch/delete" {
+		t.Fatalf("url = %q", request.URL.String())
+	}
+	wantBody := `{"fileids":[7]}`
+	if string(opener.bodies[0]) != wantBody {
+		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
 	}
 }
 

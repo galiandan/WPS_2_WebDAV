@@ -345,7 +345,7 @@ func (c *Client) multipartUpload(spool *uploadSpool, groupID string, parentID st
 			return model.RemoteEntry{}, err
 		}
 		initPayload, err := c.RequestJSON(JSONRequest{
-			Path:       "/3rd/drive/api/v5/files/upload/block",
+			Path:       c.drivePath("/3rd/drive/api/v5/files/upload/block"),
 			Method:     http.MethodPost,
 			Body:       encoded,
 			RetryOn401: true,
@@ -476,7 +476,7 @@ func (c *Client) reinitializeMultipart(spool *uploadSpool, groupText string, par
 		return err
 	}
 	fresh, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/upload/block",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/upload/block"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,
@@ -530,7 +530,7 @@ func (c *Client) uploadMultipartPart(partNumber int64, data []byte, md5Sum [md5.
 		return "", err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/upload/block",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/upload/block"),
 		Method:     http.MethodPut,
 		Body:       encoded,
 		RetryOn401: true,
@@ -621,7 +621,7 @@ func (c *Client) multipartRegister(spool *uploadSpool, groupText string, parentT
 		return model.RemoteEntry{}, err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/upload/block/merge",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/upload/block/merge"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,
@@ -696,7 +696,7 @@ func (c *Client) multipartRegister(spool *uploadSpool, groupText string, parentT
 		return model.RemoteEntry{}, err
 	}
 	finalPayload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/file",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/file"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,

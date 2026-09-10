@@ -93,7 +93,7 @@ func (c *Client) CreateFolder(parentID string, name string) (model.RemoteEntry, 
 		return model.RemoteEntry{}, err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/folder",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/folder"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,
@@ -137,8 +137,8 @@ func (c *Client) Rename(fileID string, name string) (model.RemoteEntry, error) {
 		return model.RemoteEntry{}, err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path: "/3rd/drive/api/v3/groups/" + quotePathSegment(groupID) +
-			"/files/" + quotePathSegment(fileID),
+		Path: c.drivePath("/3rd/drive/api/v3/groups/" + quotePathSegment(groupID) +
+			"/files/" + quotePathSegment(fileID)),
 		Method:     http.MethodPut,
 		Body:       encoded,
 		RetryOn401: true,
@@ -174,6 +174,33 @@ func (c *Client) Move(fileID string, sourceParentID string, destinationParentID 
 	if err != nil {
 		return err
 	}
+	if c.personal() {
+		body := &pyObject{
+			keys: []string{"fileids", "target_groupid", "target_parentid"},
+			values: map[string]any{
+				"fileids":         []any{pyJSONID(fileID)},
+				"target_groupid":  pyJSONID(groupID),
+				"target_parentid": pyJSONID(destinationParentID),
+			},
+		}
+		encoded, err := dumpPYValue(body)
+		if err != nil {
+			return err
+		}
+		payload, err := c.RequestJSON(JSONRequest{
+			Path:       c.drivePath("/api/v3/groups/" + quotePathSegment(groupID) + "/files/batch/move"),
+			Method:     http.MethodPost,
+			Body:       encoded,
+			RetryOn401: true,
+		})
+		if err != nil {
+			return err
+		}
+		if result, present := payload["result"]; present && result != nil && result != "ok" {
+			return model.NewWpsAPIError("move file", 0, model.WpsCategoryUpstream)
+		}
+		return nil
+	}
 	body := &pyObject{
 		keys: []string{"groupid", "parentid", "dst_groupid", "dst_parentid", "fileids", "option", "csrfmiddlewaretoken"},
 		values: map[string]any{
@@ -191,7 +218,7 @@ func (c *Client) Move(fileID string, sourceParentID string, destinationParentID 
 		return err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/batch/task/move",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/batch/task/move"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,
@@ -244,7 +271,7 @@ func (c *Client) Copy(fileID string, targetParentID string) (string, error) {
 		return "", err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v3/groups/" + quotePathSegment(groupID) + "/files/batch/copy",
+		Path:       c.drivePath("/3rd/drive/api/v3/groups/" + quotePathSegment(groupID) + "/files/batch/copy"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,
@@ -329,6 +356,29 @@ func (c *Client) Delete(fileID string) error {
 	if err != nil {
 		return err
 	}
+	if c.personal() {
+		body := &pyObject{
+			keys:   []string{"fileids"},
+			values: map[string]any{"fileids": []any{pyJSONID(fileID)}},
+		}
+		encoded, err := dumpPYValue(body)
+		if err != nil {
+			return err
+		}
+		payload, err := c.RequestJSON(JSONRequest{
+			Path:       c.drivePath("/api/v3/groups/" + quotePathSegment(groupID) + "/files/batch/delete"),
+			Method:     http.MethodPost,
+			Body:       encoded,
+			RetryOn401: true,
+		})
+		if err != nil {
+			return err
+		}
+		if result, present := payload["result"]; present && result != nil && result != "ok" {
+			return model.NewWpsAPIError("delete file", 0, model.WpsCategoryUpstream)
+		}
+		return nil
+	}
 	body := &pyObject{
 		keys: []string{"fileids", "groupid", "csrfmiddlewaretoken"},
 		values: map[string]any{
@@ -342,7 +392,7 @@ func (c *Client) Delete(fileID string) error {
 		return err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/batch/task/delete",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/batch/task/delete"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,

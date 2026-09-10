@@ -188,7 +188,7 @@ func (c *Client) Upload(request UploadRequest) (model.RemoteEntry, error) {
 // absent, null, or "ok" result.
 func (c *Client) preCheckUpload(groupID string, parentID string, name string, overwrite bool) error {
 	payload, err := c.RequestJSON(JSONRequest{
-		Path: "/3rd/drive/api/v5/files/upload/pre_check",
+		Path: c.drivePath("/3rd/drive/api/v5/files/upload/pre_check"),
 		Query: []QueryPair{
 			{Key: "file_name", Value: name},
 			{Key: "group_id", Value: pyJSONIDString(groupID)},
@@ -255,7 +255,7 @@ func (c *Client) objectUpload(groupID string, parentID string, name string, spoo
 	// propagate immediately — only object PUT failures are retried.
 	createUploadInstruction := func() (map[string]any, string, error) {
 		result, err := c.RequestJSON(JSONRequest{
-			Path:       "/3rd/drive/api/v5/files/upload/create_update",
+			Path:       c.drivePath("/3rd/drive/api/v5/files/upload/create_update"),
 			Method:     http.MethodPut,
 			Body:       encoded,
 			RetryOn401: true,
@@ -359,7 +359,7 @@ func (c *Client) registerUpload(groupID string, parentID string, name string, sp
 		return model.RemoteEntry{}, err
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/files/file",
+		Path:       c.drivePath("/3rd/drive/api/v5/files/file"),
 		Method:     http.MethodPost,
 		Body:       encoded,
 		RetryOn401: true,

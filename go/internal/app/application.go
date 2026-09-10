@@ -292,12 +292,17 @@ func fileExists(path string) bool {
 
 // wpsConfig maps the environment configuration onto the client config.
 func wpsConfig(cfg config.Config, source credentials.Source, state *workspace.WorkspaceState) wps.Config {
+	mode := cfg.Mode
+	if mode == "auto" && state == nil {
+		mode = workspace.ModeBusiness
+	}
 	return wps.Config{
 		GroupID:                 cfg.GroupID,
 		Workspace:               state,
 		CredentialSource:        source,
 		BaseURL:                 cfg.BaseURL,
 		AccountBaseURL:          cfg.AccountBaseURL,
+		Mode:                    mode,
 		ObjectStorageHostSuffix: cfg.ObjectSuffix,
 		AutoRefresh:             cfg.AutoRefresh,
 		Referer:                 cfg.Referer,
@@ -386,7 +391,9 @@ func (a *Application) spaceFactory() storage.SpaceFactory {
 		if groupID != "" {
 			child := a.clientConfig
 			child.GroupID = groupID
-			child.Workspace = nil
+			// Keep the live workspace state so WPS_MODE=auto switches all
+			// mounted clients immediately after a personal login import.
+			child.Workspace = a.State
 			var err error
 			client, err = wps.NewClient(child, a.transportOptions...)
 			if err != nil {
@@ -425,6 +432,13 @@ func (f importerFunc) Update(groupID, rootID string, spaces []workspace.Mount) (
 // contract used by focused test doubles.
 func (f importerFunc) UpdateWithPaths(groupID, rootID, rootPath string, spaces []workspace.Mount) (string, error) {
 	if err := f.state.UpdateWithPaths(groupID, rootID, rootPath, spaces); err != nil {
+		return "", err
+	}
+	return f.state.RootID()
+}
+
+func (f importerFunc) UpdateWithPathsMode(groupID, rootID, rootPath string, spaces []workspace.Mount, mode string) (string, error) {
+	if err := f.state.UpdateWithPathsMode(groupID, rootID, rootPath, spaces, mode); err != nil {
 		return "", err
 	}
 	return f.state.RootID()

@@ -194,7 +194,7 @@ input, select {
   flex-direction: column;
   min-height: 560px;
   overflow: hidden;
-  padding: 34px;
+  padding: 52px 34px 34px;
   position: relative;
 }
 .auth-aside::before,
@@ -239,16 +239,16 @@ input, select {
 .auth-aside-status { align-items: center; color: #b9cbc6; display: flex; font-size: 12px; gap: 8px; position: relative; z-index: 1; }
 .connection-dot { background: currentColor; border-radius: 50%; display: inline-block; flex: 0 0 7px; height: 7px; width: 7px; }
 .auth-aside-status .connection-dot { color: #92ddc5; }
-.auth-card { max-width: 510px; min-height: 620px; padding: 52px 58px 42px; width: 100%; }
+.auth-card { align-self: stretch; max-width: 510px; min-height: 620px; padding: 52px 58px 42px; width: 100%; }
 .auth-heading { margin-bottom: 24px; }
-.auth-heading-row { align-items: center; display: flex; justify-content: space-between; margin-bottom: 8px; }
+.auth-heading-row { align-items: center; display: flex; justify-content: space-between; margin-bottom: 8px; min-height: 32px; }
 .auth-kicker { color: var(--accent); font-size: 12px; font-weight: 600; margin: 0 0 7px; }
 .auth-heading-row .auth-kicker { margin: 0; }
 .auth-local-badge { align-items: center; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; color: var(--text-3); display: inline-flex; font-size: 11px; gap: 6px; padding: 4px 8px; }
 .auth-badge-dot { background: var(--ok); border-radius: 50%; height: 6px; width: 6px; }
 .auth-heading h1 { font-size: 28px; font-weight: 600; line-height: 36px; margin: 0; }
 .auth-heading p:last-child { color: var(--text-2); margin: 7px 0 0; }
-.auth-methods { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 3px; grid-template-columns: 1fr 1fr; margin-bottom: 22px; overflow: hidden; padding: 3px; position: relative; }
+.auth-methods { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 3px; grid-template-columns: 1fr 1fr; height: 46px; margin-bottom: 22px; overflow: hidden; padding: 3px; position: relative; }
 .auth-method-slider { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s); box-shadow: var(--shadow-1); inset: 3px auto 3px 3px; position: absolute; transition: transform .32s var(--ease-out); width: calc(50% - 4.5px); }
 .auth-methods[data-method="passkey"] .auth-method-slider { transform: translateX(calc(100% + 3px)); }
 .auth-method { background: transparent; border-color: transparent; color: var(--text-2); font-size: 13px; min-height: 38px; padding: 6px 10px; position: relative; z-index: 1; }
@@ -654,7 +654,7 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
   .auth-aside-copy { margin: 34px 0 30px; max-width: none; }
   .auth-aside-copy h2 { font-size: 25px; }
   .auth-aside-copy p:last-child { margin-top: 10px; }
-  .auth-card { max-width: none; padding: 30px 22px 24px; }
+  .auth-card { max-width: none; padding: 22px 22px 24px; }
   .auth-heading h1 { font-size: 25px; line-height: 32px; }
   .app-header { height: 56px; }
   .header-inner { gap: 8px; padding-left: 12px; padding-right: 12px; }

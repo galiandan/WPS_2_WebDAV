@@ -58,6 +58,7 @@ type Config struct {
 	RefreshTimeout      float64
 	BaseURL             string
 	AccountBaseURL      string
+	Mode                string
 	ObjectSuffix        string
 	AutoRefresh         bool
 	Referer             string
@@ -171,6 +172,10 @@ func Load() (Config, error) {
 		cfg.BaseURL = DefaultBaseURL
 	}
 	cfg.AccountBaseURL = os.Getenv("WPS_ACCOUNT_BASE_URL")
+	cfg.Mode = strings.ToLower(strings.TrimSpace(os.Getenv("WPS_MODE")))
+	if cfg.Mode == "" {
+		cfg.Mode = "auto"
+	}
 	if _, present := os.LookupEnv("WPS_OBJECT_STORAGE_HOST_SUFFIX"); present {
 		cfg.ObjectSuffix = os.Getenv("WPS_OBJECT_STORAGE_HOST_SUFFIX")
 	} else {
@@ -396,6 +401,9 @@ func (c Config) validateClient() error {
 	}
 	if err := validateWPSURL(c.BaseURL, "WPS_BASE_URL"); err != nil {
 		return err
+	}
+	if c.Mode != "auto" && c.Mode != "business" && c.Mode != "personal" {
+		return fmt.Errorf("WPS_MODE must be auto, business, or personal")
 	}
 	if err := validateObjectSuffix(c.ObjectSuffix); err != nil {
 		return err

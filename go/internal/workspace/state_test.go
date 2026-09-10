@@ -354,6 +354,44 @@ func TestUpdateWithPathsPersistsSelectedFolders(t *testing.T) {
 	}
 }
 
+func TestUpdateWithPathsModePersistsPersonalAndLegacyDefaultsToAuto(t *testing.T) {
+	dir := mkPrivateDir(t)
+	file := filepath.Join(dir, "workspace.json")
+	state, err := NewWorkspaceState(file, AutoValue, AutoValue)
+	if err != nil {
+		t.Fatalf("NewWorkspaceState: %v", err)
+	}
+	if err := state.UpdateWithPathsMode("personal-group", "0", "/", nil, ModePersonal); err != nil {
+		t.Fatalf("UpdateWithPathsMode: %v", err)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"mode":"personal"`) {
+		t.Fatalf("personal state omitted mode: %q", raw)
+	}
+	reloaded, err := NewWorkspaceState(file, AutoValue, AutoValue)
+	if err != nil {
+		t.Fatalf("reload personal state: %v", err)
+	}
+	mode, err := reloaded.Mode()
+	if err != nil || mode != ModePersonal {
+		t.Fatalf("reloaded mode = %q, %v; want personal", mode, err)
+	}
+
+	legacyFile := filepath.Join(dir, "legacy-workspace.json")
+	writeWorkspaceFile(t, legacyFile, `{"group_id":"business-group","root_id":"0"}`)
+	legacy, err := NewWorkspaceState(legacyFile, AutoValue, AutoValue)
+	if err != nil {
+		t.Fatalf("load legacy state: %v", err)
+	}
+	mode, err = legacy.Mode()
+	if err != nil || mode != ModeAuto {
+		t.Fatalf("legacy mode = %q, %v; want auto", mode, err)
+	}
+}
+
 func TestSelectionPathValidation(t *testing.T) {
 	for _, path := range []string{"/", "/a/b", "/项目/归档"} {
 		if err := ValidateSelectionPath(path, "path"); err != nil {

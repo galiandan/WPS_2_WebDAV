@@ -13,7 +13,7 @@ import (
 var allEnvNames = []string{
 	"WPS_CREDENTIAL_REFRESH_COMMAND", "WPS_GROUP_ID", "WPS_ROOT_ID",
 	"WPS_WORKSPACE_FILE", "WPS_COOKIE_FILE", "WPS_CSRF_TOKEN_FILE",
-	"WPS_CREDENTIAL_REFRESH_TIMEOUT", "WPS_BASE_URL", "WPS_ACCOUNT_BASE_URL",
+	"WPS_CREDENTIAL_REFRESH_TIMEOUT", "WPS_BASE_URL", "WPS_ACCOUNT_BASE_URL", "WPS_MODE",
 	"WPS_OBJECT_STORAGE_HOST_SUFFIX", "WPS_AUTO_REFRESH", "WPS_REFERER",
 	"WPS_ORIGIN", "WPS_CID", "WPS_TIMEOUT", "WPS_STATUS_PROBE_TTL",
 	"WPS_STATUS_FAILURE_BACKOFF", "WPS_UPLOAD_SPOOL_MEMORY",
@@ -89,6 +89,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.BaseURL != "https://365.kdocs.cn" || cfg.ObjectSuffix != ".ag.kdocs.cn" {
 		t.Errorf("upstream defaults drifted: %s %s", cfg.BaseURL, cfg.ObjectSuffix)
 	}
+	if cfg.Mode != "auto" {
+		t.Errorf("WPS mode = %q, want auto", cfg.Mode)
+	}
 	if !cfg.AutoRefresh || !cfg.EnableRange {
 		t.Error("AutoRefresh/EnableRange should default to true")
 	}
@@ -144,6 +147,35 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ResolvedGroupID() != "" {
 		t.Errorf("ResolvedGroupID = %q, want empty", cfg.ResolvedGroupID())
+	}
+}
+
+func TestWPSModeValues(t *testing.T) {
+	for _, mode := range []string{"auto", "business", "personal", " PERSONAL "} {
+		clearEnv(t)
+		t.Setenv("WPS_MODE", mode)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("WPS_MODE=%q: %v", mode, err)
+		}
+		want := strings.ToLower(strings.TrimSpace(mode))
+		if cfg.Mode != want {
+			t.Errorf("WPS_MODE=%q resolved to %q, want %q", mode, cfg.Mode, want)
+		}
+	}
+	for _, mode := range []string{"", "hybrid", "PERSONALITY"} {
+		clearEnv(t)
+		t.Setenv("WPS_MODE", mode)
+		if mode == "" {
+			cfg, err := Load()
+			if err != nil || cfg.Mode != "auto" {
+				t.Errorf("empty WPS_MODE resolved to %q, %v; want auto", cfg.Mode, err)
+			}
+			continue
+		}
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "WPS_MODE") {
+			t.Errorf("WPS_MODE=%q: want validation error, got %v", mode, err)
+		}
 	}
 }
 

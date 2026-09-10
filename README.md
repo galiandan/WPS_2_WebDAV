@@ -1,9 +1,9 @@
 # WPS 2 WebDAV
 
-把你有权访问的 WPS 企业云盘接入 WebDAV，同时提供一个无需额外前端依赖的网页文件管理器和 REST 接口。
+把你有权访问的 WPS 企业云盘或个人 WPS 网盘接入 WebDAV，同时提供一个无需额外前端依赖的网页文件管理器和 REST 接口。
 
 ~~~text
-WPS 企业云盘 -> Go 适配器 -> 网页 / WebDAV / REST
+WPS 企业云盘 / 个人 WPS 网盘 -> Go 适配器 -> 网页 / WebDAV / REST
 ~~~
 
 当前长期运行服务是 Go 单二进制。项目仍是实验性适配器，不是 WPS 官方软件。它只适用于你自己的账号和你有权限访问的数据。
@@ -14,6 +14,7 @@ WPS 企业云盘 -> Go 适配器 -> 网页 / WebDAV / REST
 - WebDAV：Windows、Linux、macOS、手机、NAS、同步软件和其他 WebDAV 客户端。
 - REST：脚本化列目录、上传、下载、创建文件夹、重命名、移动、复制、删除和状态检查。
 - 多个 WPS 空间：登录后按实时显示的空间名称选择网页要显示的一个、多个或全部空间；再从其中选择唯一的 WebDAV 根目录。
+- 个人 WPS 网盘：登录助手会自动识别个人账号，复用 OpenList 已验证的个人接口映射；个人端使用 `drive.wps.cn`，不需要手填空间 ID。
 - 资源保护：上传/下载并发、临时磁盘、目录递归、响应大小和大目录读取都有上限。
 - 不需要浏览器扩展；登录只需要一个独立的 wps_login.py 文件。
 
@@ -45,7 +46,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
-预编译 Release 默认使用 `v0.9.102`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v0.9.103`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
@@ -69,6 +70,8 @@ curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/
 4. 脚本验证 WebDAV 目标和所有网页空间，并把 Cookie、CSRF 和工作区配置安全同步到 VPS。
 
 WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。网页会把选中的空间显示为 `/A/`、`/B/` 等独立文件夹；WebDAV 只有一个根目录，例如 `/dav/` 映射到 `/A/web/`，不会把 B 暴露到 WebDAV。跳过目录时先映射所选 WebDAV 空间的根目录，网页选择器随后可以把 `/dav/` 切换到 A 或 B 中的任意文件夹。切换位置不会移动 WPS 文件，只会改变 `/dav/` 的映射。脚本不会显示 Cookie、CSRF、密码或签名 URL，也不需要手动填写企业 ID、群组 ID 或文件夹 ID。
+
+个人 WPS 网盘使用同样的空间选择和 WebDAV 映射流程。登录后脚本通过 WPS 账号状态接口判断个人/企业类型，再使用个人端 `/api/v3/groups` 获取空间名称；目录、上传、下载、复制和文件登记使用个人端对应路径，移动和删除使用个人端 `/api/v3/groups/<group>/files/batch/move`、`batch/delete`。工作区文件会额外保存 `mode: personal`，服务重启后不会误切回企业接口。当前个人接口主要依据 OpenList 的公开 WPS 驱动实现，首次接入本人账号时应先用测试目录完成读写验收。
 
 如果使用 HTTP 同步，脚本会要求明确确认风险，因为 HTTP 会明文传输凭据和文件内容。公网使用建议给适配器套 HTTPS 反向代理；没有域名和证书时，个人可信网络可以暂时使用 HTTP。
 
@@ -99,6 +102,8 @@ http://<VPS地址>:54321/dav/
 WebDAV 客户端仍使用安装时设置的 Basic Auth 用户名和密码，这是为了兼容 Windows、手机、NAS 和同步软件。自定义端口时，把地址中的 54321 换成实际端口。服务显示 WPS 未连接时，表示适配器进程正常但 WPS 凭据尚未同步、已过期或当前空间无权访问；重新运行 wps_login.py 即可。
 
 修改适配器账号时，直接替换 `/etc/wps-adapter/secrets/adapter-username` 和 `/etc/wps-adapter/secrets/adapter-password`，网页登录和 WebDAV 会同时使用新凭据，无需重启服务。
+
+手工部署个人 WPS 时可设置 `WPS_MODE=personal`；正常使用登录助手时保持 `WPS_MODE=auto`，由助手写入的 `wps-workspace.json` 自动决定账号类型。
 
 ## 登录助手的三种同步方式
 
@@ -209,7 +214,7 @@ contract_tests/  脱敏 JSON 契约金标准，供 Go 回归测试读取
 
 ## 当前限制
 
-- WPS 私有接口可能变化，项目不承诺长期兼容。
+- WPS 私有接口可能变化，项目不承诺长期兼容；个人端路径和字段参考了 OpenList WPS 驱动，并通过独立的个人模式测试覆盖。
 - 上传请求需要 Content-Length，暂不接受 HTTP chunked request body。
 - 大文件失败后会在当前请求内有限重试；跨进程断点恢复仍属于实验性能力。
 - 文件夹 COPY 使用流式中继；LOCK 是当前进程内的兼容锁，服务重启后失效。

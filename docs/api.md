@@ -72,11 +72,11 @@ PATCH /api/v1/storage
 
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
 
-其中 `GET entries`、`metadata`、`download`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到当前 WPS 原型；`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+其中 `GET entries`、`metadata`、`download`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
 
 ### WPS status
 
-`GET /api/v1/status` 使用网页会话或适配器 Basic Auth，执行低频、只读的 WPS 会话预检。它先请求账号服务的 `api/v3/islogin`，再对当前映射的群组根目录做一次最小列表验证。成功结果会缓存 30 秒，失败结果会短暂退避；并发请求会共享同一次预检。状态检查本身不会主动调用刷新令牌，文件接口遇到上游 `401` 时仍按原有规则执行自动续期。
+`GET /api/v1/status` 使用网页会话或适配器 Basic Auth，执行低频、只读的 WPS 会话预检。它先请求账号服务的 `api/v3/islogin`，再对当前映射的群组根目录做一次最小列表验证。成功结果会缓存 30 秒，失败结果会短暂退避；并发请求会共享同一次预检。状态检查本身不会主动调用刷新令牌，文件接口遇到上游 `401` 时仍按原有规则执行自动续期。个人账号的 `account_type` 会显示为 `personal`。
 
 ```json
 {

@@ -1,12 +1,14 @@
 # OpenList 借鉴路线
 
-> 更新时间：2026-09-04
+> 更新时间：2026-09-10
 >
 > 文档性质：外部参考和后续开发计划，不是 WPS 官方 API 文档。
 
 ## 1. 当前状态
 
-登录状态预检、企业空间发现、登录前工作区验证和基础 WebDAV 能力已经实现，相关旧规划文档已移除。分片上传检查点续传也已完成并删除对应任务文档；当前只保留四项未完成优化。
+登录状态预检、企业空间发现、个人空间发现、登录前工作区验证和基础 WebDAV 能力已经实现。个人 WPS 适配已接入 Go 客户端和独立登录助手：个人控制面使用 `https://drive.wps.cn`，空间列表使用 `/api/v3/groups`，文件接口使用 `/api/v5/groups/<group>/files`。
+
+个人端与企业端并非只有主机和前缀不同。根据 OpenList WPS 驱动的公开实现，个人移动和删除使用 `/api/v3/groups/<group>/files/batch/move`、`batch/delete`，企业端继续使用已观察到的异步 `v5` 任务接口；本项目已分别实现并用协议测试锁定。
 
 ## 2. 优先级
 
@@ -21,7 +23,7 @@
 
 ## 3. OpenList 借鉴边界
 
-OpenList 的 WPS 驱动可以提供历史接口路径、字段形状、分页模型和兼容性经验，但它不是当前企业租户的契约。来自 OpenList 的内容标记为 `external-reference` 或 `candidate`；只有当前账号网页抓包属于 `observed`，只有本项目用当前账号重放成功才属于 `reproduced`。
+OpenList 的 WPS 驱动提供个人接口路径、字段形状、分页模型和兼容性经验，但它不是 WPS 官方契约。来自 OpenList 的内容标记为 `external-reference` 或 `candidate`；只有当前账号网页抓包属于 `observed`，只有本项目用当前账号重放成功才属于 `reproduced`。当前仓库没有提交真实个人账号 HAR，因此不能宣称所有个人接口都已用真实账号 `reproduced`；自动化测试目前验证的是主机、路径、请求体和模式持久化。
 
 任何候选接口都必须满足以下条件才能进入默认实现：
 
@@ -72,4 +74,4 @@ OpenList 的 WPS 驱动可以提供历史接口路径、字段形状、分页模
 - WPS 驱动：https://github.com/OpenListTeam/OpenList/tree/main/drivers/wps
 - WPS 驱动文档：https://doc.oplist.org/guide/drivers/wps
 
-本项目只借鉴公开资料中的思路和请求形状，不复制外部项目代码，也不把外部项目的兼容性声明扩展到本项目。
+本项目只借鉴公开资料中的思路和请求形状，不复制外部项目代码，也不把外部项目的兼容性声明扩展到本项目。真实个人账号上线前仍需在本人账号的测试目录完成一次读写验收。

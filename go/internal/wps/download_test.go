@@ -186,6 +186,41 @@ func TestOpenDownloadStreamsSignedObjectWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestPersonalDownloadUsesGroupFileEndpoint(t *testing.T) {
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		resolveResponse("https://hwc-bj.ag.kdocs.cn/signed?sig=secret"),
+	}}
+	transport := &fakeSignedTransport{script: []scriptedResponse{
+		objectResponse(200, nil, "personal-content"),
+	}}
+	config := credentialedConfig()
+	config.Mode = ModePersonal
+	client := newDownloadClient(t, config, opener, transport)
+
+	stream, err := client.OpenDownload("file-1", 0, nil, model.Ptr("ignored-cid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(stream)
+	stream.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "personal-content" {
+		t.Fatalf("body = %q", body)
+	}
+	if len(opener.requests) != 1 {
+		t.Fatalf("control requests = %d, want 1", len(opener.requests))
+	}
+	request := opener.requests[0]
+	if request.URL.Host != "drive.wps.cn" || request.URL.Path != "/api/v5/groups/group-1/files/file-1/download" {
+		t.Fatalf("control URL = %q", request.URL)
+	}
+	if query := request.URL.Query(); query.Get("support_checksums") != "sha1" || query.Get("cid") != "" {
+		t.Fatalf("personal query = %v", query)
+	}
+}
+
 // TestOpenDownloadRetriesWithDirectFlagAfter403 mirrors
 // test_download_retries_with_direct_flag_after_observed_403.
 func TestOpenDownloadRetriesWithDirectFlagAfter403(t *testing.T) {

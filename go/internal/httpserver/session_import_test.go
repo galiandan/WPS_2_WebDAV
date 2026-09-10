@@ -459,6 +459,22 @@ func TestCredentialsFromCookiesSelection(t *testing.T) {
 	}
 }
 
+func TestCredentialsFromCookiesSelectsPersonalDomain(t *testing.T) {
+	snapshot, err := credentials.CredentialsFromCookies([]any{
+		importCookie("rtk", "personal-refresh", ".wps.cn", "/passport/secure"),
+		importCookie("csrf", "personal-csrf", "drive.wps.cn", "/"),
+	}, "https://365.kdocs.cn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Credentials.CSRFToken != "personal-csrf" {
+		t.Fatalf("csrf = %q", snapshot.Credentials.CSRFToken)
+	}
+	if !strings.Contains(snapshot.Credentials.Cookie, "rtk=personal-refresh") {
+		t.Fatalf("cookie header = %q", snapshot.Credentials.Cookie)
+	}
+}
+
 // TestSessionImportUnderAuth proves the route sits behind Basic Auth in the
 // full chain.
 func TestSessionImportUnderAuth(t *testing.T) {

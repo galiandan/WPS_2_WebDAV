@@ -83,21 +83,31 @@ func (c *Client) OpenDownload(fileID string, offset int64, length *int64, cid *s
 		effectiveCID = &configured
 	}
 	path := "/api/v3/office/file/" + quotePathSegment(fileID) + "/download"
+	checksums := strings.Join(DefaultDownloadChecksums, ",")
+	if c.personal() {
+		groupID, err := c.GroupID()
+		if err != nil {
+			return nil, err
+		}
+		path = "/api/v5/groups/" + quotePathSegment(groupID) + "/files/" +
+			quotePathSegment(fileID) + "/download"
+		checksums = "sha1"
+	}
 
 	// resolve mirrors the nested resolve closure: the direct flag is omitted
 	// until the observed 403 asks for it, matching _bool(true) = "true".
 	resolve := func(direct bool) (map[string]any, error) {
 		query := []QueryPair{{
 			Key:   "support_checksums",
-			Value: strings.Join(DefaultDownloadChecksums, ","),
+			Value: checksums,
 		}}
-		if direct {
+		if direct && !c.personal() {
 			query = append(query, QueryPair{
 				Key:   "get_direct_external_download_url",
 				Value: "true",
 			})
 		}
-		if effectiveCID != nil {
+		if effectiveCID != nil && !c.personal() {
 			query = append(query, QueryPair{Key: "cid", Value: *effectiveCID})
 		}
 		return c.RequestJSON(JSONRequest{Path: path, Query: query, RetryOn401: true})
@@ -105,6 +115,9 @@ func (c *Client) OpenDownload(fileID string, offset int64, length *int64, cid *s
 
 	payload, err := resolve(false)
 	if err != nil {
+		if c.personal() {
+			return nil, err
+		}
 		var apiErr *model.WpsAPIError
 		if errors.As(err, &apiErr) && apiErr.Status == 403 {
 			payload, err = resolve(true)

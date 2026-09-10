@@ -22,6 +22,12 @@ import (
 // AutoValue keeps a setting on automatic resolution from the state file.
 const AutoValue = "auto"
 
+const (
+	ModeAuto     = "auto"
+	ModeBusiness = "business"
+	ModePersonal = "personal"
+)
+
 // MaxSpaces mirrors MAX_WORKSPACE_SPACES.
 const MaxSpaces = 128
 
@@ -135,6 +141,7 @@ type State struct {
 	GroupID  string
 	RootID   string
 	RootPath string
+	Mode     string
 	Spaces   []Mount
 }
 
@@ -149,6 +156,7 @@ type WorkspaceState struct {
 	groupID  string
 	rootID   string
 	rootPath string
+	mode     string
 	spaces   []Mount
 	mtimeNs  *int64
 }
@@ -165,6 +173,7 @@ func NewWorkspaceState(filePath string, configuredGroupID string, configuredRoot
 		filePath:          filePath,
 		configuredGroupID: configuredGroupID,
 		configuredRootID:  configuredRootID,
+		mode:              ModeAuto,
 	}
 	var err error
 	if state.configuredGroupID, err = validateConfigured(state.configuredGroupID, "WPS_GROUP_ID", true); err != nil {
@@ -212,7 +221,11 @@ func LoadFromFile(filePath string, configuredGroupID string, configuredRootID st
 	if err != nil {
 		return nil, err
 	}
-	return &State{GroupID: groupID, RootID: rootID, Spaces: spaces}, nil
+	mode, err := state.Mode()
+	if err != nil {
+		return nil, err
+	}
+	return &State{GroupID: groupID, RootID: rootID, Mode: mode, Spaces: spaces}, nil
 }
 
 func validateConfigured(value string, fieldName string, allowEmpty bool) (string, error) {
@@ -261,6 +274,20 @@ func (s *WorkspaceState) RootPath() (string, error) {
 	return s.rootPath, nil
 }
 
+// Mode returns the detected WPS account family. Old workspace files resolve
+// to auto and the application keeps its historical business default.
+func (s *WorkspaceState) Mode() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshLocked(false); err != nil {
+		return "", err
+	}
+	if s.mode == "" {
+		return ModeAuto, nil
+	}
+	return s.mode, nil
+}
+
 // Spaces returns the named spaces written by the current login flow.
 func (s *WorkspaceState) Spaces() ([]Mount, error) {
 	s.mu.Lock()
@@ -297,6 +324,12 @@ func (s *WorkspaceState) Update(groupID string, rootID string, spaces []Mount) e
 // UpdateWithPaths persists a login or web selection, including the
 // human-readable path for the selected root and each mounted space.
 func (s *WorkspaceState) UpdateWithPaths(groupID string, rootID string, rootPath string, spaces []Mount) error {
+	return s.UpdateWithPathsMode(groupID, rootID, rootPath, spaces, "")
+}
+
+// UpdateWithPathsMode persists an account family supplied by the login
+// helper. An empty mode preserves the current value for web-only changes.
+func (s *WorkspaceState) UpdateWithPathsMode(groupID string, rootID string, rootPath string, spaces []Mount, mode string) error {
 	if err := ValidateIdentifier(groupID, "workspace.group_id"); err != nil {
 		return err
 	}
@@ -308,6 +341,9 @@ func (s *WorkspaceState) UpdateWithPaths(groupID string, rootID string, rootPath
 	}
 	if err := ValidateSelectionPath(rootPath, "workspace.root_path"); err != nil {
 		return err
+	}
+	if mode != "" && mode != ModeAuto && mode != ModeBusiness && mode != ModePersonal {
+		return configErrorf("workspace.mode is invalid")
 	}
 	if len(spaces) > MaxSpaces {
 		return configErrorf("too many workspace spaces")
@@ -336,8 +372,14 @@ func (s *WorkspaceState) UpdateWithPaths(groupID string, rootID string, rootPath
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if mode == "" {
+		mode = s.mode
+	}
+	if mode == "" {
+		mode = ModeAuto
+	}
 	if s.filePath != "" {
-		if err := s.persistLocked(groupID, rootID, rootPath, normalized); err != nil {
+		if err := s.persistLocked(groupID, rootID, rootPath, normalized, mode); err != nil {
 			return err
 		}
 	}
@@ -348,12 +390,13 @@ func (s *WorkspaceState) UpdateWithPaths(groupID string, rootID string, rootPath
 		s.rootID = rootID
 	}
 	s.rootPath = rootPath
+	s.mode = mode
 	s.spaces = normalized
 	return nil
 }
 
-func (s *WorkspaceState) persistLocked(groupID string, rootID string, rootPath string, spaces []Mount) error {
-	mtimeNs, err := securefile.WriteAtomic(s.filePath, buildStatePayload(groupID, rootID, rootPath, spaces))
+func (s *WorkspaceState) persistLocked(groupID string, rootID string, rootPath string, spaces []Mount, mode string) error {
+	mtimeNs, err := securefile.WriteAtomic(s.filePath, buildStatePayloadWithMode(groupID, rootID, rootPath, spaces, mode))
 	if err != nil {
 		return translateWriteErr(err)
 	}
@@ -386,13 +429,14 @@ func (s *WorkspaceState) refreshLocked(force bool) error {
 	if err != nil {
 		return translateReadErr(err)
 	}
-	groupID, rootID, rootPath, spaces, err := applyPayload(s.configuredGroupID, s.configuredRootID, s.groupID, s.rootID, s.rootPath, payload)
+	groupID, rootID, rootPath, mode, spaces, err := applyPayloadWithMode(s.configuredGroupID, s.configuredRootID, s.groupID, s.rootID, s.rootPath, s.mode, payload)
 	if err != nil {
 		return err
 	}
 	s.groupID = groupID
 	s.rootID = rootID
 	s.rootPath = rootPath
+	s.mode = mode
 	s.spaces = spaces
 	s.mtimeNs = readMtime
 	return nil
@@ -402,20 +446,26 @@ func (s *WorkspaceState) refreshLocked(force bool) error {
 // only for configured auto/empty fields, and everything is validated before
 // any value is applied.
 func applyPayload(configuredGroupID string, configuredRootID string, currentGroupID string, currentRootID string, currentRootPath string, payload map[string]any) (string, string, string, []Mount, error) {
+	groupID, rootID, rootPath, _, spaces, err := applyPayloadWithMode(configuredGroupID, configuredRootID, currentGroupID, currentRootID, currentRootPath, ModeAuto, payload)
+	return groupID, rootID, rootPath, spaces, err
+}
+
+func applyPayloadWithMode(configuredGroupID string, configuredRootID string, currentGroupID string, currentRootID string, currentRootPath string, currentMode string, payload map[string]any) (string, string, string, string, []Mount, error) {
 	fileGroup := ""
 	fileRoot := "0"
 	fileRootPath := "/"
+	fileMode := ModeAuto
 	var spaces []Mount
 	if payload != nil {
 		rawGroup, hasGroup := payload["group_id"]
 		if hasGroup {
 			groupText, ok := rawGroup.(string)
 			if !ok {
-				return "", "", "", nil, configErrorf("workspace.group_id is invalid")
+				return "", "", "", "", nil, configErrorf("workspace.group_id is invalid")
 			}
 			if groupText != "" {
 				if err := ValidateIdentifier(groupText, "workspace.group_id"); err != nil {
-					return "", "", "", nil, err
+					return "", "", "", "", nil, err
 				}
 				fileGroup = groupText
 			}
@@ -426,26 +476,33 @@ func applyPayload(configuredGroupID string, configuredRootID string, currentGrou
 		}
 		rootText, ok := rawRoot.(string)
 		if !ok {
-			return "", "", "", nil, configErrorf("workspace.root_id is invalid")
+			return "", "", "", "", nil, configErrorf("workspace.root_id is invalid")
 		}
 		if err := ValidateIdentifier(rootText, "workspace.root_id"); err != nil {
-			return "", "", "", nil, err
+			return "", "", "", "", nil, err
 		}
 		fileRoot = rootText
 		if rawPath, present := payload["root_path"]; present {
 			rootPath, ok := rawPath.(string)
 			if !ok {
-				return "", "", "", nil, configErrorf("workspace.root_path is invalid")
+				return "", "", "", "", nil, configErrorf("workspace.root_path is invalid")
 			}
 			if err := ValidateSelectionPath(rootPath, "workspace.root_path"); err != nil {
-				return "", "", "", nil, err
+				return "", "", "", "", nil, err
 			}
 			fileRootPath = rootPath
 		}
 
 		var err error
 		if spaces, err = parseSpaces(payload["spaces"]); err != nil {
-			return "", "", "", nil, err
+			return "", "", "", "", nil, err
+		}
+		if rawMode, present := payload["mode"]; present {
+			value, ok := rawMode.(string)
+			if !ok || (value != ModeAuto && value != ModeBusiness && value != ModePersonal) {
+				return "", "", "", "", nil, configErrorf("workspace.mode is invalid")
+			}
+			fileMode = value
 		}
 	}
 
@@ -464,7 +521,11 @@ func applyPayload(configuredGroupID string, configuredRootID string, currentGrou
 	if configuredRootID == AutoValue {
 		rootPath = fileRootPath
 	}
-	return groupID, rootID, rootPath, spaces, nil
+	mode := currentMode
+	if mode == "" || mode == ModeAuto {
+		mode = fileMode
+	}
+	return groupID, rootID, rootPath, mode, spaces, nil
 }
 
 func parseSpaces(raw any) ([]Mount, error) {

@@ -58,7 +58,7 @@ func (c *Client) RequestJSON(request JSONRequest) (map[string]any, error) {
 func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (map[string]any, error) {
 	baseURL := request.BaseURL
 	if baseURL == "" {
-		baseURL = c.config.BaseURL
+		baseURL = c.driveBaseURL()
 	}
 	target := buildRequestURL(baseURL, request.Path, request.Query)
 	currentCredentials, err := c.currentCredentials()

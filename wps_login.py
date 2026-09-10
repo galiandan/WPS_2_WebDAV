@@ -54,6 +54,7 @@ class WpsCredentials:
 
 
 DEFAULT_LOGIN_URL = "https://365.kdocs.cn/space/"
+DEFAULT_PERSONAL_URL = "https://drive.wps.cn/"
 DEFAULT_COOKIE_DOMAIN_SUFFIX = "kdocs.cn"
 DEFAULT_REMOTE_COOKIE_PATH = "/etc/wps-adapter/secrets/wps-cookie"
 DEFAULT_REMOTE_CSRF_PATH = "/etc/wps-adapter/secrets/wps-csrf"
@@ -89,6 +90,7 @@ class WpsWorkspaceSelection:
     root_id: str
     spaces: tuple["WpsWorkspaceCandidate", ...] = ()
     root_path: str = "/"
+    mode: str = "business"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +102,7 @@ class WpsWorkspaceCandidate:
     name: str
     root_id: str = "0"
     root_path: str = "/"
+    mode: str = "business"
 
 
 _WORKSPACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
@@ -151,11 +154,15 @@ def _workspace_payload(selection: WpsWorkspaceSelection) -> dict[str, object]:
     if not isinstance(selection, WpsWorkspaceSelection):
         raise LoginError("WPS 工作区信息无效")
     tenant_id = _workspace_id(selection.tenant_id, field_name="企业 ID")
+    if selection.mode not in {"business", "personal"}:
+        raise LoginError("WPS 账号类型不正确")
     root_path = _workspace_path(selection.root_path, field_name="根目录路径")
     payload: dict[str, object] = {
         "group_id": _workspace_id(selection.group_id, field_name="群组 ID"),
         "root_id": _workspace_id(selection.root_id, field_name="目录 ID"),
     }
+    if selection.mode == "personal":
+        payload["mode"] = "personal"
     if root_path != "/":
         payload["root_path"] = root_path
     if selection.spaces:
@@ -258,7 +265,12 @@ def _host_from_url(url: str) -> str:
         or parts.username
         or parts.password
         or port not in {None, 443}
-        or not (host == "kdocs.cn" or host.endswith(".kdocs.cn"))
+        or not (
+            host == "kdocs.cn"
+            or host.endswith(".kdocs.cn")
+            or host == "wps.cn"
+            or host.endswith(".wps.cn")
+        )
     ):
         raise LoginError("登录地址必须是不带账号信息的 HTTPS WPS 地址")
     return host
@@ -335,6 +347,7 @@ def credentials_from_cookies(
     base_url: str = DEFAULT_LOGIN_URL,
     domain_suffix: str = DEFAULT_COOKIE_DOMAIN_SUFFIX,
     require_refresh_cookie: bool = True,
+    mode: str = "auto",
 ) -> tuple[WpsCredentials, tuple[str, ...]]:
     """Build the adapter credential snapshot from Chrome cookie objects.
 
@@ -344,8 +357,38 @@ def credentials_from_cookies(
     stored snapshot to the confirmed account refresh endpoint.
     """
 
-    host = _host_from_url(base_url)
-    selected = _select_cookies(cookies, host=host, domain_suffix=domain_suffix)
+    auto_mode = mode == "auto"
+    if auto_mode:
+        base_host = _host_from_url(base_url)
+        mode = "personal" if base_host == "wps.cn" or base_host.endswith(".wps.cn") else "business"
+    if mode not in {"business", "personal"}:
+        raise LoginError("WPS 账号类型不正确，未同步新凭据")
+    host = "drive.wps.cn" if mode == "personal" else _host_from_url(base_url)
+    effective_suffix = domain_suffix
+    if host == "wps.cn" or host.endswith(".wps.cn"):
+        if _domain_without_dot(domain_suffix) == "kdocs.cn":
+            effective_suffix = "wps.cn"
+    selected = _select_cookies(cookies, host=host, domain_suffix=effective_suffix)
+    if auto_mode and mode == "business":
+        cookie_names = {
+            str(cookie.get("name", "")).casefold() for cookie in selected
+        }
+        required = {"csrf", "rtk"} if require_refresh_cookie else {"csrf"}
+        if not required.issubset(cookie_names):
+            personal_suffix = domain_suffix
+            if _domain_without_dot(personal_suffix) == "kdocs.cn":
+                personal_suffix = "wps.cn"
+            personal_selected = _select_cookies(
+                cookies,
+                host="drive.wps.cn",
+                domain_suffix=personal_suffix,
+            )
+            personal_names = {
+                str(cookie.get("name", "")).casefold() for cookie in personal_selected
+            }
+            if required.issubset(personal_names):
+                selected = personal_selected
+                mode = "personal"
     if not selected:
         raise LoginError("没有找到属于 WPS 云盘的登录 Cookie，请确认已经登录")
 
@@ -381,6 +424,50 @@ def _cookie_value(cookies: Sequence[Mapping[str, object]], name: str) -> str:
             if isinstance(value, str) and value:
                 return value
     return ""
+
+
+def detect_wps_mode(
+    credentials: WpsCredentials,
+    *,
+    timeout: float = 30.0,
+    opener: object | None = None,
+) -> str:
+    """Classify the logged-in account using the same OpenList probe."""
+
+    if not isinstance(credentials, WpsCredentials) or not credentials.cookie:
+        raise LoginError("WPS 登录凭据不完整，无法识别账号类型")
+    if not _is_positive_timeout(timeout):
+        raise LoginError("账号类型探测超时时间必须为正数")
+    request = Request(
+        "https://account.kdocs.cn/api/v3/islogin",
+        headers={"Accept": "application/json", "Cookie": credentials.cookie, "User-Agent": "wps-adapter-login/1"},
+        method="GET",
+    )
+    client = opener or build_opener(ProxyHandler({}))
+    try:
+        response = client.open(request, timeout=timeout)  # type: ignore[attr-defined]
+        try:
+            body = _read_limited_http_response(response, max_bytes=MAX_ADAPTER_RESPONSE_BYTES)
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+    except HTTPError as exc:
+        raise LoginError(f"WPS 登录状态探测失败（HTTP {exc.code}）") from exc
+    except (OSError, URLError, TimeoutError, ValueError) as exc:
+        raise LoginError("无法连接 WPS 登录状态接口") from exc
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LoginError("WPS 登录状态接口返回了无效响应") from exc
+    if not isinstance(payload, Mapping):
+        raise LoginError("WPS 登录状态接口返回格式异常")
+    marker = payload.get("is_company_account")
+    if isinstance(marker, bool):
+        return "business" if marker else "personal"
+    if isinstance(marker, str) and marker.casefold() in {"true", "false"}:
+        return "business" if marker.casefold() == "true" else "personal"
+    raise LoginError("WPS 登录状态未返回账号类型")
 
 
 def _atomic_write(path: str | Path, value: str) -> None:
@@ -525,7 +612,12 @@ def validate_workspace_payload(value):
         raise ValueError("invalid workspace payload")
     group_id = validate_workspace_id(value.get("group_id"))
     root_id = validate_workspace_id(value.get("root_id"))
+    mode = value.get("mode", "business")
+    if mode not in {"business", "personal"}:
+        raise ValueError("invalid workspace mode")
     normalized = {"group_id": group_id, "root_id": root_id}
+    if mode == "personal":
+        normalized["mode"] = mode
     root_path = validate_workspace_path(value.get("root_path", "/"))
     if root_path != "/":
         normalized["root_path"] = root_path
@@ -1292,16 +1384,41 @@ def wait_for_login_credentials(
     while True:
         try:
             all_cookies = session.cookies()
+            mode = "business"
             selected = _select_cookies(
                 all_cookies,
                 host=_host_from_url(login_url),
                 domain_suffix=domain_suffix,
             )
-            credentials, names = credentials_from_cookies(
-                selected,
-                base_url=login_url,
-                domain_suffix=domain_suffix,
-            )
+            try:
+                credentials, names = credentials_from_cookies(
+                    selected,
+                    base_url=login_url,
+                    domain_suffix=domain_suffix,
+                    mode=mode,
+                )
+            except LoginError as business_error:
+                # A personal account can be logged in through the shared WPS
+                # page without ever creating a 365.kdocs.cn cookie. Retry
+                # against the personal drive host before reporting timeout.
+                mode = "personal"
+                personal_suffix = domain_suffix
+                if _domain_without_dot(personal_suffix) == "kdocs.cn":
+                    personal_suffix = "wps.cn"
+                selected = _select_cookies(
+                    all_cookies,
+                    host="drive.wps.cn",
+                    domain_suffix=personal_suffix,
+                )
+                try:
+                    credentials, names = credentials_from_cookies(
+                        selected,
+                        base_url=DEFAULT_PERSONAL_URL,
+                        domain_suffix=personal_suffix,
+                        mode=mode,
+                    )
+                except LoginError:
+                    raise business_error
             return credentials, names, selected
         except LoginError as exc:
             last_error = exc
@@ -1398,6 +1515,7 @@ def discover_workspaces(
     base_url: str = DEFAULT_LOGIN_URL,
     timeout: float = 30.0,
     opener: object | None = None,
+    mode: str = "business",
 ) -> tuple[WpsWorkspaceCandidate, ...]:
     """Discover spaces visible to the logged-in account.
 
@@ -1409,15 +1527,25 @@ def discover_workspaces(
 
     if not isinstance(credentials, WpsCredentials) or not credentials.cookie:
         raise LoginError("WPS 登录凭据不完整，无法发现工作区")
-    tenant_id = _workspace_id(tenant_id, field_name="企业 ID")
+    if mode not in {"business", "personal"}:
+        raise LoginError("WPS 账号类型不正确")
+    if mode == "business":
+        tenant_id = _workspace_id(tenant_id, field_name="企业 ID")
+    elif not tenant_id:
+        tenant_id = "personal"
     if not _is_positive_timeout(timeout):
         raise LoginError("工作区发现超时时间必须为正数")
-    host = _host_from_url(base_url)
+    host = "drive.wps.cn" if mode == "personal" else _host_from_url(base_url)
+    path = (
+        "/api/v3/groups"
+        if mode == "personal"
+        else f"/3rd/plus/groups/v1/companies/{quote(tenant_id, safe='')}/users/self/groups/private"
+    )
     url = urlunsplit(
         (
             "https",
             host,
-            f"/3rd/plus/groups/v1/companies/{quote(tenant_id, safe='')}/users/self/groups/private",
+            path,
             "",
             "",
         )
@@ -1485,7 +1613,7 @@ def discover_workspaces(
         if group_id in seen:
             continue
         seen.add(group_id)
-        candidates.append(WpsWorkspaceCandidate(tenant_id, group_id, name))
+        candidates.append(WpsWorkspaceCandidate(tenant_id, group_id, name, mode=mode))
     return tuple(candidates)
 
 
@@ -1497,6 +1625,7 @@ def list_workspace_folders(
     base_url: str = DEFAULT_LOGIN_URL,
     timeout: float = 30.0,
     opener: object | None = None,
+    mode: str = "business",
 ) -> tuple[tuple[str, str], ...]:
     """List folders below one WPS directory for the interactive picker."""
 
@@ -1506,7 +1635,10 @@ def list_workspace_folders(
         raise LoginError("文件夹读取超时时间必须为正数")
     group_id = _workspace_id(group_id, field_name="群组 ID")
     parent_id = _workspace_id(parent_id, field_name="目录 ID")
-    host = _host_from_url(base_url)
+    if mode not in {"business", "personal"}:
+        raise LoginError("WPS 账号类型不正确")
+    host = "drive.wps.cn" if mode == "personal" else _host_from_url(base_url)
+    prefix = "" if mode == "personal" else "/3rd/drive"
     query = urlencode(
         {
             "parentid": parent_id,
@@ -1525,7 +1657,7 @@ def list_workspace_folders(
         (
             "https",
             host,
-            f"/3rd/drive/api/v5/groups/{quote(group_id, safe='')}/files",
+            f"{prefix}/api/v5/groups/{quote(group_id, safe='')}/files",
             query,
             "",
         )
@@ -1607,6 +1739,7 @@ def _select_workspace_folder(
             parent_id=current_id,
             base_url=base_url,
             timeout=timeout,
+            mode=candidate.mode,
         )
         print(f"\n空间：{candidate.name}    当前目录：{current_path}", flush=True)
         print("  [0] 使用当前目录作为 WebDAV 根目录", flush=True)
@@ -1703,7 +1836,10 @@ def verify_workspace_access(
         raise LoginError("WPS 工作区信息无效，无法验证访问权限")
     if not _is_positive_timeout(timeout):
         raise LoginError("工作区验证超时时间必须为正数")
-    host = _host_from_url(base_url)
+    if workspace.mode not in {"business", "personal"}:
+        raise LoginError("WPS 账号类型不正确，未同步新凭据")
+    host = "drive.wps.cn" if workspace.mode == "personal" else _host_from_url(base_url)
+    prefix = "" if workspace.mode == "personal" else "/3rd/drive"
     group_id = _workspace_id(workspace.group_id, field_name="群组 ID")
     root_id = _workspace_id(workspace.root_id, field_name="目录 ID")
     query = urlencode(
@@ -1719,7 +1855,7 @@ def verify_workspace_access(
         (
             "https",
             host,
-            f"/3rd/drive/api/v5/groups/{quote(group_id, safe='')}/files",
+            f"{prefix}/api/v5/groups/{quote(group_id, safe='')}/files",
             query,
             "",
         )
@@ -1839,15 +1975,47 @@ def login_and_sync(
                     domain_suffix=domain_suffix,
                     timeout=wait_timeout,
                 )
+                account_mode = detect_wps_mode(credentials, timeout=adapter_timeout)
+                all_cookies = session.cookies()
+                if account_mode == "personal":
+                    personal_suffix = domain_suffix
+                    if _domain_without_dot(personal_suffix) == "kdocs.cn":
+                        personal_suffix = "wps.cn"
+                    selected_cookies = _select_cookies(
+                        all_cookies,
+                        host="drive.wps.cn",
+                        domain_suffix=personal_suffix,
+                    )
+                    credentials, names = credentials_from_cookies(
+                        selected_cookies,
+                        base_url=DEFAULT_PERSONAL_URL,
+                        domain_suffix=personal_suffix,
+                        mode="personal",
+                    )
+                else:
+                    selected_cookies = _select_cookies(
+                        all_cookies,
+                        host=_host_from_url(browser_url),
+                        domain_suffix=domain_suffix,
+                    )
+                    credentials, names = credentials_from_cookies(
+                        selected_cookies,
+                        base_url=browser_url,
+                        domain_suffix=domain_suffix,
+                        mode="business",
+                    )
                 page_workspace = workspace_root_from_page_url(session.current_url())
-                tenant_id = (
-                    page_workspace.tenant_id
-                    if page_workspace is not None
-                    else _cookie_value(selected_cookies, "cid")
-                )
-                if not tenant_id:
-                    raise LoginError("无法识别 WPS 企业空间，请确认已登录 WPS 企业云盘")
-                workspace = page_workspace or WpsWorkspaceSelection(tenant_id, "", "0")
+                if account_mode == "personal":
+                    workspace = WpsWorkspaceSelection("personal", "", "0", mode="personal")
+                else:
+                    tenant_id = (
+                        page_workspace.tenant_id
+                        if page_workspace is not None
+                        else _cookie_value(selected_cookies, "cid")
+                    )
+                    if not tenant_id:
+                        raise LoginError("无法识别 WPS 企业空间，请确认已登录 WPS 企业云盘")
+                    workspace = page_workspace or WpsWorkspaceSelection(tenant_id, "", "0")
             else:
                 credentials, names, selected_cookies, workspace = wait_for_login_snapshot(
                     session,
@@ -1869,6 +2037,7 @@ def login_and_sync(
                     tenant_id=workspace.tenant_id,
                     base_url=browser_url,
                     timeout=adapter_timeout,
+                    mode=workspace.mode,
                 )
             except LoginError as exc:
                 raise LoginError(f"无法获取当前账号的 WPS 空间名称：{exc}；未同步新凭据") from exc
@@ -1913,6 +2082,7 @@ def login_and_sync(
             root_id=dav_candidate.root_id,
             root_path=dav_candidate.root_path,
             spaces=browser_spaces,
+            mode=dav_candidate.mode,
         )
         if dav_candidate.root_path == "/":
             print("WebDAV 根目录暂使用该空间根目录；之后可在网页设置中重新选择。", flush=True)
@@ -1940,6 +2110,7 @@ def login_and_sync(
                 group_id=candidate.group_id,
                 root_id="0",
                 root_path="/",
+                mode=workspace.mode,
             ),
             base_url=browser_url,
             timeout=adapter_timeout,
@@ -2363,7 +2534,7 @@ __all__ = [
 ]
 
 
-__version__ = "0.9.102"
+__version__ = "0.9.103"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

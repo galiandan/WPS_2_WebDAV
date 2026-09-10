@@ -41,6 +41,7 @@ const (
 	MaxRemoteEtagBytes = 4096
 
 	DefaultBaseURL                 = "https://365.kdocs.cn"
+	DefaultPersonalBaseURL         = "https://drive.wps.cn"
 	DefaultObjectStorageHostSuffix = ".ag.kdocs.cn"
 )
 
@@ -55,6 +56,7 @@ type Config struct {
 
 	BaseURL        string
 	AccountBaseURL string
+	Mode           string
 	AutoRefresh    bool
 	Referer        string
 	Origin         string
@@ -91,6 +93,7 @@ func DefaultConfig(groupID string) Config {
 	return Config{
 		GroupID:                 groupID,
 		BaseURL:                 DefaultBaseURL,
+		Mode:                    "business",
 		AutoRefresh:             true,
 		EnableRange:             true,
 		Timeout:                 defaultTimeoutSeconds,
@@ -144,6 +147,53 @@ type Client struct {
 	statusCache       *model.WpsStatus
 	statusCacheUntil  time.Time
 	statusCacheMarker string
+}
+
+const (
+	ModeAuto     = "auto"
+	ModeBusiness = "business"
+	ModePersonal = "personal"
+)
+
+func normalizeMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ModeBusiness:
+		return ModeBusiness
+	case ModeAuto:
+		return ModeAuto
+	case ModePersonal:
+		return ModePersonal
+	default:
+		return ""
+	}
+}
+
+func (c *Client) personal() bool {
+	if c.config.Mode == ModePersonal {
+		return true
+	}
+	if c.config.Mode != ModeAuto || c.config.Workspace == nil {
+		return false
+	}
+	mode, err := c.config.Workspace.Mode()
+	return err == nil && mode == ModePersonal
+}
+
+// drivePath maps the shared WPS file API to the selected account family.
+// OpenList's WPS driver confirms that personal storage uses the same API after
+// removing the enterprise-only /3rd/drive prefix.
+func (c *Client) drivePath(path string) string {
+	if c.personal() {
+		return strings.TrimPrefix(path, "/3rd/drive")
+	}
+	return path
+}
+
+func (c *Client) driveBaseURL() string {
+	if c.personal() {
+		return DefaultPersonalBaseURL
+	}
+	return c.config.BaseURL
 }
 
 // Option adjusts a Client at construction. The options are test seams that
@@ -209,6 +259,10 @@ func NewClient(config Config, options ...Option) (*Client, error) {
 	}
 	if config.StatusFailureBackoff < 0 {
 		return nil, errors.New("status_failure_backoff must not be negative")
+	}
+	config.Mode = normalizeMode(config.Mode)
+	if config.Mode == "" {
+		return nil, errors.New("mode must be auto, business, or personal")
 	}
 
 	client := &Client{

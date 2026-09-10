@@ -32,7 +32,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 
 安装器会按 `[当前阶段/总阶段]` 输出进度。预编译二进制和源码归档下载都会显示进度；只有进入回退路径时，Native 才会检查/下载 Go `1.25+` 并现场构建。Docker 会在发行版提供时自动安装 Buildx，预编译路径和源码路径都优先使用 Buildx 和逐行构建输出；旧发行版没有插件时使用兼容构建器。源码回退时 Docker 才会下载配置的 Go 构建镜像。若地址无响应，会在超时后退出，不会无限卡住。
 
-预编译 Release 默认标签为 `v0.9.102`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
+预编译 Release 默认标签为 `v0.9.103`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
 
 手动使用 Compose 且 Docker Hub 访问不稳定时，可在构建前指定镜像：
 
@@ -117,6 +117,7 @@ sudoedit /etc/wps-adapter/wps-adapter.env
 WPS_GROUP_ID=auto
 WPS_ROOT_ID=auto
 WPS_ROOT_NAME="WPS Enterprise Drive"
+WPS_MODE=auto
 WPS_WORKSPACE_FILE=/etc/wps-adapter/secrets/wps-workspace.json
 WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
 WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
@@ -126,7 +127,7 @@ ADAPTER_BIND=127.0.0.1
 ADAPTER_PORT=18080
 ```
 
-`ADAPTER_PORT` 可以改成任意未被占用的端口。`auto` 表示登录助手从当前官方 WPS 企业云盘地址识别企业、群组和可见空间；登录时可以选择多个网页空间，再选择其中一个空间的唯一 WebDAV 根目录。默认使用该 WebDAV 空间根目录 `0`；也可以选择具体文件夹或跳过后在网页设置中选择。也可以把两个变量改成固定 ID 做手工部署。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
+`ADAPTER_PORT` 可以改成任意未被占用的端口。`WPS_MODE=auto` 是推荐值：登录助手会根据 WPS 账号状态把个人账号写成工作区 `mode: personal`，服务随后使用 `drive.wps.cn`；旧企业工作区和企业账号继续使用 `365.kdocs.cn/3rd/drive`。手工配置个人账号时可设置 `WPS_MODE=personal`、`WPS_GROUP_ID=auto`、`WPS_ROOT_ID=auto`；不需要手填个人空间 ID 的场景仍应使用登录助手。登录时可以选择多个网页空间，再选择其中一个空间的唯一 WebDAV 根目录。默认使用该 WebDAV 空间根目录 `0`；也可以选择具体文件夹或跳过后在网页设置中选择。低内存 VPS 建议保留模板中的并发、spool 和磁盘空间保护参数。
 
 `WPS_ROOT_NAME` 是网页设置尚未保存时使用的默认名称；名称会显示在网页标题、左上角品牌、根目录面包屑、根目录标题以及适配器返回的根目录元数据中，不会重命名 WPS 远端文件夹。修改配置文件后重启服务即可生效：Native 执行 `sudo systemctl restart wps-adapter`，Docker 执行 `sudo docker restart wps-adapter`。
 

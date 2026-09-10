@@ -47,6 +47,10 @@ type WorkspacePathImporter interface {
 	UpdateWithPaths(groupID, rootID, rootPath string, spaces []workspace.Mount) (freshRoot string, err error)
 }
 
+type WorkspaceModeImporter interface {
+	UpdateWithPathsMode(groupID, rootID, rootPath string, spaces []workspace.Mount, mode string) (freshRoot string, err error)
+}
+
 // SessionImporter implements POST /api/v1/session/import. All input is
 // validated into a plan before the first file write: cookies are selected
 // and checked, the workspace payload is fully validated, and only then does
@@ -115,7 +119,7 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 	// The workspace plan is validated completely before any write (D-06).
 	var mounts []workspace.Mount
 	workspaceRequested := false
-	var groupID, rootID, rootPath string
+	var groupID, rootID, rootPath, mode string
 	if rawWorkspace, present := payload["workspace"]; present && rawWorkspace != nil {
 		workspaceRequested = true
 		workspaceMap, ok := rawWorkspace.(map[string]any)
@@ -132,6 +136,14 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		rootPath = "/"
+		mode = workspace.ModeAuto
+		if rawMode, present := workspaceMap["mode"]; present {
+			var ok bool
+			mode, ok = rawMode.(string)
+			if !ok || (mode != workspace.ModeAuto && mode != workspace.ModeBusiness && mode != workspace.ModePersonal) {
+				return errBadRequest("workspace.mode is invalid")
+			}
+		}
 		if rawPath, present := workspaceMap["root_path"]; present {
 			var ok bool
 			rootPath, ok = rawPath.(string)
@@ -185,7 +197,9 @@ func (s *SessionImporter) Import(w http.ResponseWriter, r *http.Request) error {
 	responsePayload := sessionImportPayload{Status: "ok", CookieCount: len(names)}
 	if workspaceRequested {
 		var freshRoot string
-		if importer, ok := s.workspace.(WorkspacePathImporter); ok {
+		if importer, ok := s.workspace.(WorkspaceModeImporter); ok {
+			freshRoot, err = importer.UpdateWithPathsMode(groupID, rootID, rootPath, mounts, mode)
+		} else if importer, ok := s.workspace.(WorkspacePathImporter); ok {
 			freshRoot, err = importer.UpdateWithPaths(groupID, rootID, rootPath, mounts)
 		} else {
 			if rootPath != "/" {

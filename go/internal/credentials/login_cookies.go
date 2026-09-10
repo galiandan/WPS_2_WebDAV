@@ -45,7 +45,26 @@ type CookieSnapshot struct {
 // domain suffix and to cookies that match the drive host; csrf and rtk must
 // both survive.
 func CredentialsFromCookies(cookies []any, baseURL string) (CookieSnapshot, error) {
-	return credentialsFromCookies(cookies, baseURL, DefaultCookieDomainSuffix, true)
+	host, hostErr := loginHostFromURL(baseURL)
+	if hostErr != nil {
+		return CookieSnapshot{}, hostErr
+	}
+	if isPersonalHost(host) {
+		return credentialsFromCookies(cookies, baseURL, "wps.cn", true)
+	}
+	snapshot, err := credentialsFromCookies(cookies, baseURL, DefaultCookieDomainSuffix, true)
+	if err == nil {
+		return snapshot, nil
+	}
+	// Personal WPS sessions are scoped to wps.cn rather than kdocs.cn. The
+	// login helper still opens the shared WPS entry page by default, so allow
+	// the same import endpoint to select the personal cookie set when the
+	// enterprise set is absent or incomplete.
+	personal, personalErr := credentialsFromCookies(cookies, "https://drive.wps.cn/", "wps.cn", true)
+	if personalErr == nil {
+		return personal, nil
+	}
+	return CookieSnapshot{}, err
 }
 
 func credentialsFromCookies(cookies []any, baseURL string, domainSuffix string, requireRefreshCookie bool) (CookieSnapshot, error) {
@@ -103,10 +122,19 @@ func loginHostFromURL(rawURL string) (string, error) {
 		host = strings.ToLower(strings.TrimRight(parts.Hostname(), "."))
 	}
 	if parts.Scheme != "https" || host == "" || parts.User != nil ||
-		!(host == "kdocs.cn" || strings.HasSuffix(host, ".kdocs.cn")) {
+		!isWPSHost(host) {
 		return "", loginErrorf("登录地址必须是不带账号信息的 HTTPS WPS 地址")
 	}
 	return host, nil
+}
+
+func isWPSHost(host string) bool {
+	return host == "kdocs.cn" || strings.HasSuffix(host, ".kdocs.cn") ||
+		host == "wps.cn" || strings.HasSuffix(host, ".wps.cn")
+}
+
+func isPersonalHost(host string) bool {
+	return host == "wps.cn" || strings.HasSuffix(host, ".wps.cn")
 }
 
 func parsePort(value string) (int, error) {

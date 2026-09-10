@@ -205,7 +205,7 @@ func (c *Client) listEntries(parentID string, options ListOptions, retryOn401 bo
 		query = append(query, QueryPair{Key: "next_filter", Value: *options.NextFilter})
 	}
 	payload, err := c.RequestJSON(JSONRequest{
-		Path:       "/3rd/drive/api/v5/groups/" + quotePathSegment(groupID) + "/files",
+		Path:       c.drivePath("/3rd/drive/api/v5/groups/" + quotePathSegment(groupID) + "/files"),
 		Query:      query,
 		RetryOn401: retryOn401,
 	})

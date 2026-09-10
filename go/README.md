@@ -26,17 +26,17 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/wps-adapter-lin
 
 ## 构建元数据
 
-默认版本为 `0.9.102`。发布构建应注入提交号和 UTC 构建时间：
+默认版本为 `0.9.103`。发布构建应注入提交号和 UTC 构建时间：
 
 ```sh
 CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-s -w -X main.version=0.9.102 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -ldflags "-s -w -X main.version=0.9.103 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
 ```sh
 /tmp/wps-adapter --version
-# 0.9.102 commit=<commit> build_time=<UTC时间>
+# 0.9.103 commit=<commit> build_time=<UTC时间>
 ```
 
 ## 命令
