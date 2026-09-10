@@ -1378,6 +1378,9 @@
     const popover = el("div", "action-menu-popover");
     popover.setAttribute("role", "menu");
     popover.append(
+      ...(entry.kind === "file" && isPreviewableText(entry.name)
+        ? [menuItem("在线浏览", "在线浏览文件", "eye", () => previewText(entry, entryPath))]
+        : []),
       menuItem("重命名", "重命名", "pencil", () => rename(entry, entryPath)),
       menuItem("移动", "移动到其他文件夹", "move", () => move(entry, entryPath)),
       menuItem("删除", "删除", "trash", () => remove(entry, entryPath), true),
@@ -1711,6 +1714,69 @@
     link.remove();
     toast(`已开始下载 “${entry.name}”`, "info", 2600);
     if (button) setTimeout(() => { button.disabled = false; button.classList.remove("busy"); }, 900);
+  }
+
+  function isPreviewableText(name) {
+    return typeof name === "string" && /\.txt$/i.test(name);
+  }
+
+  let previewGeneration = 0;
+  let previewTarget = null;
+
+  function closePreview() {
+    previewGeneration += 1;
+    previewTarget = null;
+    const dialog = $("preview-modal");
+    if (dialog.open) dialog.close();
+  }
+
+  async function previewText(entry, path) {
+    closeActionMenu();
+    const generation = ++previewGeneration;
+    previewTarget = { entry, path };
+    const dialog = $("preview-modal");
+    $("preview-title").textContent = entry.name;
+    $("preview-meta").textContent = `${formatBytes(entry.size)} · 纯文本文件`;
+    $("preview-loading").hidden = false;
+    $("preview-content").hidden = true;
+    $("preview-content").textContent = "";
+    $("preview-note").hidden = true;
+    $("preview-note").textContent = "";
+    $("preview-error").textContent = "";
+    $("preview-download").disabled = false;
+    if (!dialog.open) dialog.showModal();
+    try {
+      const response = await fetch(pathUrl("preview", path), {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { Accept: "text/plain" },
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        let message = `请求失败（${response.status}）`;
+        try {
+          const payload = JSON.parse(text);
+          if (payload && payload.error) message = payload.error;
+        } catch (_) {}
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
+      }
+      if (generation !== previewGeneration) return;
+      $("preview-loading").hidden = true;
+      $("preview-content").textContent = text;
+      $("preview-content").hidden = false;
+      if (response.headers.get("X-Preview-Truncated") === "true") {
+        $("preview-note").textContent = "文件较大，仅显示前 2 MB；下载完整文件可查看剩余内容。";
+        $("preview-note").hidden = false;
+      }
+      $("preview-content").focus();
+    } catch (error) {
+      if (generation !== previewGeneration) return;
+      $("preview-loading").hidden = true;
+      $("preview-error").textContent = error.message || "文件预览失败，请重试";
+      if (error.status === 401 || isWpsError(error)) showError(error, { notify: false });
+    }
   }
 
   /* ============ 云盘名称 ============ */
@@ -2411,6 +2477,13 @@
   });
   $("modal-cancel").addEventListener("click", () => closeModal(null));
   $("modal").addEventListener("cancel", (event) => { event.preventDefault(); closeModal(null); });
+
+  $("preview-download").addEventListener("click", () => {
+    if (previewTarget) download(previewTarget.entry, previewTarget.path, $("preview-download"));
+  });
+  $("preview-close").addEventListener("click", closePreview);
+  $("preview-close-top").addEventListener("click", closePreview);
+  $("preview-modal").addEventListener("cancel", (event) => { event.preventDefault(); closePreview(); });
 
   $("picker-cancel").addEventListener("click", () => closePicker(null));
   $("picker").addEventListener("cancel", (event) => { event.preventDefault(); closePicker(null); });

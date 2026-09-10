@@ -10,7 +10,7 @@ WPS 云盘 -> Go 适配器 -> 网页 / WebDAV / REST
 
 ## 你能得到什么
 
-- 浏览器网页：浏览、搜索、排序、列表/网格视图、拖放上传、上传速度、下载、新建文件夹、重命名、移动、复制和删除。
+- 浏览器网页：浏览、搜索、排序、列表/网格视图、拖放上传、上传速度、TXT 在线浏览、下载、新建文件夹、重命名、移动、复制和删除。
 - WebDAV：Windows、Linux、macOS、手机、NAS、同步软件和其他 WebDAV 客户端。
 - REST：脚本化列目录、上传、下载、创建文件夹、重命名、移动、复制、删除和状态检查。
 - 多个 WPS 空间：登录后按实时显示的空间名称选择网页要显示的一个、多个或全部空间；再从其中选择唯一的 WebDAV 根目录。
@@ -46,7 +46,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
-预编译 Release 默认使用 `v0.9.104`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v0.9.105`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 

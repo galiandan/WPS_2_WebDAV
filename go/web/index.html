@@ -268,6 +268,26 @@
     </form>
   </dialog>
 
+  <dialog id="preview-modal" class="preview-dialog" aria-labelledby="preview-title">
+    <section class="modal-card preview-card">
+      <div class="preview-head">
+        <div>
+          <h2 id="preview-title" class="modal-title">在线浏览</h2>
+          <p id="preview-meta" class="preview-meta"></p>
+        </div>
+        <button id="preview-close-top" class="icon-button small" type="button" title="关闭预览" aria-label="关闭预览"><svg class="icon"><use href="#i-x"/></svg></button>
+      </div>
+      <div id="preview-loading" class="preview-state" role="status">正在读取文件...</div>
+      <pre id="preview-content" class="preview-content" tabindex="0" hidden></pre>
+      <p id="preview-note" class="preview-note" hidden></p>
+      <p id="preview-error" class="modal-inline-error" role="alert" aria-live="polite"></p>
+      <div class="modal-actions">
+        <button id="preview-close" type="button">关闭</button>
+        <button id="preview-download" class="primary" type="button"><svg class="icon"><use href="#i-download"/></svg><span>下载完整文件</span></button>
+      </div>
+    </section>
+  </dialog>
+
   <dialog id="settings-modal" aria-labelledby="settings-title">
     <form id="settings-form" class="modal-card settings-card" method="dialog">
       <h2 id="settings-title" class="modal-title">设置</h2>

@@ -40,6 +40,7 @@ type DownloadStream interface {
 // stream_chunk_size default.
 type DownloadLimits struct {
 	StreamChunkSize int64
+	PreviewMaxBytes int64
 }
 
 // defaultStreamChunkSize mirrors WpsClientConfig.stream_chunk_size.
@@ -50,6 +51,15 @@ func (l DownloadLimits) chunkSize() int64 {
 		return defaultStreamChunkSize
 	}
 	return l.StreamChunkSize
+}
+
+// previewLimit mirrors the bounded text preview policy. A zero or negative
+// value selects the safe default instead of allowing an unbounded read.
+func (l DownloadLimits) previewLimit() int64 {
+	if l.PreviewMaxBytes <= 0 {
+		return 2 * 1024 * 1024
+	}
+	return l.PreviewMaxBytes
 }
 
 // sendDownload mirrors _send_download's GET branch. Both the DAV GET route

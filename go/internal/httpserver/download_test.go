@@ -186,6 +186,9 @@ func newDownloadRouterWithDAV(t *testing.T, storage DAVStorage, downloads Downlo
 				if err != nil {
 					return err
 				}
+				if route.Suffix == "preview" {
+					return sendPreview(w, r, path, downloads, limits)
+				}
 				return sendDownload(w, r, path, true, downloads, limits.chunkSize())
 			},
 			DAV: dispatcher.ServeDAV,
@@ -526,6 +529,67 @@ func TestDownloadLimitsDefaults(t *testing.T) {
 	}
 	if got := (DownloadLimits{StreamChunkSize: 7}).chunkSize(); got != 7 {
 		t.Errorf("configured chunk size = %d", got)
+	}
+	if got := (DownloadLimits{}).previewLimit(); got != 2*1024*1024 {
+		t.Errorf("default preview limit = %d", got)
+	}
+	if got := (DownloadLimits{PreviewMaxBytes: 7}).previewLimit(); got != 7 {
+		t.Errorf("configured preview limit = %d", got)
+	}
+}
+
+func TestRESTTextPreviewStreamsWithoutDownloadDisposition(t *testing.T) {
+	stream := newFakeStream(downloadPayload, model.Ptr(int64(len(downloadPayload))))
+	storage := downloadStorage(t, stream)
+	router := newDownloadRouter(t, storage, DownloadLimits{})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, newTestRequest("GET", "/api/v1/preview?path=%2Fbench-one.txt"))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %q", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Body.String() != downloadPayload {
+		t.Errorf("body = %q, want %q", recorder.Body.String(), downloadPayload)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := recorder.Header().Get("Content-Disposition"); got != "" {
+		t.Errorf("Content-Disposition = %q, want absent", got)
+	}
+	if got := recorder.Header().Get("X-Preview-Truncated"); got != "false" {
+		t.Errorf("X-Preview-Truncated = %q", got)
+	}
+	if stream.closeCalls() != 1 {
+		t.Errorf("stream close calls = %d, want 1", stream.closeCalls())
+	}
+}
+
+func TestRESTTextPreviewIsBounded(t *testing.T) {
+	storage := downloadStorage(t, nil)
+	storage.payload = "abcdef"
+	router := newDownloadRouter(t, storage, DownloadLimits{PreviewMaxBytes: 4})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, newTestRequest("GET", "/api/v1/preview?path=%2Fbench-one.txt"))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "abcd" {
+		t.Fatalf("status/body = %d %q, want 200 %q", recorder.Code, recorder.Body.String(), "abcd")
+	}
+	if got := recorder.Header().Get("X-Preview-Truncated"); got != "true" {
+		t.Errorf("X-Preview-Truncated = %q", got)
+	}
+}
+
+func TestRESTTextPreviewRejectsNonTextFiles(t *testing.T) {
+	entry := downloadFileEntry()
+	entry.Name = "bench-one.bin"
+	storage := &downloadStorageFake{entry: entry, stream: newFakeStream(downloadPayload, model.Ptr(int64(len(downloadPayload))))}
+	router := newDownloadRouter(t, storage, DownloadLimits{})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, newTestRequest("GET", "/api/v1/preview?path=%2Fbench-one.bin"))
+	if recorder.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d body = %q", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Body.String() != `{"error":"only .txt files can be previewed"}` {
+		t.Errorf("body = %q", recorder.Body.String())
 	}
 }
 

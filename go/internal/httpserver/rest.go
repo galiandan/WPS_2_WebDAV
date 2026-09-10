@@ -140,7 +140,7 @@ type RESTMutations interface {
 
 // RESTDispatcher routes the /api/v1 suffixes. B603 delivers the settings
 // pair, B604 the session import, B700 the read-only routes (status,
-// entries/list, metadata), B801 the download route, B1001 the upload pair,
+// entries/list, metadata), B801 the download and bounded text preview routes, B1001 the upload pair,
 // and stage 12 the folders/delete/rename-move routes together with the
 // process-local lock store every mutation consults.
 type RESTDispatcher struct {
@@ -361,6 +361,8 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 		return d.doMetadata(w, r, path)
 	case "download":
 		return sendDownload(w, r, path, true, d.downloads, d.download.chunkSize())
+	case "preview":
+		return sendPreview(w, r, path, d.downloads, d.download)
 	}
 	// The download route lands with the download stage.
 	sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)

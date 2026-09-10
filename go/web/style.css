@@ -573,6 +573,14 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
 .danger-solid { background: var(--bad); border-color: var(--bad); color: #ffffff; }
 .danger-solid:hover { background: var(--bad); border-color: var(--bad); color: #ffffff; filter: brightness(1.06); }
 .modal-inline-error { color: var(--bad); font-size: 12px; min-height: 18px; margin: 10px 0 -6px; }
+.preview-dialog { max-width: min(920px, calc(100vw - 28px)); }
+.preview-card { max-width: 920px; padding: 20px; }
+.preview-head { align-items: flex-start; display: flex; gap: 14px; justify-content: space-between; }
+.preview-meta { color: var(--text-3); font-size: 12px; line-height: 18px; margin: 4px 0 0; overflow-wrap: anywhere; }
+.preview-state { align-items: center; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-s); color: var(--text-2); display: flex; justify-content: center; min-height: 220px; margin-top: 16px; padding: 20px; }
+.preview-content { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-s); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.65; margin: 16px 0 0; max-height: min(65vh, 640px); min-height: 220px; overflow: auto; padding: 16px; white-space: pre; word-break: normal; }
+.preview-note { color: var(--warn); font-size: 12px; line-height: 18px; margin: 10px 0 -6px; }
+.preview-card .modal-actions { margin-top: 18px; }
 .settings-card { max-width: 440px; }
 .storage-setting { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 18px; }
 .storage-setting-head { align-items: center; display: flex; gap: 14px; justify-content: space-between; }
@@ -699,6 +707,9 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
   .auth-field input, .modal-input { font-size: 16px; }
   .tray-item-action { height: 40px; right: 4px; top: 5px; width: 40px; }
   dialog { max-width: calc(100vw - 24px); }
+  .preview-dialog { max-width: calc(100vw - 24px); }
+  .preview-card { padding: 16px; }
+  .preview-content, .preview-state { min-height: 180px; }
 }
 
 @media (max-width: 399px) {
