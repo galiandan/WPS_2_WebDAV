@@ -345,6 +345,55 @@ def _select_cookies(
     return sorted(selected.values(), key=lambda item: str(item.get("name", "")).casefold())
 
 
+def _select_domain_scope_cookies(
+    cookies: Sequence[Mapping[str, object]],
+    *,
+    domain_suffix: str,
+) -> list[Mapping[str, object]]:
+    """Select safe cookies from the same official WPS root domain.
+
+    Some WPS enterprise login flows set the CSRF cookie on an account or
+    passport subdomain rather than on the visible drive host. This fallback
+    stays inside the already trusted ``kdocs.cn``/``wps.cn`` suffix and is
+    used only when the host-scoped snapshot is missing a refresh cookie.
+    """
+
+    selected: dict[str, Mapping[str, object]] = {}
+    for cookie in cookies:
+        if not isinstance(cookie, Mapping):
+            continue
+        domain = str(cookie.get("domain", ""))
+        if not _domain_is_allowed(domain, domain_suffix):
+            continue
+        name = str(cookie.get("name", ""))
+        value = str(cookie.get("value", ""))
+        if not _safe_cookie_part(name, name=True) or not _safe_cookie_part(value):
+            continue
+        key = name.casefold()
+        previous = selected.get(key)
+        if previous is None or _cookie_rank(cookie, domain_suffix) > _cookie_rank(previous, domain_suffix):
+            selected[key] = cookie
+    return sorted(selected.values(), key=lambda item: str(item.get("name", "")).casefold())
+
+
+def _select_login_cookies(
+    cookies: Sequence[Mapping[str, object]],
+    *,
+    host: str,
+    domain_suffix: str,
+) -> list[Mapping[str, object]]:
+    """Select a host snapshot and repair cross-subdomain WPS login cookies."""
+
+    selected = _select_cookies(cookies, host=host, domain_suffix=domain_suffix)
+    names = {str(cookie.get("name", "")).casefold() for cookie in selected}
+    if {"csrf", "rtk"}.issubset(names):
+        return selected
+    by_name = {str(cookie.get("name", "")).casefold(): cookie for cookie in selected}
+    for cookie in _select_domain_scope_cookies(cookies, domain_suffix=domain_suffix):
+        by_name.setdefault(str(cookie.get("name", "")).casefold(), cookie)
+    return sorted(by_name.values(), key=lambda item: str(item.get("name", "")).casefold())
+
+
 def credentials_from_cookies(
     cookies: Sequence[Mapping[str, object]],
     *,
@@ -372,7 +421,7 @@ def credentials_from_cookies(
     if host == "wps.cn" or host.endswith(".wps.cn"):
         if _domain_without_dot(domain_suffix) == "kdocs.cn":
             effective_suffix = "wps.cn"
-    selected = _select_cookies(cookies, host=host, domain_suffix=effective_suffix)
+    selected = _select_login_cookies(cookies, host=host, domain_suffix=effective_suffix)
     if auto_mode and mode == "business":
         cookie_names = {
             str(cookie.get("name", "")).casefold() for cookie in selected
@@ -382,7 +431,7 @@ def credentials_from_cookies(
             personal_suffix = domain_suffix
             if _domain_without_dot(personal_suffix) == "kdocs.cn":
                 personal_suffix = "wps.cn"
-            personal_selected = _select_cookies(
+            personal_selected = _select_login_cookies(
                 cookies,
                 host="drive.wps.cn",
                 domain_suffix=personal_suffix,
@@ -1389,14 +1438,14 @@ def wait_for_login_credentials(
         try:
             all_cookies = session.cookies()
             mode = "business"
-            selected = _select_cookies(
+            selected = _select_login_cookies(
                 all_cookies,
                 host=_host_from_url(login_url),
                 domain_suffix=domain_suffix,
             )
             try:
                 credentials, names = credentials_from_cookies(
-                    selected,
+                    all_cookies,
                     base_url=login_url,
                     domain_suffix=domain_suffix,
                     mode=mode,
@@ -1409,14 +1458,14 @@ def wait_for_login_credentials(
                 personal_suffix = domain_suffix
                 if _domain_without_dot(personal_suffix) == "kdocs.cn":
                     personal_suffix = "wps.cn"
-                selected = _select_cookies(
+                selected = _select_login_cookies(
                     all_cookies,
                     host="drive.wps.cn",
                     domain_suffix=personal_suffix,
                 )
                 try:
                     credentials, names = credentials_from_cookies(
-                        selected,
+                        all_cookies,
                         base_url=DEFAULT_PERSONAL_URL,
                         domain_suffix=personal_suffix,
                         mode=mode,
@@ -1479,13 +1528,13 @@ def wait_for_login_snapshot(
             if expected_workspace is not None and workspace != expected_workspace:
                 raise LoginError("当前 WPS 页面不是 --workspace-url 指定的文件夹")
             all_cookies = session.cookies()
-            selected = _select_cookies(
+            selected = _select_login_cookies(
                 all_cookies,
                 host=_host_from_url(login_url),
                 domain_suffix=domain_suffix,
             )
             credentials, names = credentials_from_cookies(
-                selected,
+                all_cookies,
                 base_url=login_url,
                 domain_suffix=domain_suffix,
             )
@@ -1985,25 +2034,25 @@ def login_and_sync(
                     personal_suffix = domain_suffix
                     if _domain_without_dot(personal_suffix) == "kdocs.cn":
                         personal_suffix = "wps.cn"
-                    selected_cookies = _select_cookies(
+                    selected_cookies = _select_login_cookies(
                         all_cookies,
                         host="drive.wps.cn",
                         domain_suffix=personal_suffix,
                     )
                     credentials, names = credentials_from_cookies(
-                        selected_cookies,
+                        all_cookies,
                         base_url=DEFAULT_PERSONAL_URL,
                         domain_suffix=personal_suffix,
                         mode="personal",
                     )
                 else:
-                    selected_cookies = _select_cookies(
+                    selected_cookies = _select_login_cookies(
                         all_cookies,
                         host=_host_from_url(browser_url),
                         domain_suffix=domain_suffix,
                     )
                     credentials, names = credentials_from_cookies(
-                        selected_cookies,
+                        all_cookies,
                         base_url=browser_url,
                         domain_suffix=domain_suffix,
                         mode="business",
@@ -2538,7 +2587,7 @@ __all__ = [
 ]
 
 
-__version__ = "0.9.107"
+__version__ = "0.9.108"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:
