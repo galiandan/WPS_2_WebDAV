@@ -160,7 +160,7 @@ func newTestStorage(t *testing.T, client *fakeClient, mutate func(*StorageConfig
 
 func TestDefaultStorageConfigMirrorsPython(t *testing.T) {
 	config := DefaultStorageConfig("0")
-	if config.RootName != "WPS Enterprise Drive" || config.ListCount != 20 ||
+	if config.RootName != "WPS Drive" || config.ListCount != 20 ||
 		config.MaxListEntries != 10000 || config.CacheTTLSeconds != 2.0 ||
 		config.MaxCachedFolders != 1024 || config.TransferWaitTimeout != 30.0 ||
 		config.MaxCopyEntries != 10000 || config.MaxCopyDepth != 64 {

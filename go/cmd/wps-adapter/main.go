@@ -1,4 +1,4 @@
-// Command wps-adapter serves the WPS enterprise drive as WebDAV and REST.
+// Command wps-adapter serves WPS cloud storage as WebDAV and REST.
 //
 // The command shapes --version, check-config, and serve mirror Python's
 // __main__.py. check-config runs the full service assembly offline: it
@@ -24,9 +24,9 @@ import (
 
 // Build-time injection points:
 //
-//	go build -trimpath -ldflags "-X main.version=0.9.103 -X main.commit=$(git rev-parse --short HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+//	go build -trimpath -ldflags "-X main.version=0.9.104 -X main.commit=$(git rev-parse --short HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 var (
-	version   = "0.9.103"
+	version   = "0.9.104"
 	commit    = "unknown"
 	buildTime = "unknown"
 )

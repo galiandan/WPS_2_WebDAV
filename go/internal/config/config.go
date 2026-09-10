@@ -24,7 +24,7 @@ const (
 	DefaultPort           = 54321
 	DefaultDAVPrefix      = "/dav"
 	DefaultRESTPrefix     = "/api/v1"
-	DefaultRootName       = "WPS Enterprise Drive"
+	DefaultRootName       = "WPS Drive"
 	DefaultBaseURL        = "https://365.kdocs.cn"
 	DefaultObjectSuffix   = ".ag.kdocs.cn"
 	DefaultMaxConnections = 64

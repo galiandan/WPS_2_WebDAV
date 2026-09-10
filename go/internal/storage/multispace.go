@@ -71,7 +71,7 @@ func NewMultiSpace(transferBudget *budget.Budget, config MultiSpaceConfig) (*Mul
 		return nil, errors.New("a transfer budget is required")
 	}
 	if config.RootName == "" {
-		config.RootName = "WPS Enterprise Drive"
+		config.RootName = "WPS Drive"
 	}
 	if config.SingleRootID == "" {
 		config.SingleRootID = "0"

@@ -95,7 +95,7 @@ type StorageConfig struct {
 func DefaultStorageConfig(rootID string) StorageConfig {
 	return StorageConfig{
 		RootID:              rootID,
-		RootName:            "WPS Enterprise Drive",
+		RootName:            "WPS Drive",
 		ListCount:           20,
 		MaxListEntries:      10000,
 		CacheTTLSeconds:     2.0,

@@ -14,7 +14,8 @@ import (
 // Defaults and limits mirroring settings.py.
 const (
 	DefaultWebSettingsFile  = "/etc/wps-adapter/secrets/web-settings.json"
-	DefaultRootName         = "WPS Enterprise Drive"
+	DefaultRootName         = "WPS Drive"
+	LegacyRootName          = "WPS Enterprise Drive"
 	MaxWebSettingsFileBytes = int64(16 * 1024)
 	MaxRootNameChars        = 256
 	MaxRootNameBytes        = 1024
@@ -80,6 +81,7 @@ func NewWebSettings(filePath string, fallbackName string) (*WebSettings, error) 
 	if fallbackName, err = ValidateRootName(fallbackName); err != nil {
 		return nil, err
 	}
+	fallbackName = migrateLegacyRootName(fallbackName)
 	if filePath != "" {
 		if err := securefile.ValidateStatePath(filePath); err != nil {
 			return nil, translateSettingsReadErr(err)
@@ -162,8 +164,17 @@ func (s *WebSettings) applyName(payload map[string]any) error {
 	if err != nil {
 		return err
 	}
-	s.name = name
+	s.name = migrateLegacyRootName(name)
 	return nil
+}
+
+// migrateLegacyRootName keeps an upgrade from the former product name
+// user-friendly without changing names that the user chose themselves.
+func migrateLegacyRootName(name string) string {
+	if name == LegacyRootName {
+		return DefaultRootName
+	}
+	return name
 }
 
 func buildSettingsPayload(name string) string {

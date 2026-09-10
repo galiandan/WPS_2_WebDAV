@@ -1,9 +1,9 @@
 # WPS 2 WebDAV
 
-把你有权访问的 WPS 企业云盘或个人 WPS 网盘接入 WebDAV，同时提供一个无需额外前端依赖的网页文件管理器和 REST 接口。
+把你有权访问的 WPS 云盘接入 WebDAV，同时提供一个无需额外前端依赖的网页文件管理器和 REST 接口。
 
 ~~~text
-WPS 企业云盘 / 个人 WPS 网盘 -> Go 适配器 -> 网页 / WebDAV / REST
+WPS 云盘 -> Go 适配器 -> 网页 / WebDAV / REST
 ~~~
 
 当前长期运行服务是 Go 单二进制。项目仍是实验性适配器，不是 WPS 官方软件。它只适用于你自己的账号和你有权限访问的数据。
@@ -46,7 +46,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
-预编译 Release 默认使用 `v0.9.103`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v0.9.104`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
@@ -69,9 +69,9 @@ curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/
 3. 脚本只让你从已选空间中选择一次 WebDAV 根目录所属空间和文件夹。例如选择 A 的 `web` 文件夹；输入 `0` 使用当前目录，输入序号进入子文件夹，输入 `b` 返回上一级；输入 `s` 或直接回车可跳过目录选择，之后在网页“设置 → WebDAV 存储位置”中选择。
 4. 脚本验证 WebDAV 目标和所有网页空间，并把 Cookie、CSRF 和工作区配置安全同步到 VPS。
 
-WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。网页会把选中的空间显示为 `/A/`、`/B/` 等独立文件夹；WebDAV 只有一个根目录，例如 `/dav/` 映射到 `/A/web/`，不会把 B 暴露到 WebDAV。跳过目录时先映射所选 WebDAV 空间的根目录，网页选择器随后可以把 `/dav/` 切换到 A 或 B 中的任意文件夹。切换位置不会移动 WPS 文件，只会改变 `/dav/` 的映射。脚本不会显示 Cookie、CSRF、密码或签名 URL，也不需要手动填写企业 ID、群组 ID 或文件夹 ID。
+WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。网页会把选中的空间显示为 `/A/`、`/B/` 等独立文件夹；WebDAV 只有一个根目录，例如 `/dav/` 映射到 `/A/web/`，不会把 B 暴露到 WebDAV。跳过目录时先映射所选 WebDAV 空间的根目录，网页选择器随后可以把 `/dav/` 切换到 A 或 B 中的任意文件夹。切换位置不会移动 WPS 文件，只会改变 `/dav/` 的映射。脚本不会显示 Cookie、CSRF、密码或签名 URL，也不需要手动填写空间 ID、群组 ID 或文件夹 ID。
 
-个人 WPS 网盘使用同样的空间选择和 WebDAV 映射流程。登录后脚本通过 WPS 账号状态接口判断个人/企业类型，再使用个人端 `/api/v3/groups` 获取空间名称；目录、上传、下载、复制和文件登记使用个人端对应路径，移动和删除使用个人端 `/api/v3/groups/<group>/files/batch/move`、`batch/delete`。工作区文件会额外保存 `mode: personal`，服务重启后不会误切回企业接口。当前个人接口主要依据 OpenList 的公开 WPS 驱动实现，首次接入本人账号时应先用测试目录完成读写验收。
+个人 WPS 网盘使用同样的空间选择和 WebDAV 映射流程。登录后脚本通过 WPS 账号状态接口选择对应接口，再使用个人端 `/api/v3/groups` 获取空间名称；目录、上传、下载、复制和文件登记使用个人端对应路径，移动和删除使用个人端 `/api/v3/groups/<group>/files/batch/move`、`batch/delete`。工作区文件会额外保存 `mode: personal`，服务重启后不会误切回另一套接口。当前个人接口主要依据 OpenList 的公开 WPS 驱动实现，首次接入本人账号时应先用测试目录完成读写验收。
 
 如果使用 HTTP 同步，脚本会要求明确确认风险，因为 HTTP 会明文传输凭据和文件内容。公网使用建议给适配器套 HTTPS 反向代理；没有域名和证书时，个人可信网络可以暂时使用 HTTP。
 

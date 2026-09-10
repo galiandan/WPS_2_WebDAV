@@ -1471,7 +1471,7 @@ def wait_for_login_snapshot(
             if workspace is None:
                 if expected_workspace is not None:
                     raise LoginError("请在临时 WPS 窗口打开 --workspace-url 指定的文件夹")
-                raise LoginError("请等待临时 WPS 窗口进入企业云盘；默认会使用企业云盘根目录")
+                raise LoginError("请等待临时 WPS 窗口进入 WPS 云盘；默认会使用云盘根目录")
             if expected_workspace is not None and workspace != expected_workspace:
                 raise LoginError("当前 WPS 页面不是 --workspace-url 指定的文件夹")
             all_cookies = session.cookies()
@@ -1493,7 +1493,7 @@ def wait_for_login_snapshot(
             detail = (
                 "请完成 WPS 登录，并在同一窗口打开 --workspace-url 指定的文件夹"
                 if expected_workspace is not None
-                else "请完成 WPS 登录并进入企业云盘；默认目标是企业云盘根目录"
+                else "请完成 WPS 登录并进入 WPS 云盘；默认目标是云盘根目录"
             )
             if last_error is not None and "没有 rtk" in str(last_error):
                 detail = "登录成功但没有找到 rtk，请确认已进入云盘页面后重试"
@@ -1573,13 +1573,13 @@ def discover_workspaces(
             exc.close()
         except OSError:
             pass
-        raise LoginError(f"WPS 企业空间发现失败（HTTP {exc.code}）") from exc
+        raise LoginError(f"WPS 空间发现失败（HTTP {exc.code}）") from exc
     except (OSError, URLError, TimeoutError, ValueError) as exc:
-        raise LoginError("无法连接 WPS 企业空间发现接口") from exc
+        raise LoginError("无法连接 WPS 空间发现接口") from exc
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise LoginError("WPS 企业空间发现返回了无效响应") from exc
+        raise LoginError("WPS 空间发现返回了无效响应") from exc
 
     raw_items: object = payload
     if isinstance(payload, dict):
@@ -1588,7 +1588,7 @@ def discover_workspaces(
                 raw_items = payload[key]
                 break
     if not isinstance(raw_items, list):
-        raise LoginError("WPS 企业空间发现返回格式异常")
+        raise LoginError("WPS 空间发现返回格式异常")
     candidates: list[WpsWorkspaceCandidate] = []
     seen: set[str] = set()
     for raw_item in raw_items:
@@ -2014,7 +2014,7 @@ def login_and_sync(
                         else _cookie_value(selected_cookies, "cid")
                     )
                     if not tenant_id:
-                        raise LoginError("无法识别 WPS 企业空间，请确认已登录 WPS 企业云盘")
+                        raise LoginError("无法识别 WPS 空间，请确认已登录 WPS 云盘")
                     workspace = page_workspace or WpsWorkspaceSelection(tenant_id, "", "0")
             else:
                 credentials, names, selected_cookies, workspace = wait_for_login_snapshot(
@@ -2180,7 +2180,7 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--workspace-url",
         default=None,
-        help="指定具体 WPS 文件夹 URL；省略时使用企业云盘根目录",
+        help="指定具体 WPS 文件夹 URL；省略时使用云盘根目录",
     )
     parser.add_argument("--browser", default=None, help="local Chrome/Chromium executable")
     parser.add_argument("--domain-suffix", default=DEFAULT_COOKIE_DOMAIN_SUFFIX)
@@ -2534,12 +2534,12 @@ __all__ = [
 ]
 
 
-__version__ = "0.9.103"
+__version__ = "0.9.104"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="WPS enterprise cloud drive login helper (standalone)"
+        description="WPS cloud drive login helper (standalone)"
     )
     parser.add_argument("--version", action="version", version=__version__)
     add_login_arguments(parser)

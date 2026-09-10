@@ -712,7 +712,7 @@
   let prefetchActive = 0;
   let prefetchGeneration = 0;
   let navigationGeneration = 0;
-  let rootName = "WPS Enterprise Drive";
+  let rootName = "WPS Drive";
 
   function clearDirectoryCache() {
     directoryCacheEpoch += 1;

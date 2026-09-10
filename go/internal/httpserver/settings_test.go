@@ -165,7 +165,7 @@ func TestSettingsGETReturnsHotName(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d (body %q)", recorder.Code, recorder.Body.String())
 	}
-	if body := recorder.Body.String(); body != `{"status":"ok","name":"WPS Enterprise Drive"}` {
+	if body := recorder.Body.String(); body != `{"status":"ok","name":"WPS Drive"}` {
 		t.Errorf("body = %q", body)
 	}
 

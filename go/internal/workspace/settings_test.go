@@ -87,6 +87,22 @@ func TestRootNameValidation(t *testing.T) {
 	}
 }
 
+func TestWebSettingsMigratesLegacyDefaultName(t *testing.T) {
+	dir := mkPrivateDir(t)
+	file := filepath.Join(dir, "web-settings.json")
+	if err := os.WriteFile(file, []byte(`{"name":"WPS Enterprise Drive"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := NewWebSettings(file, LegacyRootName)
+	if err != nil {
+		t.Fatalf("NewWebSettings: %v", err)
+	}
+	name, err := settings.Name()
+	if err != nil || name != DefaultRootName {
+		t.Errorf("migrated name = (%q, %v), want %q", name, err, DefaultRootName)
+	}
+}
+
 func TestWebSettingsHotReload(t *testing.T) {
 	dir := mkPrivateDir(t)
 	file := filepath.Join(dir, "web-settings.json")

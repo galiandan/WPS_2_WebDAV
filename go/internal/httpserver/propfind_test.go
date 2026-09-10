@@ -38,7 +38,7 @@ func propfindFolder(id, name, etag string) model.RemoteEntry {
 }
 
 func propfindRootEntry() model.RemoteEntry {
-	return model.RemoteEntry{ID: "0", Name: "WPS Enterprise Drive", Kind: model.KindFolder, Size: model.Ptr(int64(0))}
+	return model.RemoteEntry{ID: "0", Name: "WPS Drive", Kind: model.KindFolder, Size: model.Ptr(int64(0))}
 }
 
 // propfindStorage serves a fixed root entry and children per path.
@@ -180,7 +180,7 @@ func TestPropfindDepthZeroDirectory(t *testing.T) {
 	storage := &propfindStorage{root: propfindRootEntry()}
 	recorder := servePropfind(t, newPropfindRouter(t, storage, nil), "/dav/", "0")
 	want := propfindRootPrefix +
-		`<D:response xmlns:D="DAV:"><D:href>/dav/</D:href><D:propstat><D:prop><D:resourcetype><D:collection /></D:resourcetype><D:displayname>WPS Enterprise Drive</D:displayname><D:getcontentlength>0</D:getcontentlength><D:getcontenttype>httpd/unix-directory</D:getcontenttype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
+		`<D:response xmlns:D="DAV:"><D:href>/dav/</D:href><D:propstat><D:prop><D:resourcetype><D:collection /></D:resourcetype><D:displayname>WPS Drive</D:displayname><D:getcontentlength>0</D:getcontentlength><D:getcontenttype>httpd/unix-directory</D:getcontenttype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
 		`</D:multistatus>`
 	if recorder.Code != http.StatusMultiStatus || recorder.Body.String() != want {
 		t.Fatalf("status = %d body =\n%q", recorder.Code, recorder.Body.String())
@@ -205,7 +205,7 @@ func TestPropfindDepthOneRoot(t *testing.T) {
 	}
 	recorder := servePropfind(t, newPropfindRouter(t, storage, nil), "/dav/", "1")
 	want := propfindRootPrefix +
-		`<D:response xmlns:D="DAV:"><D:href>/dav/</D:href><D:propstat><D:prop><D:resourcetype><D:collection /></D:resourcetype><D:displayname>WPS Enterprise Drive</D:displayname><D:getcontentlength>0</D:getcontentlength><D:getcontenttype>httpd/unix-directory</D:getcontenttype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
+		`<D:response xmlns:D="DAV:"><D:href>/dav/</D:href><D:propstat><D:prop><D:resourcetype><D:collection /></D:resourcetype><D:displayname>WPS Drive</D:displayname><D:getcontentlength>0</D:getcontentlength><D:getcontenttype>httpd/unix-directory</D:getcontenttype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
 		`<D:response xmlns:D="DAV:"><D:href>/dav/bench-one.txt</D:href><D:propstat><D:prop><D:resourcetype /><D:displayname>bench-one.txt</D:displayname><D:getcontentlength>11</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>"bench-etag-bench-file-1"</D:getetag><D:getlastmodified>Tue, 01 Sep 2026 13:11:12 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
 		`<D:response xmlns:D="DAV:"><D:href>/dav/bench-two.txt</D:href><D:propstat><D:prop><D:resourcetype /><D:displayname>bench-two.txt</D:displayname><D:getcontentlength>11</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>"bench-etag-bench-file-2"</D:getetag><D:getlastmodified>Tue, 01 Sep 2026 13:11:12 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
 		`<D:response xmlns:D="DAV:"><D:href>/dav/bench-folder/</D:href><D:propstat><D:prop><D:resourcetype><D:collection /></D:resourcetype><D:displayname>bench-folder</D:displayname><D:getcontentlength>11</D:getcontentlength><D:getcontenttype>httpd/unix-directory</D:getcontenttype><D:getetag>"bench-etag-bench-dir-1"</D:getetag><D:getlastmodified>Tue, 01 Sep 2026 13:11:12 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
@@ -395,7 +395,7 @@ func TestPropfindSpecialCharacters(t *testing.T) {
 	}
 	recorder := servePropfind(t, newPropfindRouter(t, storage, nil), "/dav/", "1")
 	want := propfindRootPrefix +
-		`<D:response xmlns:D="DAV:"><D:href>/dav/</D:href><D:propstat><D:prop><D:resourcetype><D:collection /></D:resourcetype><D:displayname>WPS Enterprise Drive</D:displayname><D:getcontentlength>0</D:getcontentlength><D:getcontenttype>httpd/unix-directory</D:getcontenttype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
+		`<D:response xmlns:D="DAV:"><D:href>/dav/</D:href><D:propstat><D:prop><D:resourcetype><D:collection /></D:resourcetype><D:displayname>WPS Drive</D:displayname><D:getcontentlength>0</D:getcontentlength><D:getcontenttype>httpd/unix-directory</D:getcontenttype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
 		`<D:response xmlns:D="DAV:"><D:href>/dav/a%26b%3Cc%3E%22d%27.txt</D:href><D:propstat><D:prop><D:resourcetype /><D:displayname>a&amp;b&lt;c&gt;"d'.txt</D:displayname><D:getcontentlength>11</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>"bench-etag-bench-tricky"</D:getetag><D:getlastmodified>Tue, 01 Sep 2026 13:11:12 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
 		`</D:multistatus>`
 	if recorder.Code != http.StatusMultiStatus || recorder.Body.String() != want {
@@ -480,7 +480,7 @@ func TestPropfindLimits(t *testing.T) {
 	t.Run("repeated entry id", func(t *testing.T) {
 		child := propfindFile("repeated", "one.txt", "e1")
 		storage := &propfindStorage{
-			root:       model.RemoteEntry{ID: "repeated", Name: "WPS Enterprise Drive", Kind: model.KindFolder, Size: model.Ptr(int64(0))},
+			root:       model.RemoteEntry{ID: "repeated", Name: "WPS Drive", Kind: model.KindFolder, Size: model.Ptr(int64(0))},
 			listByPath: map[string][]model.RemoteEntry{"/": {child}},
 		}
 		recorder := servePropfind(t, newPropfindRouter(t, storage, nil), "/dav/", "1")

@@ -129,7 +129,7 @@ curl 会提示输入适配器 Basic Auth 密码。不要把密码写在命令中
 
 ## Persistent refresh
 
-首次同步得到的 `rtk` 会保存在 VPS secret 文件中，群组和目录选择保存在 `wps-workspace.json`。默认目录是企业云盘根目录 `0`；选择子文件夹后会保存具体文件夹 ID 和显示路径。适配器遇到 WPS `401` 时，会按已经观察到的 `grant_token` 刷新流程更新轮换 Cookie，并重试原请求。只有 WPS 撤销刷新票据、要求重新登录或登录策略改变时，才需要再次运行助手。
+首次同步得到的 `rtk` 会保存在 VPS secret 文件中，群组和目录选择保存在 `wps-workspace.json`。默认目录是 WPS 云盘根目录 `0`；选择子文件夹后会保存具体文件夹 ID 和显示路径。适配器遇到 WPS `401` 时，会按已经观察到的 `grant_token` 刷新流程更新轮换 Cookie，并重试原请求。只有 WPS 撤销刷新票据、要求重新登录或登录策略改变时，才需要再次运行助手。
 
 ## Web login security
 

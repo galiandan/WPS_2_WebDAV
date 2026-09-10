@@ -203,7 +203,7 @@ func (s *Store) BeginTOTPSetup(username string) (TOTPSetup, error) {
 		return TOTPSetup{}, ErrFactorState
 	}
 	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secretBytes)
-	issuer := "WPS Enterprise Drive"
+	issuer := "WPS Drive"
 	uri := url.URL{Scheme: "otpauth", Host: "totp", Path: "/" + username}
 	query := uri.Query()
 	query.Set("secret", secret)
@@ -438,7 +438,7 @@ func (s *Store) BeginPasskeyRegistration(sessionToken, username, rpID string) (P
 	}
 	var options PasskeyCreationOptions
 	options.Challenge = challenge
-	options.RP.Name = "WPS Enterprise Drive"
+	options.RP.Name = "WPS Drive"
 	options.RP.ID = rpID
 	userHash := sha256.Sum256([]byte(username))
 	options.User.ID = base64.RawURLEncoding.EncodeToString(userHash[:16])

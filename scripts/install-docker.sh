@@ -6,7 +6,7 @@ set -Eeuo pipefail
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
 SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-4fbbd4cc08cb9cd9364f5d21dc4e9176f6bde062}"
-BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v0.9.103}"
+BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v0.9.104}"
 BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 APP_DIR="/opt/wps-adapter"
 ETC_DIR="/etc/wps-adapter"
@@ -408,7 +408,7 @@ usage() {
 选项：
   --port PORT          适配器监听端口，默认 54321
   --bind ADDRESS      宿主机监听地址，默认 0.0.0.0
-  --group-id ID       WPS 企业群组 ID（可选，默认自动识别）
+  --group-id ID       WPS 群组 ID（可选，默认自动识别）
   --root-id ID        WPS 根目录 ID（可选，默认自动识别）
   --adapter-user USER 适配器 Basic Auth 用户名
   --run-user USER      容器运行用户，默认执行 sudo 的当前用户
@@ -419,7 +419,7 @@ usage() {
 环境变量：
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
-  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v0.9.103
+  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v0.9.104
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
   WPS_ADAPTER_GO_BUILDER_IMAGE         自定义 Go 1.25 构建镜像地址
@@ -627,7 +627,7 @@ BIND="${BIND_ARG:-${OLD_BIND:-0.0.0.0}}"
 [[ "$BIND" =~ ^\[?[A-Za-z0-9.:-]+\]?$ ]] || die "监听地址格式不正确"
 
 GROUP_ID="${GROUP_ID_ARG:-${OLD_GROUP_ID:-auto}}"
-validate_safe_value "WPS 企业群组 ID" "$GROUP_ID"
+validate_safe_value "WPS 群组 ID" "$GROUP_ID"
 
 ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"
 validate_safe_value "WPS 根目录 ID" "$ROOT_ID"

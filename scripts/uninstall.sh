@@ -128,8 +128,10 @@ validate_unit() {
     if [[ -L "$SERVICE_FILE" || ! -f "$SERVICE_FILE" ]]; then
         die "发现异常的 systemd 服务文件，未执行卸载：$SERVICE_FILE"
     fi
-    grep -Fqx 'Description=WPS enterprise cloud drive WebDAV adapter' "$SERVICE_FILE" \
-        || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
+    if ! grep -Fqx 'Description=WPS Drive WebDAV adapter' "$SERVICE_FILE" \
+        && ! grep -Fqx 'Description=WPS enterprise cloud drive WebDAV adapter' "$SERVICE_FILE"; then
+        die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
+    fi
     grep -Fqx 'WorkingDirectory=/opt/wps-adapter' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     grep -Fxq 'ExecStart=/opt/wps-adapter/wps-adapter serve' "$SERVICE_FILE" \

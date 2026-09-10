@@ -1,5 +1,5 @@
 [Unit]
-Description=WPS enterprise cloud drive WebDAV adapter
+Description=WPS Drive WebDAV adapter
 After=network-online.target
 Wants=network-online.target
 
