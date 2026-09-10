@@ -32,7 +32,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 
 安装器会按 `[当前阶段/总阶段]` 输出进度。预编译二进制和源码归档下载都会显示进度；只有进入回退路径时，Native 才会检查/下载 Go `1.25+` 并现场构建。Docker 会在发行版提供时自动安装 Buildx，预编译路径和源码路径都优先使用 Buildx 和逐行构建输出；旧发行版没有插件时使用兼容构建器。源码回退时 Docker 才会下载配置的 Go 构建镜像。若地址无响应，会在超时后退出，不会无限卡住。
 
-预编译 Release 默认标签为 `v0.9.105`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
+预编译 Release 默认标签为 `v0.9.106`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
 
 手动使用 Compose 且 Docker Hub 访问不稳定时，可在构建前指定镜像：
 

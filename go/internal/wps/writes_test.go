@@ -618,7 +618,7 @@ func TestPersonalDeleteUsesDirectV3Endpoint(t *testing.T) {
 	if request.URL.Host != "drive.wps.cn" || request.URL.Path != "/api/v3/groups/1/files/batch/delete" {
 		t.Fatalf("url = %q", request.URL.String())
 	}
-	wantBody := `{"fileids":[7]}`
+	wantBody := `{"fileids":[7],"groupid":1,"csrfmiddlewaretoken":"csrf-secret"}`
 	if string(opener.bodies[0]) != wantBody {
 		t.Fatalf("body = %q, want %q", opener.bodies[0], wantBody)
 	}

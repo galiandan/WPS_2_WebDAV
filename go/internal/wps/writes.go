@@ -358,8 +358,12 @@ func (c *Client) Delete(fileID string) error {
 	}
 	if c.personal() {
 		body := &pyObject{
-			keys:   []string{"fileids"},
-			values: map[string]any{"fileids": []any{pyJSONID(fileID)}},
+			keys: []string{"fileids", "groupid", "csrfmiddlewaretoken"},
+			values: map[string]any{
+				"fileids":             []any{pyJSONID(fileID)},
+				"groupid":             pyJSONID(groupID),
+				"csrfmiddlewaretoken": current.CSRFToken,
+			},
 		}
 		encoded, err := dumpPYValue(body)
 		if err != nil {
