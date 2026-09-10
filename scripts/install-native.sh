@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # falls back to a portable background process on systems without systemd.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-ef1e7936dfbed67f6d216d24b33e968dfbf974d6}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-cb75fb35c667e3c8867e80503f85413d7e7a8d9a}"
 # Release assets are preferred. The source path below remains the complete
 # fallback for hosts that cannot reach the binary mirror or have an unsupported
 # prebuilt architecture.
