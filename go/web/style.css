@@ -725,3 +725,229 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .list-body.is-animating > .list-row, .list-body.is-animating > .card { animation: none !important; }
 }
+
+/* 1.0.0 工作台视觉系统
+   结构保持与现有交互契约一致，视觉上收敛为长期使用的文件工作台：
+   中性工作面、蓝色主操作、青绿色连接状态，以及稳定的工具位置。 */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f3f6;
+  --surface-3: #e5eaf0;
+  --line: #dce2e8;
+  --line-strong: #9aa8b5;
+  --text: #17212b;
+  --text-2: #536170;
+  --text-3: #73808c;
+  --accent: #315dcc;
+  --accent-deep: #2449aa;
+  --accent-soft: #eaf0ff;
+  --accent-ring: rgba(49, 93, 204, .22);
+  --accent-ink: #ffffff;
+  --ok: #14856f;
+  --ok-soft: #e4f4ef;
+  --warn: #956000;
+  --warn-soft: #fff4dd;
+  --bad: #b43b4d;
+  --bad-soft: #fbeaec;
+  --shadow-1: 0 1px 2px rgba(23, 33, 43, .05), 0 5px 16px rgba(23, 33, 43, .05);
+  --shadow-2: 0 16px 36px rgba(23, 33, 43, .16);
+  --shadow-accent: 0 5px 14px rgba(49, 93, 204, .20);
+  --radius: 6px;
+  --radius-s: 5px;
+  --radius-lg: 8px;
+  --header-h: 64px;
+}
+
+html[data-theme="dark"] {
+  --bg: #11161b;
+  --surface: #192027;
+  --surface-2: #222c35;
+  --surface-3: #2c3842;
+  --line: #34414c;
+  --line-strong: #758594;
+  --text: #f2f6f8;
+  --text-2: #b8c3cc;
+  --text-3: #92a0ab;
+  --accent: #7fa1ff;
+  --accent-deep: #9ab5ff;
+  --accent-soft: #24345f;
+  --accent-ring: rgba(127, 161, 255, .28);
+  --accent-ink: #101a35;
+  --ok: #64d2b6;
+  --ok-soft: #203c37;
+  --warn: #f0c36d;
+  --warn-soft: #40351f;
+  --bad: #ff9aa7;
+  --bad-soft: #45262e;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .38), 0 5px 16px rgba(0, 0, 0, .24);
+  --shadow-2: 0 16px 36px rgba(0, 0, 0, .42);
+  --shadow-accent: 0 5px 14px rgba(127, 161, 255, .16);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #11161b;
+    --surface: #192027;
+    --surface-2: #222c35;
+    --surface-3: #2c3842;
+    --line: #34414c;
+    --line-strong: #758594;
+    --text: #f2f6f8;
+    --text-2: #b8c3cc;
+    --text-3: #92a0ab;
+    --accent: #7fa1ff;
+    --accent-deep: #9ab5ff;
+    --accent-soft: #24345f;
+    --accent-ring: rgba(127, 161, 255, .28);
+    --accent-ink: #101a35;
+    --ok: #64d2b6;
+    --ok-soft: #203c37;
+    --warn: #f0c36d;
+    --warn-soft: #40351f;
+    --bad: #ff9aa7;
+    --bad-soft: #45262e;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .38), 0 5px 16px rgba(0, 0, 0, .24);
+    --shadow-2: 0 16px 36px rgba(0, 0, 0, .42);
+    --shadow-accent: 0 5px 14px rgba(127, 161, 255, .16);
+  }
+}
+
+body { background: var(--bg); }
+button { border-radius: var(--radius-s); }
+
+/* 登录：保持内容聚焦，去掉左右分栏和宣传式副面板。 */
+.auth-screen {
+  background: var(--bg);
+  justify-content: center;
+  padding: 48px 20px 28px;
+}
+.auth-shell {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  display: block;
+  max-width: 420px;
+  overflow: visible;
+}
+.auth-card {
+  max-width: 420px;
+  min-height: 0;
+  padding: 0;
+}
+.auth-card-brand {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-size: 17px;
+  font-weight: 650;
+  gap: 10px;
+  margin-bottom: 48px;
+}
+.auth-card-brand .brand-mark { background: var(--accent); color: var(--accent-ink); }
+.auth-heading { margin-bottom: 22px; }
+.auth-heading-row { margin-bottom: 10px; }
+.auth-kicker { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.auth-heading h1 { font-size: 30px; letter-spacing: -.02em; line-height: 38px; }
+.auth-heading p:last-child { font-size: 14px; margin-top: 8px; }
+.auth-methods { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); height: 44px; margin-bottom: 24px; }
+.auth-method-slider { border-color: var(--line); }
+.auth-method { min-height: 36px; }
+.auth-method-panel { min-height: 236px; }
+.auth-input-control { background: var(--surface); min-height: 44px; }
+.auth-submit { min-height: 46px; }
+.auth-message { margin-top: 14px; }
+.auth-footnote { margin-top: 18px; }
+.auth-security { justify-content: center; margin-top: 26px; }
+
+/* 工作台：让空间、路径和文件区形成单一阅读轴。 */
+.app-header { height: var(--header-h); }
+.header-inner { min-height: var(--header-h); padding: 10px 28px; }
+.brand { gap: 11px; }
+.brand-mark { background: var(--accent); border-radius: var(--radius-s); flex-basis: 34px; font-size: 17px; height: 34px; }
+.brand-title { font-size: 15px; }
+.brand-subtitle { font-size: 9px; letter-spacing: .12em; }
+.header-actions { gap: 4px; }
+.connection { background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; min-height: 34px; padding: 5px 12px; }
+.connection.connected { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.connection.disconnected, .connection.unknown { border-color: transparent; }
+.icon-button:hover { background: var(--surface-2); }
+.logout-button { margin-left: 2px; }
+
+.workspace-shell { grid-template-columns: 236px minmax(0, 1fr); }
+.sidebar { padding: 24px 14px 18px; }
+.sidebar-head { padding: 0 12px 12px; }
+.space-item { min-height: 42px; padding: 8px 12px; }
+.space-item.active { box-shadow: inset 3px 0 var(--accent); }
+.space-list { margin-left: 10px; margin-right: 10px; }
+.sidebar-note { padding-left: 12px; padding-right: 12px; }
+.content { padding: 34px 40px 52px; }
+.workspace-head { margin-bottom: 22px; }
+.eyebrow { align-items: center; display: inline-flex; gap: 6px; letter-spacing: .05em; text-transform: uppercase; }
+.eyebrow .icon { height: 14px; width: 14px; }
+h1 { font-size: 26px; letter-spacing: -.02em; line-height: 34px; }
+.workspace-note { margin-top: 6px; }
+.navigation-row { border-bottom: 1px solid var(--line); gap: 20px; margin-bottom: 0; padding-bottom: 12px; }
+.path-row > .icon-button { margin-right: 7px; }
+.crumb { min-height: 34px; }
+.search { background: var(--surface); flex-basis: 300px; min-height: 38px; }
+.panel-toolbar { min-height: 64px; padding: 12px 0; }
+.panel-summary-block { align-items: baseline; display: flex; gap: 10px; }
+.panel-label { color: var(--text-3); font-size: 12px; }
+.panel-summary { font-size: 13px; }
+.toolbar-right { gap: 5px; }
+.sort-group { min-height: 34px; }
+.toolbar-action { min-height: 36px; }
+.folder-button { color: var(--text-2); }
+.list-head, .list-body > .list-row { grid-template-columns: minmax(0, 1fr) 96px 116px 164px 208px; padding-left: 14px; padding-right: 14px; }
+.list-head { background: var(--surface-2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.list-head > div { padding-bottom: 9px; padding-top: 9px; }
+.list-body > .list-row { min-height: 54px; }
+.list-body > .list-row:hover { background: var(--surface-2); }
+.entry-glyph { flex-basis: 34px; height: 34px; }
+.entry-name { font-weight: 520; }
+.entry-name.folder { font-weight: 650; }
+.action-button { min-height: 34px; }
+.action-menu-trigger { min-height: 34px; }
+.action-menu-popover { border-color: var(--line-strong); }
+.status-row { border-top: 1px solid var(--line); margin-top: 12px; padding-left: 4px; }
+
+/* 浮层：全部使用不透明工作面，避免菜单和对话框难以辨认。 */
+.status-panel, .upload-tray, .toast, .modal-card { border-color: var(--line-strong); }
+.status-panel { border-radius: var(--radius-lg); }
+.upload-tray { border-left: 3px solid var(--accent); border-radius: var(--radius-lg); width: 382px; }
+.drop-overlay { background: rgba(49, 93, 204, .09); }
+.drop-frame rect { stroke: var(--accent); }
+.drop-overlay-card { border-color: var(--accent); border-radius: var(--radius-lg); }
+.modal-card { border-radius: var(--radius-lg); }
+.preview-content { background: var(--surface-2); }
+
+/* 平板和手机仍以触摸目标优先，工具区允许换行但不缩小文字。 */
+@media (max-width: 1199px) {
+  .header-inner { padding-left: 24px; padding-right: 24px; }
+  .content { padding-left: 24px; padding-right: 24px; }
+  .list-head, .list-body > .list-row { grid-template-columns: minmax(0, 1fr) 84px 100px 136px 180px; }
+}
+
+@media (max-width: 767px) {
+  .auth-screen { padding: 28px 20px 20px; }
+  .auth-card-brand { margin-bottom: 42px; }
+  .auth-heading h1 { font-size: 28px; }
+  .header-inner { padding-left: 12px; padding-right: 12px; }
+  .brand-subtitle { display: none; }
+  .content { padding: 24px 16px 34px; }
+  .workspace-head { margin-bottom: 16px; }
+  h1 { font-size: 24px; line-height: 32px; }
+  .navigation-row { border-bottom: 0; padding-bottom: 0; }
+  .panel-toolbar { min-height: 0; padding: 12px 0; }
+  .panel-summary-block { width: 100%; }
+  .toolbar-right { width: 100%; }
+  .list-head, .list-body > .list-row { padding-left: 8px; padding-right: 8px; }
+  .list-head { background: transparent; }
+  .status-row { margin-top: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-method-slider { transition: none; }
+}

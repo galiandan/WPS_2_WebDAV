@@ -66,18 +66,10 @@
 
   <section id="auth-screen" class="auth-screen" aria-labelledby="auth-title">
     <div class="auth-shell">
-      <aside class="auth-aside" aria-label="WPS Drive">
-        <div class="auth-brand"><span class="brand-mark" aria-hidden="true">W</span><span>WPS Drive</span></div>
-        <div class="auth-aside-copy">
-          <p class="auth-aside-kicker">PRIVATE FILE SPACE</p>
-          <h2>文件，从这里继续。</h2>
-          <p>使用适配器账号访问你的 WPS 文件和 WebDAV 空间。</p>
-        </div>
-        <div class="auth-aside-status"><span class="connection-dot connected" aria-hidden="true"></span><span>本地服务已就绪</span></div>
-      </aside>
       <div class="auth-card">
+      <div class="auth-card-brand"><span class="brand-mark" aria-hidden="true">W</span><span>WPS Drive</span></div>
       <div class="auth-heading">
-        <div class="auth-heading-row"><p class="auth-kicker">WPS 云盘</p><span class="auth-local-badge"><span class="auth-badge-dot" aria-hidden="true"></span>本地登录</span></div>
+        <div class="auth-heading-row"><p class="auth-kicker">文件工作台</p><span class="auth-local-badge"><span class="auth-badge-dot" aria-hidden="true"></span>本地验证</span></div>
         <h1 id="auth-title">欢迎回来</h1>
         <p id="auth-subtitle">登录后管理你的 WPS 文件</p>
       </div>
@@ -167,7 +159,7 @@
   <main class="content">
     <section class="workspace-head" aria-labelledby="folder-title">
       <div>
-        <div class="eyebrow">云盘空间</div>
+        <div class="eyebrow"><svg class="icon" aria-hidden="true"><use href="#i-cloud"/></svg><span>文件空间</span></div>
         <h1 id="folder-title">WPS Drive</h1>
         <p id="folder-note" class="workspace-note">管理 WPS Drive 中的文件和文件夹</p>
       </div>
@@ -185,7 +177,7 @@
 
     <section class="panel" aria-label="文件列表">
       <div class="panel-toolbar">
-        <div id="panel-summary" class="panel-summary">正在读取...</div>
+        <div class="panel-summary-block"><span class="panel-label">当前目录</span><div id="panel-summary" class="panel-summary">正在读取...</div></div>
         <div class="toolbar-right">
           <label class="sort-group" for="sort-select">
             <svg class="icon" aria-hidden="true"><use href="#i-sort"/></svg>
