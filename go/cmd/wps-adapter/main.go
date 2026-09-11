@@ -24,9 +24,9 @@ import (
 
 // Build-time injection points:
 //
-//	go build -trimpath -ldflags "-X main.version=1.0.8 -X main.commit=$(git rev-parse --short HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+//	go build -trimpath -ldflags "-X main.version=1.0.9 -X main.commit=$(git rev-parse --short HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 var (
-	version   = "1.0.8"
+	version   = "1.0.9"
 	commit    = "unknown"
 	buildTime = "unknown"
 )

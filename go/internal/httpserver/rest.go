@@ -696,6 +696,23 @@ func contentLength(w http.ResponseWriter, r *http.Request, required bool) (*int6
 // discardBody mirrors _discard_body: consume up to the declared length in
 // 64 KiB chunks, refusing oversized bodies before the first read.
 func discardBody(w http.ResponseWriter, r *http.Request, limits ControlLimits) error {
+	if len(r.TransferEncoding) > 0 && r.Method == "MKCOL" {
+		if limits.MaxControlBody <= 0 {
+			limits = DefaultControlLimits()
+		}
+		// MKCOL has no meaningful request body, but accepting and draining
+		// a bounded chunked body keeps clients that use chunked framing for
+		// an empty request interoperable. Never drain an unbounded stream.
+		limited := io.LimitReader(r.Body, limits.MaxControlBody+1)
+		read, err := io.Copy(io.Discard, limited)
+		if err != nil {
+			return err
+		}
+		if read > limits.MaxControlBody {
+			return errRequestBodyTooLarge()
+		}
+		return nil
+	}
 	length, err := contentLength(w, r, false)
 	if err != nil || length == nil {
 		return err

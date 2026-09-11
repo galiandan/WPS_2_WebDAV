@@ -2,6 +2,12 @@
 
 本项目遵循 Keep a Changelog 风格。版本号用于记录适配器行为变化，不代表 WPS 官方兼容性承诺。
 
+## [1.0.9] - 2026-09-11
+
+### Fixed
+
+- 兼容部分 WebDAV 客户端用 chunked 编码发送空 `MKCOL` 请求，避免通过 Cloudflare Tunnel 创建同步目录时返回 `400`。
+
 ## [1.0.8] - 2026-09-11
 
 ### Changed

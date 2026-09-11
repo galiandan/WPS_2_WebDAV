@@ -256,6 +256,16 @@ func TestBoundaryFramingOnLiveServer(t *testing.T) {
 		t.Errorf("router calls = %d, want 1", harness.router.callCount())
 	}
 
+	// Some WebDAV clients encode an empty MKCOL with chunked framing. It
+	// must reach the DAV handler, which drains the bounded body itself.
+	response = exchange("MKCOL /dav/new-dir HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAuthorization: " + basicCredentials("user", "pass") + "\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
+	if !strings.Contains(response, "200") {
+		t.Errorf("chunked empty MKCOL must route: %s", response)
+	}
+	if harness.router.callCount() != 2 {
+		t.Errorf("router calls after MKCOL = %d, want 2", harness.router.callCount())
+	}
+
 	// Documented transport deviation: Go rejects duplicate Content-Length
 	// before any handler runs; Python's boundary produced the same status
 	// with its own message.

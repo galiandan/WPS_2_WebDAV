@@ -120,10 +120,12 @@ func recoverPanics(panicLog func(recovered any, stack []byte)) Middleware {
 func requestBoundary() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Go decodes chunked transfer coding before the handler runs;
-			// its presence means the request used a framing this adapter
-			// forbids, whatever Go managed to decode.
-			if len(r.TransferEncoding) > 0 {
+			// Go decodes chunked transfer coding before the handler runs. A
+			// few WebDAV clients send an empty MKCOL as chunked rather than
+			// Content-Length: 0; that method consumes its bounded body in
+			// discardBody. Uploads and REST control requests still require
+			// an explicit length.
+			if len(r.TransferEncoding) > 0 && r.Method != "MKCOL" {
 				sendError(w, r, http.StatusBadRequest, "Transfer-Encoding is not supported", false, nil, true)
 				return
 			}
