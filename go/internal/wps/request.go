@@ -1,7 +1,8 @@
 // The request layer ports client.py's _request_json: one ordered URL and
 // query builder, the exact control-plane header set, Set-Cookie persistence
-// before any body read, a bounded JSON object response, and a single 401
-// retry that re-reads credentials and rewrites the CSRF field in the body.
+// before any body read, a bounded JSON object response, a single safe retry
+// for transient GET failures, and a single 401 retry that re-reads
+// credentials and rewrites the CSRF field in the body.
 
 package wps
 
@@ -14,11 +15,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/credentials"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
+
+const controlTransientRetryDelay = 250 * time.Millisecond
 
 // QueryPair is one ordered query parameter; the wire order matches the
 // Python urlencode(list-of-tuples) order.
@@ -67,7 +71,9 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 	}
 	currentBody := request.Body
 	var response *http.Response
-	for attempt := 0; attempt < 2; attempt++ {
+	authRetried := false
+	transientRetried := false
+	for {
 		httpRequest, err := newJSONRequest(request.method(), target, currentBody)
 		if err != nil {
 			return nil, model.NewWpsAPIError(request.Path, 0, model.WpsCategoryUpstream)
@@ -92,6 +98,13 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
+			if retryableJSONRequest(request) && !transientRetried {
+				transientRetried = true
+				if err := waitForControlRetry(ctx); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			return nil, model.NewWpsAPIError(request.Path, 0, model.WpsCategoryUnavailable)
 		}
 		if opened.StatusCode >= 200 && opened.StatusCode <= 299 {
@@ -102,7 +115,8 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 		rotated := c.persistSetCookieHeaders(opened.Header)
 		status := opened.StatusCode
 		opened.Body.Close()
-		if status == 401 && request.RetryOn401 && attempt == 0 {
+		if status == 401 && request.RetryOn401 && !authRetried {
+			authRetried = true
 			refreshed := rotated
 			if !refreshed {
 				ok, err := c.refreshCredentials()
@@ -120,6 +134,13 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 				currentBody = refreshJSONBody(currentBody, currentCredentials.CSRFToken)
 				continue
 			}
+		}
+		if retryableJSONRequest(request) && retryableControlStatus(status) && !transientRetried {
+			transientRetried = true
+			if err := waitForControlRetry(ctx); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		return nil, model.NewWpsAPIError(request.Path, status, model.WpsCategoryHTTP)
 	}
@@ -143,6 +164,30 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 		return nil, model.NewWpsAPIError(request.Path, 0, model.WpsCategoryInvalidResponse)
 	}
 	return decoded, nil
+}
+
+// Only idempotent control-plane methods may be retried. In particular, a
+// transient failure must never replay a folder creation, rename, or upload
+// registration request.
+func retryableJSONRequest(request JSONRequest) bool {
+	method := request.method()
+	return method == http.MethodGet || method == http.MethodHead
+}
+
+func retryableControlStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func waitForControlRetry(ctx context.Context) error {
+	timer := time.NewTimer(controlTransientRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func newJSONRequest(method string, target string, body []byte) (*http.Request, error) {

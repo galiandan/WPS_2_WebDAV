@@ -48,7 +48,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装器会把配置、凭据、断点数据、日志和运行文件集中在部署目录：如果执行安装命令时当前目录是 `/`、`/root`、`/home` 或用户主目录，部署目录为 `/opt/wps-adapter`；在其他明确的工作目录执行时，部署目录就是当前目录。目录结构为 `config/`、`data/`、`logs/` 和 `runtime/`。systemd 注册单元仍位于系统规定的 `/etc/systemd/system/`。
 
-预编译 Release 默认使用 `v1.0.5`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v1.0.6`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
@@ -151,6 +151,8 @@ curl -u <Basic Auth用户名> 'http://<VPS地址>:54321/api/v1/status'
 - upstream_unavailable：WPS 或对象存储暂时不可达。
 
 服务遇到 WPS 401 时会尝试已确认的 rtk/grant_token 自动续期流程并重试一次。WPS 撤销刷新凭据或改变登录策略后，仍需重新登录。
+
+网页目录不会先等待状态接口；能成功显示目录就说明当前目录请求可用。状态接口只在后台低频检查，偶发网络抖动不会立即把正在使用的页面判定为不可用。WPS 的只读 GET 请求遇到短暂网络错误或 408、502、503、504 时会自动重试一次，写入请求不会重复执行。
 
 ## HTTP、HTTPS 和端口
 

@@ -5,8 +5,10 @@
   const $ = (id) => document.getElementById(id);
   const apiRoot = "/api/v1/";
   const DIRECTORY_CACHE_TTL_MS = 30 * 1000;
-  const PREFETCH_CONCURRENCY = 2;
-  const PREFETCH_MAX_FOLDERS = 24;
+  // Keep prefetch helpful without turning one navigation into a burst of WPS
+  // requests. A single background request also leaves room for user clicks.
+  const PREFETCH_CONCURRENCY = 1;
+  const PREFETCH_MAX_FOLDERS = 8;
 
   const state = {
     path: "/",
@@ -1599,24 +1601,55 @@
 
   /* ============ 连接检查与加载 ============ */
   let connectionCheck = null;
+  let transientConnectionFailures = 0;
+  let lastDirectorySuccessAt = 0;
+  const TRANSIENT_CONNECTION_FAILURE_LIMIT = 2;
+  const TRANSIENT_CONNECTION_STATES = new Set(["upstream_unavailable", "invalid_response", "unknown"]);
 
   async function checkConnection(quiet = false) {
     if (connectionCheck) return connectionCheck;
     connectionCheck = (async () => {
       const previousConnection = state.connection;
-      setConnection("checking");
+      const probeStartedAt = Date.now();
+      // Keep a confirmed connection visible while a background probe runs.
+      // The badge must not flicker, and a probe must never disable controls.
+      if (previousConnection !== "connected") setConnection("checking");
       try {
         const data = await apiRequest("status");
         const value = data && typeof data.status === "string" ? data.status : "invalid_response";
-        if (value === "connected" && previousConnection !== "connected") {
-          clearDirectoryCache();
+        if (value === "connected") {
+          transientConnectionFailures = 0;
+          if (previousConnection !== "connected" && lastDirectorySuccessAt <= probeStartedAt) {
+            clearDirectoryCache();
+          }
+          setConnection(value);
+          return state.connection;
         }
+
+        // A directory request completed after this probe started. Its result
+        // is newer and is the stronger availability signal.
+        if (lastDirectorySuccessAt > probeStartedAt) return state.connection;
+
+        if (previousConnection === "connected" && TRANSIENT_CONNECTION_STATES.has(value)) {
+          transientConnectionFailures += 1;
+          if (transientConnectionFailures < TRANSIENT_CONNECTION_FAILURE_LIMIT) return state.connection;
+        } else {
+          transientConnectionFailures = 0;
+        }
+
         setConnection(value);
         if (value !== "connected" && (!quiet || state.entries.length === 0)) {
           setStatus(connectionMessage(state.connection), "error");
         }
         return state.connection;
       } catch (error) {
+        if (lastDirectorySuccessAt > probeStartedAt) return state.connection;
+        if (previousConnection === "connected") {
+          transientConnectionFailures += 1;
+          if (transientConnectionFailures < TRANSIENT_CONNECTION_FAILURE_LIMIT) return state.connection;
+        } else {
+          transientConnectionFailures = 0;
+        }
         showError(error, { notify: !quiet });
         return state.connection;
       }
@@ -1648,40 +1681,21 @@
     state.refreshing = showCachedImmediately;
     if (showCachedImmediately) state.entries = cachedEntries;
     $("refresh-button").classList.add("busy");
-    $("refresh-progress").hidden = !state.refreshing;
     if (!quiet) setStatus(state.refreshing ? "正在刷新..." : "正在读取...");
     if (!state.refreshing) renderSkeleton();
     renderEntries({ animate: false });
     try {
-      // Start the status probe and directory request together. The former is
-      // useful for the status badge, but it should never add a full network
-      // round trip before a directory can be displayed.
-      const entriesRequest = directoryEntries(targetPath, force || showCachedImmediately)
-        .then((entries) => ({ entries }))
-        .catch((error) => ({ error }));
-      const connection = await checkConnection(quiet);
-      if (connection !== "connected") {
-        if (requestGeneration !== navigationGeneration) return;
-        await entriesRequest;
-        state.loading = false;
-        state.refreshing = false;
-        state.entries = showCachedImmediately ? cachedEntries : [];
-        if (state.entries.length) {
-          if (targetPath === "/") renderSpaceNav(state.entries);
-          setStatus(`${connectionMessage(connection)}（显示缓存内容，尚未确认最新状态）`, "error");
-        }
-        renderEntries({ animate: true });
-        return;
-      }
-      const result = await entriesRequest;
-      if (result.error) throw result.error;
-      const entries = result.entries;
+      // The directory response is the authoritative result for navigation.
+      // Status is sampled in the background, so a slow or stale preflight can
+      // never hide a directory that WPS has already returned successfully.
+      const entries = await directoryEntries(targetPath, force || showCachedImmediately);
       if (requestGeneration !== navigationGeneration) return;
       state.loading = false;
       state.refreshing = false;
-      $("refresh-progress").hidden = true;
       state.entries = entries;
       state.directoryError = null;
+      transientConnectionFailures = 0;
+      lastDirectorySuccessAt = Date.now();
       setConnection("connected");
       if (targetPath === "/") {
         renderSpaceNav(entries);
@@ -1690,23 +1704,21 @@
       } else {
         renderSpaceNav();
       }
-      renderEntries({ animate: true });
+      renderEntries({ animate: !showCachedImmediately });
       prefetchChildDirectories(targetPath, state.entries);
       setStatus(`${state.entries.length} 个项目`, "success");
     } catch (error) {
       if (requestGeneration !== navigationGeneration) return;
       state.loading = false;
       state.refreshing = false;
-      $("refresh-progress").hidden = true;
-      if (!preserveCurrentList) state.entries = [];
+      if (!showCachedImmediately) state.entries = [];
       state.directoryError = directoryErrorFor(error);
       showError(error, { notify: !quiet });
-      renderEntries({ animate: true });
+      renderEntries({ animate: !showCachedImmediately });
     } finally {
       if (requestGeneration === navigationGeneration) {
         state.loading = false;
         state.refreshing = false;
-        $("refresh-progress").hidden = true;
         $("refresh-button").classList.remove("busy");
       }
     }
@@ -2733,7 +2745,7 @@
   }, { passive: true });
 
   window.setInterval(async () => {
-    if (state.busy || document.hidden) return;
+    if (state.busy || state.loading || state.refreshing || document.hidden) return;
     const previous = state.connection;
     const current = await checkConnection(true);
     if (current !== "connected") {

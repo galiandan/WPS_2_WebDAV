@@ -127,6 +127,54 @@ func TestRequestJSONBuildsURLQueryAndHeaders(t *testing.T) {
 	}
 }
 
+func TestRequestJSONRetriesTransientGetOnce(t *testing.T) {
+	config := DefaultConfig("group-1")
+	config.CredentialSource = staticSource()
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: http.StatusBadGateway},
+		{status: http.StatusOK, body: []byte(`{"result":"ok"}`)},
+	}}
+	client.opener = opener
+
+	result, err := client.RequestJSON(JSONRequest{Path: "/api/v3/islogin"})
+	if err != nil {
+		t.Fatalf("RequestJSON failed after transient retry: %v", err)
+	}
+	if result["result"] != "ok" {
+		t.Fatalf("result = %v", result)
+	}
+	if len(opener.requests) != 2 {
+		t.Fatalf("requests = %d, want one retry", len(opener.requests))
+	}
+}
+
+func TestRequestJSONDoesNotRetryTransientPost(t *testing.T) {
+	config := DefaultConfig("group-1")
+	config.CredentialSource = staticSource()
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	opener := &fakeControlOpener{script: []scriptedResponse{{status: http.StatusServiceUnavailable}}}
+	client.opener = opener
+
+	_, err = client.RequestJSON(JSONRequest{
+		Path:   "/3rd/drive/api/v5/files/folder",
+		Method: http.MethodPost,
+		Body:   []byte(`{"name":"folder"}`),
+	})
+	if err == nil {
+		t.Fatal("POST unexpectedly succeeded")
+	}
+	if len(opener.requests) != 1 {
+		t.Fatalf("requests = %d, want no retry for POST", len(opener.requests))
+	}
+}
+
 func TestRequestJSONPostsJSONBody(t *testing.T) {
 	config := DefaultConfig("group-1")
 	config.CredentialSource = staticSource()
