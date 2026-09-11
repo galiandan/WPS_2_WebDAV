@@ -231,7 +231,7 @@ download_prebuilt_binary() {
         printf '提示：当前 Linux CPU 架构没有对应预编译二进制。\n' >&2
         return 1
     }
-    local base_url="${BINARY_BASE_URL:-https://ghfast.top/$REPOSITORY/releases/download/$BINARY_RELEASE_TAG}"
+    local base_url="${BINARY_BASE_URL:-https://gh-proxy.com/$REPOSITORY/releases/download/$BINARY_RELEASE_TAG}"
     base_url="${base_url%/}"
     local url="$base_url/wps-adapter-linux-$BINARY_ASSET"
     local partial="$TMP_DIR/wps-adapter.binary.part"
@@ -254,7 +254,7 @@ download_prebuilt_binary() {
 
 download_archive() {
     local direct_url="$REPOSITORY/archive/$SOURCE_REF.tar.gz"
-    local url="${WPS_ADAPTER_ARCHIVE_URL:-https://ghfast.top/$direct_url}"
+    local url="${WPS_ADAPTER_ARCHIVE_URL:-https://gh-proxy.com/$direct_url}"
     printf '下载源代码：%s\n' "$url"
     download_file "$url" "$ARCHIVE" \
         || die "项目归档下载失败"

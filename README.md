@@ -27,13 +27,13 @@ WPS 云盘 -> Go 适配器 -> 网页 / WebDAV / REST
 Native（推荐，运行时不需要 Docker）：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 54321
 ~~~
 
 Docker：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 54321
 ~~~
 
 安装器会显示阶段进度和下载进度，并在首次安装时询问 WebDAV、REST 和网页共用的 Basic Auth 用户名和密码。密码不会显示，请记住它；网页登录直接使用这组凭据。
@@ -55,7 +55,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 只下载一个登录脚本，不需要 clone 整个项目：
 
 ~~~bash
-curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
+curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/wps_login.py' -o wps_login.py && python3 wps_login.py
 ~~~
 
 电脑需要 Python 3.11+、Chrome 或 Chromium。脚本会询问：
@@ -83,7 +83,7 @@ WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。网页�
 http://<VPS地址>:54321/
 ~~~
 
-网页打开后会在后台检查项目 Release。发现新版本时，首页顶部会出现“立即更新”；桌面端顶部的下载图标、移动端侧边菜单中的“检查更新”也可以随时手动检查，并会明确提示当前是否已是最新版本。点击更新后服务会下载当前 Linux 架构的预编译二进制，检查版本后自动替换并重启。配置、Cookie、工作区选择和 WPS 云端文件不会被修改，更新期间不要重复点击按钮。更新检查失败不会影响文件浏览。更新默认使用国内加速地址，也可以通过 `WPS_ADAPTER_UPDATE_API_URL` 和 `WPS_ADAPTER_UPDATE_BASE_URL` 指向你自己的 HTTPS Release 镜像。
+网页打开后会在后台检查项目 Release。正常时，云盘名称下方显示灰色版本号胶囊；发现新版本时版本号会变黄。点击版本号即可打开版本详情，查看当前版本、最新版本和发布页，并可重新检查或立即更新。点击更新后服务会下载当前 Linux 架构的预编译二进制，检查版本后自动替换并重启。配置、Cookie、工作区选择和 WPS 云端文件不会被修改，更新期间不要重复点击按钮。更新检查失败不会影响文件浏览。更新默认使用国内加速地址，也可以通过 `WPS_ADAPTER_UPDATE_API_URL` 和 `WPS_ADAPTER_UPDATE_BASE_URL` 指向你自己的 HTTPS Release 镜像。
 
 WebDAV：
 
@@ -167,7 +167,7 @@ https://<你的域名>/dav/
 安装器支持自定义端口。例如：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
 ~~~
 
 登录助手中的端口也必须填写 18080，不能继续使用默认的 54321。
@@ -199,13 +199,13 @@ CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
 卸载脚本会自动识别 Native 和 Docker，删除服务、程序、本机配置、Basic Auth、Cookie、CSRF 和工作区文件：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ~~~
 
 如果还安装过 Docker，并希望同时删除本项目镜像：
 
 ~~~bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --remove-image
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --remove-image
 ~~~
 
 卸载不会删除 Docker 软件，也不会删除 WPS 云盘中的远端文件。没有 Docker 时会自动跳过容器和镜像清理。脚本会要求输入 YES；自动化场景可额外添加 --yes。

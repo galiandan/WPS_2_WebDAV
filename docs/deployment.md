@@ -7,7 +7,7 @@
 下面两个脚本都可以通过一行命令启动。首次运行会通过当前终端询问 WebDAV/REST 兼容接口使用的 Basic Auth 用户名、密码和监听端口；WPS 群组和根目录默认写入 `auto`，由登录助手从官方 WPS 当前页面地址识别。`[]` 中的值是默认值，直接回车即可使用。适配器密码不会出现在命令行参数中。服务默认使用执行 `sudo` 的当前用户，可以通过 `--run-user USER` 显式指定。云盘显示名称安装后直接在网页右上角齿轮中修改，不需要编辑配置文件。
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-native.sh' | sudo bash -s -- --port 18080
 ```
 
 上面是 Native 安装。把最后的 `18080` 换成你想使用的端口即可。
@@ -15,7 +15,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 Docker：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080
 ```
 
 安装器会先从国内加速的 GitHub Release 下载对应 Linux 架构的预编译二进制。预编译资产下载失败、无法执行、没有对应架构或 Docker 运行镜像制作失败时，才会从脚本固定的 40 位 Git 提交归档下载源码并现场编译；不要求 VPS 已安装 `git`，也不执行归档、二进制或工具链哈希校验。可用 `--source-ref` 指定源码回退提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。配置、凭据、数据、日志和运行文件都集中在部署目录的 `config/`、`data/`、`logs/` 和 `runtime/`；当前目录是根目录或用户主目录时默认使用 `/opt/wps-adapter`，其他明确工作目录则使用当前目录。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
@@ -23,10 +23,10 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080 --replace-native
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080 --replace-native
 ```
 
-如果 `ghfast.top` 无法访问，需要在命令中显式替换为你自己确认可用的 HTTPS 归档地址，安装器不会自动切换节点。
+如果 `gh-proxy.com` 暂时无法访问，需要在命令中显式替换为你自己确认可用的 HTTPS 地址，安装器不会自动切换节点。
 
 建议先下载脚本检查内容，再执行；不要把未知来源的内容直接通过管道交给 root。安装器内部的下载有连接超时和总超时，但不会在候选地址之间自动回退，也不会做哈希校验。
 
@@ -75,7 +75,7 @@ docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 如果不使用一键安装器，可在 VPS 上将仓库放到 `/opt/wps-adapter`，并在主机上用 Go 构建二进制。例如：
 
 ```bash
-sudo git clone --branch main https://ghfast.top/https://github.com/galiandan/WPS_2_WebDAV.git /opt/wps-adapter
+sudo git clone --branch main https://gh-proxy.com/https://github.com/galiandan/WPS_2_WebDAV.git /opt/wps-adapter
 cd /opt/wps-adapter
 cd go
 sudo install -d -m 755 /opt/wps-adapter/runtime
@@ -205,13 +205,13 @@ sudo cp /opt/wps-adapter/config/wps-adapter.env \
 Native 和 Docker 共用一个卸载脚本。脚本会自动识别两种部署方式，停止并删除适配器服务、应用代码、配置和 `/opt/wps-adapter/config/secrets/` 中的本机凭据：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --
 ```
 
 如果还要删除本项目 Docker 镜像，添加 `--remove-image`：
 
 ```bash
-set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --remove-image
+set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://gh-proxy.com/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s -- --remove-image
 ```
 
 脚本会要求输入 `YES` 确认；自动化执行时可以添加 `--yes`。卸载脚本不会删除 Docker 软件，也不会删除 WPS 云盘上的远端文件。如果没有 Docker 命令或 Docker daemon 不可用，会跳过容器和镜像清理，但继续删除 Native 和本机配置。
