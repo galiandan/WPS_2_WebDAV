@@ -5,6 +5,7 @@ set -Eeuo pipefail
 # This command always removes local configuration and credentials.
 DEFAULT_APP_DIR="/opt/wps-adapter"
 LEGACY_CONFIG_DIR="/etc/wps-adapter"
+LEGACY_DATA_DIR="/var/lib/wps-adapter"
 CURRENT_DIR="$(pwd -P 2>/dev/null || true)"
 case "$CURRENT_DIR" in
     ""|/|/root|/home|/home/*|/tmp|/var/tmp|/opt|/usr|/var|/etc)
@@ -165,6 +166,7 @@ validate_targets() {
     require_directory_target "$SECRET_DIR" "凭据目录"
     require_directory_target "$LEGACY_CONFIG_DIR" "旧版配置目录"
     require_directory_target "$LEGACY_CONFIG_DIR/secrets" "旧版凭据目录"
+    require_directory_target "$LEGACY_DATA_DIR" "旧版数据目录"
     require_directory_target "$OVERRIDE_DIR" "systemd drop-in 目录"
     for path in \
         "$ENV_FILE" "$HARDENING_ENV_FILE" "$PID_FILE" "$LOG_FILE" \
@@ -272,7 +274,7 @@ remove_service_and_app() {
         rm -f -- "$OVERRIDE_FILE"
     fi
     rmdir -- "$OVERRIDE_DIR" >/dev/null 2>&1 || true
-    rm -rf -- "$RUNTIME_DIR" "$CONFIG_DIR" "$APP_DIR/data" "$APP_DIR/logs"
+    rm -rf -- "$RUNTIME_DIR" "$CONFIG_DIR" "$APP_DIR/data" "$APP_DIR/logs" "$LEGACY_DATA_DIR"
     if [[ "$APP_DIR" == "$DEFAULT_APP_DIR" ]]; then
         rm -rf -- "$APP_DIR"
     else

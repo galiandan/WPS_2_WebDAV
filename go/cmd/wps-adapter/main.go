@@ -26,7 +26,7 @@ import (
 //
 //	go build -trimpath -ldflags "-X main.version=1.0.2 -X main.commit=$(git rev-parse --short HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 var (
-	version   = "1.0.3"
+	version   = "1.0.4"
 	commit    = "unknown"
 	buildTime = "unknown"
 )

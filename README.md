@@ -48,7 +48,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装器会把配置、凭据、断点数据、日志和运行文件集中在部署目录：如果执行安装命令时当前目录是 `/`、`/root`、`/home` 或用户主目录，部署目录为 `/opt/wps-adapter`；在其他明确的工作目录执行时，部署目录就是当前目录。目录结构为 `config/`、`data/`、`logs/` 和 `runtime/`。systemd 注册单元仍位于系统规定的 `/etc/systemd/system/`。
 
-预编译 Release 默认使用 `v1.0.3`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v1.0.4`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
