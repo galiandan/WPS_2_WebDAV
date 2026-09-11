@@ -71,6 +71,20 @@ MAX_WORKSPACE_NAME_LENGTH = 4096
 MAX_COOKIE_SNAPSHOT_BYTES = 4 * 1024 * 1024
 MAX_ADAPTER_RESPONSE_BYTES = 1 * 1024 * 1024
 
+# WPS has used more than one CSRF cookie spelling across the account and
+# enterprise entry points. Values are treated identically; the original
+# cookie name is retained in the forwarded Cookie header.
+_CSRF_COOKIE_NAMES = (
+    "csrf",
+    "csrftoken",
+    "csrf_token",
+    "csrf-token",
+    "x-csrf-token",
+    "xsrf-token",
+    "xsrf_token",
+    "csrfmiddlewaretoken",
+)
+
 
 def _is_positive_timeout(value: object) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -319,6 +333,21 @@ def _safe_cookie_part(value: str, *, name: bool = False) -> bool:
     return True
 
 
+def _csrf_cookie_value(cookies: Sequence[Mapping[str, object]]) -> str:
+    """Return the first supported, non-empty CSRF cookie value."""
+
+    by_name = {
+        str(cookie.get("name", "")).casefold(): str(cookie.get("value", ""))
+        for cookie in cookies
+        if isinstance(cookie, Mapping)
+    }
+    for name in _CSRF_COOKIE_NAMES:
+        value = by_name.get(name)
+        if value:
+            return value
+    return ""
+
+
 def _select_cookies(
     cookies: Sequence[Mapping[str, object]],
     *,
@@ -386,7 +415,7 @@ def _select_login_cookies(
 
     selected = _select_cookies(cookies, host=host, domain_suffix=domain_suffix)
     names = {str(cookie.get("name", "")).casefold() for cookie in selected}
-    if {"csrf", "rtk"}.issubset(names):
+    if _csrf_cookie_value(selected) and "rtk" in names:
         return selected
     by_name = {str(cookie.get("name", "")).casefold(): cookie for cookie in selected}
     for cookie in _select_domain_scope_cookies(cookies, domain_suffix=domain_suffix):
@@ -418,16 +447,21 @@ def credentials_from_cookies(
         raise LoginError("WPS 账号类型不正确，未同步新凭据")
     host = "drive.wps.cn" if mode == "personal" else _host_from_url(base_url)
     effective_suffix = domain_suffix
-    if host == "wps.cn" or host.endswith(".wps.cn"):
-        if _domain_without_dot(domain_suffix) == "kdocs.cn":
-            effective_suffix = "wps.cn"
+    if _domain_without_dot(domain_suffix) in {"kdocs.cn", "wps.cn"}:
+        effective_suffix = (
+            "wps.cn"
+            if host == "wps.cn" or host.endswith(".wps.cn")
+            else "kdocs.cn"
+        )
     selected = _select_login_cookies(cookies, host=host, domain_suffix=effective_suffix)
     if auto_mode and mode == "business":
         cookie_names = {
             str(cookie.get("name", "")).casefold() for cookie in selected
         }
-        required = {"csrf", "rtk"} if require_refresh_cookie else {"csrf"}
-        if not required.issubset(cookie_names):
+        has_required_cookies = bool(_csrf_cookie_value(selected)) and (
+            not require_refresh_cookie or "rtk" in cookie_names
+        )
+        if not has_required_cookies:
             personal_suffix = domain_suffix
             if _domain_without_dot(personal_suffix) == "kdocs.cn":
                 personal_suffix = "wps.cn"
@@ -439,7 +473,10 @@ def credentials_from_cookies(
             personal_names = {
                 str(cookie.get("name", "")).casefold() for cookie in personal_selected
             }
-            if required.issubset(personal_names):
+            personal_has_required = bool(_csrf_cookie_value(personal_selected)) and (
+                not require_refresh_cookie or "rtk" in personal_names
+            )
+            if personal_has_required:
                 selected = personal_selected
                 mode = "personal"
     if not selected:
@@ -453,9 +490,9 @@ def credentials_from_cookies(
         str(cookie.get("name", "")).casefold(): str(cookie.get("value", ""))
         for cookie in selected
     }
-    csrf = by_name.get("csrf", "")
+    csrf = _csrf_cookie_value(selected)
     if not csrf:
-        raise LoginError("登录 Cookie 中没有 csrf，请在 WPS 页面完成登录后重试")
+        raise LoginError("登录 Cookie 中没有 CSRF，请在 WPS 页面完成登录后重试")
     if require_refresh_cookie and not by_name.get("rtk"):
         raise LoginError(
             "登录 Cookie 中没有 rtk，无法启用自动续期；请使用此助手重新登录 WPS 后重试"
@@ -2587,7 +2624,7 @@ __all__ = [
 ]
 
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:
