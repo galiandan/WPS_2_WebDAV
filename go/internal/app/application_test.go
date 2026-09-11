@@ -438,6 +438,17 @@ func TestWebPageEntriesServeFixedBytes(t *testing.T) {
 	if strings.Contains(string(want), "<script>") {
 		t.Error("the page must not carry inline scripts")
 	}
+	page := string(want)
+	for _, marker := range []string{"id=\"version-button\"", "id=\"update-modal\"", "id=\"update-modal-action\"", "id=\"update-release-link\""} {
+		if !strings.Contains(page, marker) {
+			t.Errorf("the page is missing update interface marker %q", marker)
+		}
+	}
+	for _, legacy := range []string{"id=\"update-banner\"", "id=\"update-button\"", "id=\"update-check-button\""} {
+		if strings.Contains(page, legacy) {
+			t.Errorf("the page still contains legacy update interface marker %q", legacy)
+		}
+	}
 }
 
 func embeddedAsset(t *testing.T, name string) ([]byte, string) {

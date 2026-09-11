@@ -38,7 +38,7 @@ func TestNormalizeVersionAndNewerThan(t *testing.T) {
 }
 
 func TestNewUsesDomesticUpdateSource(t *testing.T) {
-	updater := New("1.0.7")
+	updater := New("1.0.8")
 	if updater.apiURL != defaultAPIURL || updater.assetBaseURL != defaultAssetURL {
 		t.Fatalf("update sources = %q / %q, want domestic defaults", updater.apiURL, updater.assetBaseURL)
 	}

@@ -291,11 +291,15 @@ input, select {
 .app-header.scrolled { box-shadow: 0 4px 16px rgba(24, 33, 38, .08); }
 .header-inner { align-items: center; display: flex; gap: 18px; justify-content: space-between; min-height: var(--header-h); padding: 8px 24px; }
 .brand { align-items: center; display: flex; gap: 10px; min-width: 0; }
-.brand-copy { min-width: 0; }
+.brand-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .brand-title { font-size: 15px; font-weight: 600; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.brand-subtitle { color: var(--text-3); font-size: 10px; letter-spacing: .10em; line-height: 14px; text-transform: uppercase; }
+.version-badge { align-items: center; background: var(--surface-2); border-color: transparent; border-radius: 8px; color: var(--text-2); font-size: 12px; font-weight: 600; gap: 6px; justify-content: flex-start; line-height: 20px; min-height: 24px; padding: 1px 9px; width: fit-content; }
+.version-badge:hover { background: var(--surface-3); color: var(--text); }
+.version-badge.has-update { background: var(--warn-soft); color: var(--warn); }
+.version-badge.has-update:hover { background: var(--warn-soft); color: var(--warn); filter: brightness(.98); }
+.version-update-dot { background: currentColor; border-radius: 50%; display: none; height: 6px; width: 6px; }
+.version-badge.has-update .version-update-dot { display: inline-block; }
 .header-actions { align-items: center; display: flex; flex-wrap: nowrap; gap: 6px; justify-content: flex-end; }
-.update-check-button.busy .icon { animation: spin .8s linear infinite; }
 .header-divider { background: var(--line); height: 28px; margin: 0 6px; width: 1px; }
 .icon-button { background: transparent; border-color: transparent; min-height: 36px; padding: 0; width: 36px; }
 .icon-button:hover { background: var(--surface-2); border-color: transparent; }
@@ -477,18 +481,6 @@ h1 { font-size: 22px; font-weight: 600; line-height: 30px; margin: 0; }
 .status-refresh .icon { height: 16px; width: 16px; }
 .status-refresh.busy .icon { animation: spin 1s linear infinite; }
 
-/* 更新提示 */
-.update-banner { align-items: center; background: var(--accent-soft); border-bottom: 1px solid var(--accent-ring); color: var(--text); display: flex; gap: 11px; min-height: 54px; padding: 8px max(20px, calc((100vw - 1180px) / 2)); }
-.update-banner-icon { align-items: center; background: var(--surface); border: 1px solid var(--accent-ring); border-radius: 50%; color: var(--accent); display: inline-flex; flex: 0 0 30px; height: 30px; justify-content: center; width: 30px; }
-.update-banner-icon .icon { height: 16px; width: 16px; }
-.update-banner-copy { display: flex; flex: 1; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
-.update-banner-copy strong { font-size: 13px; font-weight: 650; }
-.update-banner-copy > span { color: var(--text-2); font-size: 12px; }
-.update-button { flex: 0 0 auto; min-height: 34px; padding: 6px 11px; }
-.update-button .icon { height: 15px; width: 15px; }
-.update-button.is-loading .icon { animation: spin .8s linear infinite; }
-.update-banner > .icon-button { flex: 0 0 30px; }
-
 /* 骨架 */
 #skeleton { padding: 6px 12px 14px; }
 #skeleton[data-view="grid"] { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); padding: 14px 0; }
@@ -594,6 +586,24 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
 .preview-note { color: var(--warn); font-size: 12px; line-height: 18px; margin: 10px 0 -6px; }
 .preview-card .modal-actions { margin-top: 18px; }
 .settings-card { max-width: 440px; }
+.update-dialog { max-width: min(510px, calc(100vw - 28px)); }
+.update-card { max-width: 510px; overflow: hidden; padding: 0 28px 24px; }
+.update-modal-head { align-items: flex-start; border-bottom: 1px solid var(--line); display: flex; gap: 14px; justify-content: space-between; margin: 0 -28px; padding: 20px 24px 16px; }
+.update-modal-head .modal-message { margin-top: 4px; }
+.update-modal-head .icon-button { flex: 0 0 36px; margin-top: -4px; }
+.update-modal-head .icon-button.busy .icon { animation: spin .8s linear infinite; }
+.update-current { align-items: center; display: flex; gap: 12px; justify-content: center; margin-top: 34px; }
+.update-current strong { font-size: 42px; font-weight: 700; letter-spacing: 0; line-height: 1.1; }
+.update-current-mark { align-items: center; background: var(--ok-soft); border-radius: 50%; color: var(--ok); display: inline-flex; height: 34px; justify-content: center; width: 34px; }
+.update-current-mark .icon { height: 19px; width: 19px; }
+.update-current-mark.hidden { display: none; }
+.update-modal-state { color: var(--text-2); font-size: 16px; margin: 10px 0 0; text-align: center; }
+.update-modal-state.available { color: var(--warn); font-weight: 600; }
+.update-modal-state.error { color: var(--bad); }
+.update-release-link { align-items: center; color: var(--text-2); display: flex; font-size: 15px; gap: 9px; justify-content: center; margin: 28px auto 0; text-decoration: none; width: fit-content; }
+.update-release-link:hover { color: var(--accent); }
+.update-release-link .icon { height: 19px; width: 19px; }
+.update-modal-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 24px; }
 .storage-setting { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 18px; }
 .storage-setting-head { align-items: center; display: flex; gap: 14px; justify-content: space-between; }
 .storage-setting h3 { font-size: 13px; font-weight: 600; margin: 0; }
@@ -679,20 +689,18 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
   .header-inner { gap: 8px; padding-left: 12px; padding-right: 12px; }
   .brand-mark { flex-basis: 30px; height: 30px; }
   .brand-title { max-width: 44vw; }
-  .brand-subtitle, .header-divider { display: none; }
+  .header-divider { display: none; }
   .header-actions { margin-left: auto; }
-  .header-actions #refresh-button, .header-actions #update-check-button, .header-actions #settings-button, .header-actions #theme-button, .header-actions #logout-button { display: none; }
+  .header-actions #refresh-button, .header-actions #settings-button, .header-actions #theme-button, .header-actions #logout-button { display: none; }
   .header-actions .connection { max-width: 44px; overflow: hidden; padding-left: 9px; padding-right: 9px; }
   .header-actions #connection-label { display: none; }
   .header-actions .connection > .icon { margin: 0; }
   .sidebar { top: 56px; height: calc(100vh - 56px); }
   .mobile-scrim { inset: 56px 0 0; }
   .content { padding: 20px 16px 32px; }
-  .update-banner { align-items: flex-start; padding: 10px 12px; }
-  .update-banner-copy { align-content: center; flex-direction: column; gap: 2px; min-height: 34px; }
-  .update-button { align-self: center; padding-left: 9px; padding-right: 9px; }
-  .update-button span { display: none; }
-  .update-banner > .icon-button { align-self: center; }
+  .update-current strong { font-size: 36px; }
+  .update-card { padding-left: 20px; padding-right: 20px; }
+  .update-modal-head { margin-left: -20px; margin-right: -20px; padding-left: 20px; padding-right: 20px; }
   .workspace-head { margin-bottom: 14px; }
   h1 { font-size: 22px; }
   .navigation-row { align-items: stretch; flex-direction: column; gap: 8px; }
@@ -883,7 +891,6 @@ button { border-radius: var(--radius-s); }
 .brand { gap: 11px; }
 .brand-mark { background: var(--accent); border-radius: var(--radius-s); flex-basis: 34px; font-size: 17px; height: 34px; }
 .brand-title { font-size: 15px; }
-.brand-subtitle { font-size: 9px; letter-spacing: .12em; }
 .header-actions { gap: 4px; }
 .connection { background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; min-height: 34px; padding: 5px 12px; }
 .connection.connected { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
@@ -951,7 +958,6 @@ h1 { font-size: 26px; letter-spacing: -.02em; line-height: 34px; }
   .auth-card-brand { margin-bottom: 42px; }
   .auth-heading h1 { font-size: 28px; }
   .header-inner { padding-left: 12px; padding-right: 12px; }
-  .brand-subtitle { display: none; }
   .content { padding: 24px 16px 34px; }
   .workspace-head { margin-bottom: 16px; }
   h1 { font-size: 24px; line-height: 32px; }

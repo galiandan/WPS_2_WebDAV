@@ -1828,65 +1828,132 @@
   let updateStatus = null;
   let updatePollTimer = null;
   let updateCheckInFlight = null;
+  let localVersion = "";
 
   function updateIsActive() {
     return updateStatus && ["checking", "downloading", "restarting"].includes(updateStatus.state);
   }
 
-  function renderUpdateStatus(data, { manual = false } = {}) {
-    if (!data) return;
-    const banner = $("update-banner");
-    const button = $("update-button");
-    const version = $("update-version");
-    const message = $("update-message");
-    const active = updateIsActive();
-    const available = Boolean(data.update_available && data.latest_version);
-    const dismissed = !manual && PREF.get("update-dismissed", "") === data.latest_version;
-    banner.hidden = !(active || (available && !dismissed));
-    if (available) version.textContent = `v${data.latest_version}`;
-    if (active) {
-      button.disabled = true;
-      button.classList.add("is-loading");
-      button.querySelector("span").textContent = data.state === "restarting" ? "正在重启" : "正在更新";
-      message.textContent = data.message || "正在更新服务，请稍候...";
-    } else {
-      button.disabled = false;
-      button.classList.remove("is-loading");
-      button.querySelector("span").textContent = "立即更新";
-      message.textContent = data.message || "可以一键更新，配置和文件不会改变。";
+  function knownCurrentVersion() {
+    if (updateStatus && typeof updateStatus.current_version === "string" && updateStatus.current_version) {
+      return updateStatus.current_version;
     }
+    return localVersion;
   }
 
-  async function checkForUpdate({ manual = false } = {}) {
+  function renderKnownVersion() {
+    if (!localVersion || (updateStatus && updateStatus.current_version)) return;
+    const versionText = "v" + localVersion;
+    $("version-label").textContent = versionText;
+    $("update-current-version").textContent = versionText;
+    $("version-button").setAttribute("aria-label", "当前版本 " + versionText + "，点击查看详情");
+  }
+
+  async function initLocalVersion() {
+    try {
+      const response = await fetch("/healthz", { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data && typeof data.version === "string" && data.version) {
+        localVersion = data.version;
+        renderKnownVersion();
+      }
+    } catch (_) {}
+  }
+
+  function renderUpdateStatus(data) {
+    if (!data) return;
+    const current = typeof data.current_version === "string" && data.current_version
+      ? data.current_version
+      : localVersion;
+    if (current) localVersion = current;
+    const active = updateIsActive();
+    const available = Boolean(data.update_available && data.latest_version);
+    const versionText = current ? "v" + current : "版本";
+    const badge = $("version-button");
+    const action = $("update-modal-action");
+    const mark = $("update-current-mark");
+    const release = $("update-release-link");
+
+    $("version-label").textContent = versionText;
+    $("update-current-version").textContent = versionText;
+    badge.classList.toggle("has-update", available);
+    badge.title = available
+      ? "发现新版本 v" + data.latest_version + "，点击查看详情"
+      : "查看版本信息";
+    badge.setAttribute("aria-label", available
+      ? "发现新版本 v" + data.latest_version + "，点击查看详情"
+      : "当前版本 " + versionText + "，点击查看详情");
+    mark.classList.toggle("hidden", active || available || data.state === "error");
+    const state = $("update-modal-state");
+    if (active) {
+      state.className = "update-modal-state";
+      state.textContent = data.message || (data.state === "restarting" ? "正在重启服务" : "正在更新");
+      action.disabled = true;
+      action.textContent = data.state === "restarting" ? "正在重启" : "正在更新";
+    } else if (available) {
+      state.className = "update-modal-state available";
+      state.textContent = "发现新版本 v" + data.latest_version;
+      action.disabled = false;
+      action.textContent = "立即更新";
+    } else if (data.state === "error") {
+      state.className = "update-modal-state error";
+      state.textContent = data.message || "更新检查失败，请稍后重试";
+      action.disabled = false;
+      action.textContent = "重新检查";
+    } else {
+      state.className = "update-modal-state";
+      state.textContent = data.message || "已是最新版本";
+      action.disabled = false;
+      action.textContent = "重新检查";
+    }
+    release.hidden = !data.release_url;
+    if (data.release_url) release.href = data.release_url;
+  }
+
+  function openUpdateModal() {
+    const modal = $("update-modal");
+    if (!modal.open) modal.showModal();
+    $("version-button").setAttribute("aria-expanded", "true");
+    if (updateStatus) renderUpdateStatus(updateStatus);
+    else {
+      $("update-current-version").textContent = "版本";
+      $("update-modal-state").textContent = "正在检查更新...";
+      $("update-modal-action").disabled = true;
+      $("update-current-mark").classList.add("hidden");
+    }
+    checkForUpdate();
+  }
+
+  function closeUpdateModal() {
+    const modal = $("update-modal");
+    if (modal.open) modal.close();
+    $("version-button").setAttribute("aria-expanded", "false");
+  }
+
+  async function checkForUpdate() {
     if (updateCheckInFlight) return updateCheckInFlight;
-    const buttons = [$("update-check-button"), $("sidebar-update-button")].filter(Boolean);
+    const refresh = $("update-modal-refresh");
     updateCheckInFlight = (async () => {
-      buttons.forEach((button) => {
-        button.disabled = true;
-        button.classList.add("busy");
-      });
+      refresh.disabled = true;
+      refresh.classList.add("busy");
       try {
         const data = await apiRequest("update");
         updateStatus = data;
-        renderUpdateStatus(data, { manual });
-        if (manual) {
-          if (data && data.update_available && data.latest_version) {
-            toast(`发现新版本 v${data.latest_version}`, "info");
-          } else if (data && data.state === "idle") {
-            toast("当前已是最新版本", "success");
-          } else if (data && data.state === "error") {
-            toast(data.message || "暂时无法检查更新", "error");
-          }
-        }
+        renderUpdateStatus(data);
         return data;
       } catch (_) {
-        if (manual) toast("更新检查失败，请稍后重试", "error");
+        updateStatus = {
+          state: "error",
+          current_version: knownCurrentVersion(),
+          update_available: false,
+          message: "更新检查失败，请稍后重试",
+        };
+        renderUpdateStatus(updateStatus);
         return null;
       } finally {
-        buttons.forEach((button) => {
-          button.disabled = false;
-          button.classList.remove("busy");
-        });
+        refresh.disabled = false;
+        refresh.classList.remove("busy");
         updateCheckInFlight = null;
       }
     })();
@@ -1911,7 +1978,11 @@
 
   async function startUpdate() {
     if (updateIsActive()) return;
-    const button = $("update-button");
+    if (!updateStatus || !updateStatus.update_available) {
+      checkForUpdate();
+      return;
+    }
+    const button = $("update-modal-action");
     button.disabled = true;
     try {
       const data = await apiRequest("update", {
@@ -1925,16 +1996,13 @@
       toast("已开始更新，服务重启后页面会自动刷新", "info", 5000);
       scheduleUpdatePoll();
     } catch (error) {
-      button.disabled = false;
-      showError(error);
+      updateStatus = {
+        ...(updateStatus || {}),
+        state: "error",
+        message: error.message || "更新失败，当前版本未改变",
+      };
+      renderUpdateStatus(updateStatus);
     }
-  }
-
-  function dismissUpdate() {
-    if (updateStatus && updateStatus.latest_version) {
-      PREF.set("update-dismissed", updateStatus.latest_version);
-    }
-    $("update-banner").hidden = true;
   }
 
   /* ============ 对话框（输入 / 确认） ============ */
@@ -2559,12 +2627,12 @@
   $("password-toggle").addEventListener("click", togglePassword);
   $("passkey-login-button").addEventListener("click", passkeyLogin);
   $("logout-button").addEventListener("click", logout);
-  $("update-button").addEventListener("click", startUpdate);
-  $("update-dismiss").addEventListener("click", dismissUpdate);
-  $("update-check-button").addEventListener("click", () => checkForUpdate({ manual: true }));
-  $("sidebar-update-button").addEventListener("click", () => {
-    closeMobileNav();
-    checkForUpdate({ manual: true });
+  $("version-button").addEventListener("click", openUpdateModal);
+  $("update-modal-refresh").addEventListener("click", checkForUpdate);
+  $("update-modal-action").addEventListener("click", startUpdate);
+  $("update-modal-close").addEventListener("click", closeUpdateModal);
+  $("update-modal").addEventListener("close", () => {
+    $("version-button").setAttribute("aria-expanded", "false");
   });
   $("connection").addEventListener("click", () => toggleStatusPanel());
   $("status-panel-close").addEventListener("click", () => toggleStatusPanel(false));
@@ -2805,6 +2873,7 @@
     }
     renderBreadcrumbs();
     load(initial);
+    initLocalVersion();
     // This is intentionally fire-and-forget: the first directory render must
     // not wait for a GitHub mirror or make the app feel blocked on startup.
     checkForUpdate();
