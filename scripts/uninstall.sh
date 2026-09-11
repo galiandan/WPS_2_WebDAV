@@ -3,13 +3,26 @@ set -Eeuo pipefail
 
 # Remove the Native and Docker installations created by this project.
 # This command always removes local configuration and credentials.
-APP_DIR="/opt/wps-adapter"
-ETC_DIR="/etc/wps-adapter"
-SECRET_DIR="$ETC_DIR/secrets"
-ENV_FILE="$ETC_DIR/wps-adapter.env"
-HARDENING_ENV_FILE="$ETC_DIR/wps-adapter-hardening.env"
-PID_FILE="$ETC_DIR/wps-adapter.pid"
-LOG_FILE="$ETC_DIR/wps-adapter.log"
+DEFAULT_APP_DIR="/opt/wps-adapter"
+LEGACY_CONFIG_DIR="/etc/wps-adapter"
+CURRENT_DIR="$(pwd -P 2>/dev/null || true)"
+case "$CURRENT_DIR" in
+    ""|/|/root|/home|/home/*|/tmp|/var/tmp|/opt|/usr|/var|/etc)
+        APP_DIR="${WPS_ADAPTER_DIR:-$DEFAULT_APP_DIR}"
+        ;;
+    *)
+        APP_DIR="${WPS_ADAPTER_DIR:-$CURRENT_DIR}"
+        ;;
+esac
+CONFIG_DIR="$APP_DIR/config"
+SECRET_DIR="$CONFIG_DIR/secrets"
+RUNTIME_DIR="$APP_DIR/runtime"
+ENV_FILE="$CONFIG_DIR/wps-adapter.env"
+HARDENING_ENV_FILE="$CONFIG_DIR/wps-adapter-hardening.env"
+PID_FILE="$APP_DIR/data/wps-adapter.pid"
+LOG_FILE="$APP_DIR/logs/wps-adapter.log"
+LEGACY_PID_FILE="$LEGACY_CONFIG_DIR/wps-adapter.pid"
+LEGACY_LOG_FILE="$LEGACY_CONFIG_DIR/wps-adapter.log"
 SERVICE_FILE="/etc/systemd/system/wps-adapter.service"
 OVERRIDE_DIR="/etc/systemd/system/wps-adapter.service.d"
 OVERRIDE_FILE="$OVERRIDE_DIR/override.conf"
@@ -132,22 +145,31 @@ validate_unit() {
         && ! grep -Fqx 'Description=WPS enterprise cloud drive WebDAV adapter' "$SERVICE_FILE"; then
         die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     fi
-    grep -Fqx 'WorkingDirectory=/opt/wps-adapter' "$SERVICE_FILE" \
+    grep -Fqx "WorkingDirectory=$APP_DIR" "$SERVICE_FILE" \
+        || grep -Fqx 'WorkingDirectory=/opt/wps-adapter' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
-    grep -Fxq 'ExecStart=/opt/wps-adapter/wps-adapter serve' "$SERVICE_FILE" \
+    grep -Fxq "ExecStart=$APP_DIR/runtime/wps-adapter serve" "$SERVICE_FILE" \
+        || grep -Fxq 'ExecStart=/opt/wps-adapter/wps-adapter serve' "$SERVICE_FILE" \
+        || grep -Fxq 'ExecStart=/opt/wps-adapter/runtime/wps-adapter serve' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
-    grep -Fqx 'EnvironmentFile=-/etc/wps-adapter/wps-adapter.env' "$SERVICE_FILE" \
+    grep -Fqx "EnvironmentFile=-$ENV_FILE" "$SERVICE_FILE" \
+        || grep -Fqx 'EnvironmentFile=-/etc/wps-adapter/wps-adapter.env' "$SERVICE_FILE" \
+        || grep -Fqx 'EnvironmentFile=-/opt/wps-adapter/config/wps-adapter.env' "$SERVICE_FILE" \
         || die "systemd 服务文件不是本项目的，未执行卸载：$SERVICE_FILE"
     UNIT_MANAGED=1
 }
 
 validate_targets() {
     require_directory_target "$APP_DIR" "应用目录"
-    require_directory_target "$ETC_DIR" "配置目录"
+    require_directory_target "$CONFIG_DIR" "应用配置目录"
     require_directory_target "$SECRET_DIR" "凭据目录"
+    require_directory_target "$LEGACY_CONFIG_DIR" "旧版配置目录"
+    require_directory_target "$LEGACY_CONFIG_DIR/secrets" "旧版凭据目录"
     require_directory_target "$OVERRIDE_DIR" "systemd drop-in 目录"
     for path in \
         "$ENV_FILE" "$HARDENING_ENV_FILE" "$PID_FILE" "$LOG_FILE" \
+        "$LEGACY_CONFIG_DIR/wps-adapter.env" "$LEGACY_CONFIG_DIR/wps-adapter-hardening.env" \
+        "$LEGACY_PID_FILE" "$LEGACY_LOG_FILE" \
         "$OVERRIDE_FILE"; do
         require_regular_target "$path" "安装文件"
     done
@@ -155,7 +177,9 @@ validate_targets() {
         validate_unit
     fi
     if [[ -f "$OVERRIDE_FILE" ]]; then
-        grep -Fqx 'EnvironmentFile=-/etc/wps-adapter/wps-adapter-hardening.env' "$OVERRIDE_FILE" \
+        grep -Fqx "EnvironmentFile=-$HARDENING_ENV_FILE" "$OVERRIDE_FILE" \
+            || grep -Fqx 'EnvironmentFile=-/etc/wps-adapter/wps-adapter-hardening.env' "$OVERRIDE_FILE" \
+            || grep -Fqx 'EnvironmentFile=-/opt/wps-adapter/config/wps-adapter-hardening.env' "$OVERRIDE_FILE" \
             || die "systemd drop-in 不是本项目的，未执行卸载：$OVERRIDE_FILE"
     fi
     if [[ -L "$WANTS_LINK" ]]; then
@@ -206,9 +230,11 @@ confirm() {
 }
 
 stop_portable_process() {
-    [[ -f "$PID_FILE" ]] || return 0
+    local pid_file="$PID_FILE"
+    [[ -f "$pid_file" ]] || pid_file="$LEGACY_PID_FILE"
+    [[ -f "$pid_file" ]] || return 0
     local pid=""
-    IFS= read -r pid <"$PID_FILE" || true
+    IFS= read -r pid <"$pid_file" || true
     if [[ -n "$pid" ]] && pid_is_adapter "$pid"; then
         kill "$pid" || true
         for _ in {1..20}; do
@@ -217,9 +243,9 @@ stop_portable_process() {
         done
         pid_is_adapter "$pid" && kill -KILL "$pid" || true
     elif [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-        die "PID 文件指向的不是 WPS 适配器进程，未执行删除：$PID_FILE"
+        die "PID 文件指向的不是 WPS 适配器进程，未执行删除：$pid_file"
     fi
-    rm -f -- "$PID_FILE"
+    rm -f -- "$pid_file"
 }
 
 stop_services() {
@@ -246,13 +272,13 @@ remove_service_and_app() {
         rm -f -- "$OVERRIDE_FILE"
     fi
     rmdir -- "$OVERRIDE_DIR" >/dev/null 2>&1 || true
-    if [[ -f "$HARDENING_ENV_FILE" ]]; then
-        rm -f -- "$HARDENING_ENV_FILE"
-    fi
-    if [[ -d "$APP_DIR" ]]; then
+    rm -rf -- "$RUNTIME_DIR" "$CONFIG_DIR" "$APP_DIR/data" "$APP_DIR/logs"
+    if [[ "$APP_DIR" == "$DEFAULT_APP_DIR" ]]; then
         rm -rf -- "$APP_DIR"
+    else
+        rmdir -- "$APP_DIR" >/dev/null 2>&1 || true
     fi
-    rm -f -- "$LOG_FILE"
+    rm -f -- "$LOG_FILE" "$LEGACY_LOG_FILE"
     if (( SYSTEMD_RUNNING )); then
         systemctl daemon-reload
     fi
@@ -277,10 +303,26 @@ remove_image() {
 }
 
 remove_configuration() {
-    if [[ -d "$ETC_DIR" ]]; then
-        rm -rf -- "$ETC_DIR"
+    if [[ -d "$LEGACY_CONFIG_DIR" ]]; then
+        rm -rf -- "$LEGACY_CONFIG_DIR"
     fi
 }
+
+# A Native install records its deployment directory in WorkingDirectory. Use
+# that value when uninstall is launched from another directory.
+if [[ -f "$SERVICE_FILE" ]]; then
+    DETECTED_APP_DIR="$(sed -n 's/^WorkingDirectory=//p' "$SERVICE_FILE" | head -n 1 || true)"
+    if [[ "$DETECTED_APP_DIR" == /* && "$DETECTED_APP_DIR" != "/" ]]; then
+        APP_DIR="$DETECTED_APP_DIR"
+        CONFIG_DIR="$APP_DIR/config"
+        SECRET_DIR="$CONFIG_DIR/secrets"
+        RUNTIME_DIR="$APP_DIR/runtime"
+        ENV_FILE="$CONFIG_DIR/wps-adapter.env"
+        HARDENING_ENV_FILE="$CONFIG_DIR/wps-adapter-hardening.env"
+        PID_FILE="$APP_DIR/data/wps-adapter.pid"
+        LOG_FILE="$APP_DIR/logs/wps-adapter.log"
+    fi
+fi
 
 progress_step "检查卸载目标和运行状态"
 validate_targets

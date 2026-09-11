@@ -46,7 +46,9 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装完成后会打印实际端口、网页地址和 WebDAV 地址。服务默认使用执行 sudo 的当前用户运行，不会强制创建名为 wps-adapter 的 Linux 用户。
 
-预编译 Release 默认使用 `v1.0.2`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+安装器会把配置、凭据、断点数据、日志和运行文件集中在部署目录：如果执行安装命令时当前目录是 `/`、`/root`、`/home` 或用户主目录，部署目录为 `/opt/wps-adapter`；在其他明确的工作目录执行时，部署目录就是当前目录。目录结构为 `config/`、`data/`、`logs/` 和 `runtime/`。systemd 注册单元仍位于系统规定的 `/etc/systemd/system/`。
+
+预编译 Release 默认使用 `v1.0.3`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
@@ -59,8 +61,8 @@ curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/
 电脑需要 Python 3.11+、Chrome 或 Chromium。脚本会询问：
 
 1. VPS 地址或域名。
-2. 连接方式：SSH 私钥、SSH 密码，或 HTTP/HTTPS 适配器接口。
-3. SSH 用户、端口、私钥路径，或适配器端口和 Basic Auth 信息。
+2. 连接方式：SSH 私钥或 SSH 密码。
+3. SSH 用户、端口、私钥路径（私钥方式）和 VPS 部署目录。
 
 随后脚本打开临时隔离的官方 WPS 登录窗口。只在这个官方窗口中完成登录、SSO、扫码、验证码或二次验证。登录完成后：
 
@@ -72,8 +74,6 @@ curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/
 WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。网页会把选中的空间显示为 `/A/`、`/B/` 等独立文件夹；WebDAV 只有一个根目录，例如 `/dav/` 映射到 `/A/web/`，不会把 B 暴露到 WebDAV。跳过目录时先映射所选 WebDAV 空间的根目录，网页选择器随后可以把 `/dav/` 切换到 A 或 B 中的任意文件夹。切换位置不会移动 WPS 文件，只会改变 `/dav/` 的映射。脚本不会显示 Cookie、CSRF、密码或签名 URL，也不需要手动填写空间 ID、群组 ID 或文件夹 ID。
 
 个人 WPS 网盘使用同样的空间选择和 WebDAV 映射流程。登录后脚本通过 WPS 账号状态接口选择对应接口，再使用个人端 `/api/v3/groups` 获取空间名称；目录、上传、下载、复制和文件登记使用个人端对应路径，移动和删除使用个人端 `/api/v3/groups/<group>/files/batch/move`、`batch/delete`。工作区文件会额外保存 `mode: personal`，服务重启后不会误切回另一套接口。当前个人接口主要依据 OpenList 的公开 WPS 驱动实现，首次接入本人账号时应先用测试目录完成读写验收。
-
-如果使用 HTTP 同步，脚本会要求明确确认风险，因为 HTTP 会明文传输凭据和文件内容。公网使用建议给适配器套 HTTPS 反向代理；没有域名和证书时，个人可信网络可以暂时使用 HTTP。
 
 ### 3. 打开网页或连接 WebDAV
 
@@ -97,29 +97,34 @@ http://<VPS地址>:54321/dav/
 - Passkey 使用浏览器原生 WebAuthn，可添加多个设备并单独删除。启用后登录页会出现“使用 Passkey 登录”。Passkey 通常要求 HTTPS；直接使用 IP 的 HTTP 页面可能被浏览器拒绝，这是浏览器安全策略。
 - 两种方式都是可选的，互不强制；Passkey 登录不会改变 WebDAV 客户端仍使用 Basic Auth 的事实。
 
-2FA 和 Passkey 的状态保存在 `/etc/wps-adapter/secrets/auth-settings.json`，服务重启后仍然有效。卸载脚本会连同该文件一起删除。不要复制、提交或公开这个文件。
+2FA 和 Passkey 的状态保存在 `/opt/wps-adapter/config/secrets/auth-settings.json`，服务重启后仍然有效。卸载脚本会连同该文件一起删除。不要复制、提交或公开这个文件。
 
 WebDAV 客户端仍使用安装时设置的 Basic Auth 用户名和密码，这是为了兼容 Windows、手机、NAS 和同步软件。自定义端口时，把地址中的 54321 换成实际端口。服务显示 WPS 未连接时，表示适配器进程正常但 WPS 凭据尚未同步、已过期或当前空间无权访问；重新运行 wps_login.py 即可。
 
-修改适配器账号时，直接替换 `/etc/wps-adapter/secrets/adapter-username` 和 `/etc/wps-adapter/secrets/adapter-password`，网页登录和 WebDAV 会同时使用新凭据，无需重启服务。
+修改适配器账号时，直接替换 `/opt/wps-adapter/config/secrets/adapter-username` 和 `/opt/wps-adapter/config/secrets/adapter-password`，网页登录和 WebDAV 会同时使用新凭据，无需重启服务。
 
 手工部署个人 WPS 时可设置 `WPS_MODE=personal`；正常使用登录助手时保持 `WPS_MODE=auto`，由助手写入的 `wps-workspace.json` 自动决定账号类型。
 
-## 登录助手的三种同步方式
+## 登录助手的 SSH 同步
 
-通常直接运行 python3 wps_login.py，按提示选择即可。也可以明确指定 HTTP/HTTPS：
+登录助手只允许通过 SSH 私钥或 SSH 密码把凭据写入 `/opt/wps-adapter/config/secrets/`。它不接受适配器 URL、HTTP、HTTPS 或本地输出目录参数，因此 Cookie、CSRF 和工作区数据不会经过 WebDAV/REST 端口传输。
 
-~~~bash
-python3 wps_login.py --adapter-url https://<VPS地址或域名> --adapter-port 54321 --adapter-user <Basic Auth用户名>
-~~~
-
-没有 HTTPS 时：
+直接运行即可按提示选择：
 
 ~~~bash
-python3 wps_login.py --adapter-url http://<VPS地址> --adapter-port 54321 --adapter-user <Basic Auth用户名> --allow-http
+python3 wps_login.py
 ~~~
 
-SSH 私钥和 SSH 密码方式会把凭据写入 /etc/wps-adapter/secrets/，HTTP/HTTPS 方式调用受 Basic Auth 保护的 session import 接口。同步成功后不需要重启服务。
+也可以直接使用 SSH 参数：
+
+~~~bash
+python3 wps_login.py \
+  --ssh-target <vps-user>@<vps-host> \
+  --ssh-identity ~/.ssh/id_ed25519 \
+  --remote-dir /opt/wps-adapter
+~~~
+
+密码登录时使用 `--ssh-password-auth`，SSH 会在传输凭据时安全地提示密码。同步成功后不需要重启服务。
 
 ## 服务状态和常用检查
 
@@ -147,7 +152,7 @@ curl -u <Basic Auth用户名> 'http://<VPS地址>:54321/api/v1/status'
 
 ## HTTP、HTTPS 和端口
 
-适配器支持 HTTP，适合没有域名和证书的个人环境；但 HTTP 会明文传输 Basic Auth、WPS 会话和文件内容，不适合直接暴露到公网。
+适配器仍支持 HTTP 和 HTTPS 作为网页、REST、WebDAV 的访问协议；HTTP 会明文传输 Basic Auth、WPS 会话和文件内容，不适合直接暴露到公网。登录助手不通过这两个协议同步凭据，只使用 SSH。
 
 有域名时，建议使用 Caddy、Nginx 或其他反向代理提供 HTTPS，并把请求转发到 http://127.0.0.1:<端口>。WebDAV 客户端使用：
 

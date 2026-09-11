@@ -30,7 +30,7 @@ const (
 	DefaultMaxConnections = 64
 	DefaultRequestTimeout = 60.0
 
-	DefaultWebSettingsFile = "/etc/wps-adapter/secrets/web-settings.json"
+	DefaultWebSettingsFile = "/opt/wps-adapter/config/secrets/web-settings.json"
 
 	kib int64 = 1024
 	mib int64 = 1024 * 1024

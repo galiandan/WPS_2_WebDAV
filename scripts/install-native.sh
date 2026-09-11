@@ -15,11 +15,29 @@ BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 # already provide a compatible Go compiler. The toolchain stays in the
 # installer's private temporary directory and is never installed system-wide.
 GO_VERSION="1.25.0"
-APP_DIR="/opt/wps-adapter"
-ETC_DIR="/etc/wps-adapter"
-SECRET_DIR="$ETC_DIR/secrets"
-RESUME_DIR="/var/lib/wps-adapter/uploads"
-ENV_FILE="$ETC_DIR/wps-adapter.env"
+DEFAULT_APP_DIR="/opt/wps-adapter"
+LEGACY_CONFIG_DIR="/etc/wps-adapter"
+LEGACY_SECRET_DIR="$LEGACY_CONFIG_DIR/secrets"
+LEGACY_ENV_FILE="$LEGACY_CONFIG_DIR/wps-adapter.env"
+CURRENT_DIR="$(pwd -P 2>/dev/null || true)"
+case "$CURRENT_DIR" in
+    ""|/|/root|/home|/home/*|/tmp|/var/tmp|/opt|/usr|/var|/etc)
+        APP_DIR="${WPS_ADAPTER_DIR:-$DEFAULT_APP_DIR}"
+        ;;
+    *)
+        APP_DIR="${WPS_ADAPTER_DIR:-$CURRENT_DIR}"
+        ;;
+esac
+CONFIG_DIR="$APP_DIR/config"
+SECRET_DIR="$CONFIG_DIR/secrets"
+DATA_DIR="$APP_DIR/data"
+RESUME_DIR="$DATA_DIR/uploads"
+ENV_FILE="$CONFIG_DIR/wps-adapter.env"
+RUNTIME_DIR="$APP_DIR/runtime"
+LOG_DIR="$APP_DIR/logs"
+HARDENING_ENV_FILE="$CONFIG_DIR/wps-adapter-hardening.env"
+ENV_SOURCE_FILE="$ENV_FILE"
+[[ -f "$ENV_SOURCE_FILE" ]] || ENV_SOURCE_FILE="$LEGACY_ENV_FILE"
 
 PORT_ARG=""
 BIND_ARG=""
@@ -33,8 +51,8 @@ CURRENT_STEP=0
 PACKAGE_MANAGER=""
 DOWNLOAD_CONNECT_TIMEOUT="${WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT:-10}"
 DOWNLOAD_MAX_TIME="${WPS_ADAPTER_DOWNLOAD_MAX_TIME:-300}"
-PID_FILE="/etc/wps-adapter/wps-adapter.pid"
-LOG_FILE="/etc/wps-adapter/wps-adapter.log"
+PID_FILE="$DATA_DIR/wps-adapter.pid"
+LOG_FILE="$LOG_DIR/wps-adapter.log"
 SERVICE_FILE="/etc/systemd/system/wps-adapter.service"
 OVERRIDE_FILE="/etc/systemd/system/wps-adapter.service.d/override.conf"
 OVERRIDE_DIR="/etc/systemd/system/wps-adapter.service.d"
@@ -47,6 +65,8 @@ die() {
     printf '安装失败：%s\n' "$*" >&2
     exit 1
 }
+
+[[ "$APP_DIR" == /* && "$APP_DIR" != "/" ]] || die "部署目录必须是非根目录的绝对路径"
 
 progress_step() {
     ((CURRENT_STEP += 1))
@@ -361,13 +381,13 @@ service_start() {
     chown "$RUN_USER:$RUN_GROUP" "$LOG_FILE"
     local launcher='set -a; . "$1"; set +a; exec "$2/wps-adapter" serve'
     if [[ "$(id -u)" == "$RUN_UID" ]]; then
-        nohup bash -c "$launcher" -- "$ENV_FILE" "$APP_DIR" \
+        nohup bash -c "$launcher" -- "$ENV_FILE" "$RUNTIME_DIR" \
             >>"$LOG_FILE" 2>&1 < /dev/null &
     elif has_command runuser; then
-        nohup runuser -u "$RUN_USER" -- bash -c "$launcher" -- "$ENV_FILE" "$APP_DIR" \
+        nohup runuser -u "$RUN_USER" -- bash -c "$launcher" -- "$ENV_FILE" "$RUNTIME_DIR" \
             >>"$LOG_FILE" 2>&1 < /dev/null &
     elif has_command su; then
-        nohup su -s /bin/sh "$RUN_USER" -c "$launcher" -- "$ENV_FILE" "$APP_DIR" \
+        nohup su -s /bin/sh "$RUN_USER" -c "$launcher" -- "$ENV_FILE" "$RUNTIME_DIR" \
             >>"$LOG_FILE" 2>&1 < /dev/null &
     else
         die "当前系统没有 systemd、runuser 或 su，无法以指定服务用户启动适配器"
@@ -406,6 +426,7 @@ usage() {
   --help              显示帮助
 
 环境变量：
+  WPS_ADAPTER_DIR                    自定义部署目录；未设置时按当前 pwd 选择
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
   WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.2
@@ -530,7 +551,8 @@ ask_secret() {
 
 read_env_value() {
     local key="$1"
-    [[ -f "$ENV_FILE" ]] || return 0
+    local source_file="$ENV_SOURCE_FILE"
+    [[ -f "$source_file" ]] || return 0
     awk -v key="$key" '
         $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
             value = $0
@@ -540,7 +562,7 @@ read_env_value() {
             print value
             exit
         }
-    ' "$ENV_FILE"
+    ' "$source_file"
 }
 
 set_env_value() {
@@ -618,11 +640,21 @@ validate_safe_value "WPS 群组 ID" "$GROUP_ID"
 ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"
 validate_safe_value "WPS 根目录 ID" "$ROOT_ID"
 
-WORKSPACE_FILE="${OLD_WORKSPACE_FILE:-$SECRET_DIR/wps-workspace.json}"
-COOKIE_FILE="${OLD_COOKIE_FILE:-$SECRET_DIR/wps-cookie}"
-CSRF_FILE="${OLD_CSRF_FILE:-$SECRET_DIR/wps-csrf}"
-USER_FILE="${OLD_USER_FILE:-$SECRET_DIR/adapter-username}"
-PASSWORD_FILE="${OLD_PASSWORD_FILE:-$SECRET_DIR/adapter-password}"
+SOURCE_WORKSPACE_FILE="${OLD_WORKSPACE_FILE:-$LEGACY_SECRET_DIR/wps-workspace.json}"
+SOURCE_COOKIE_FILE="${OLD_COOKIE_FILE:-$LEGACY_SECRET_DIR/wps-cookie}"
+SOURCE_CSRF_FILE="${OLD_CSRF_FILE:-$LEGACY_SECRET_DIR/wps-csrf}"
+SOURCE_USER_FILE="${OLD_USER_FILE:-$LEGACY_SECRET_DIR/adapter-username}"
+SOURCE_PASSWORD_FILE="${OLD_PASSWORD_FILE:-$LEGACY_SECRET_DIR/adapter-password}"
+WORKSPACE_FILE="$SECRET_DIR/wps-workspace.json"
+COOKIE_FILE="$SECRET_DIR/wps-cookie"
+CSRF_FILE="$SECRET_DIR/wps-csrf"
+USER_FILE="$SECRET_DIR/adapter-username"
+PASSWORD_FILE="$SECRET_DIR/adapter-password"
+[[ -e "$WORKSPACE_FILE" ]] && SOURCE_WORKSPACE_FILE="$WORKSPACE_FILE"
+[[ -e "$COOKIE_FILE" ]] && SOURCE_COOKIE_FILE="$COOKIE_FILE"
+[[ -e "$CSRF_FILE" ]] && SOURCE_CSRF_FILE="$CSRF_FILE"
+[[ -e "$USER_FILE" ]] && SOURCE_USER_FILE="$USER_FILE"
+[[ -e "$PASSWORD_FILE" ]] && SOURCE_PASSWORD_FILE="$PASSWORD_FILE"
 for secret_path in "$WORKSPACE_FILE" "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
     [[ "$secret_path" == /* ]] || die "secret 文件路径必须是绝对路径"
     [[ "$secret_path" == "$SECRET_DIR"/* ]] || die "secret 文件必须位于 $SECRET_DIR 目录内"
@@ -641,7 +673,7 @@ done
     && "$COOKIE_FILE" != "$PASSWORD_FILE" && "$CSRF_FILE" != "$USER_FILE" \
     && "$CSRF_FILE" != "$PASSWORD_FILE" && "$USER_FILE" != "$PASSWORD_FILE" ]] \
     || die "secret 文件路径不能重复"
-for protected_path in "$ETC_DIR" "$SECRET_DIR" "$ENV_FILE" "$APP_DIR"; do
+for protected_path in "$CONFIG_DIR" "$SECRET_DIR" "$ENV_FILE" "$APP_DIR" "$DATA_DIR" "$RUNTIME_DIR" "$LOG_DIR"; do
     if [[ -L "$protected_path" || ( -e "$protected_path" && ! -d "$protected_path" \
         && "$protected_path" != "$ENV_FILE" ) ]]; then
         die "安装目标类型不正确或是符号链接：$protected_path"
@@ -652,7 +684,7 @@ if [[ "$SERVICE_MODE" == "systemd" ]]; then
     PROTECTED_FILES+=(
         "/etc/systemd/system/wps-adapter.service"
         "/etc/systemd/system/wps-adapter.service.d/override.conf"
-        "$ETC_DIR/wps-adapter-hardening.env"
+        "$CONFIG_DIR/wps-adapter-hardening.env"
     )
 fi
 for protected_file in "${PROTECTED_FILES[@]}"; do
@@ -675,8 +707,8 @@ TMP_DIR="$(mktemp -d -p "$APP_PARENT" -t wps-adapter-install.XXXXXX)"
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
-mkdir -p /var/lib/wps-adapter/uploads
-chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
+mkdir -p "$RESUME_DIR"
+chown "$RUN_USER:$RUN_GROUP" "$RESUME_DIR"
 install -d -m 700 "$RESUME_DIR"
 archive_tree_is_safe() {
     local root="$1"
@@ -719,8 +751,8 @@ fi
 
 ENV_TARGET_FILE="$TMP_DIR/wps-adapter.env"
 progress_step "准备配置和保留现有凭据"
-if [[ -f "$ENV_FILE" ]]; then
-    cp -p "$ENV_FILE" "$ENV_TARGET_FILE"
+if [[ -f "$ENV_SOURCE_FILE" ]]; then
+    cp -p "$ENV_SOURCE_FILE" "$ENV_TARGET_FILE"
 elif (( USE_PREBUILT )); then
     : >"$ENV_TARGET_FILE"
 else
@@ -740,7 +772,7 @@ set_env_value ADAPTER_PORT "$PORT"
 chown "$RUN_USER:$RUN_GROUP" "$ENV_TARGET_FILE"
 chmod 600 "$ENV_TARGET_FILE"
 
-APP_STAGE_DIR="$TMP_DIR/app"
+APP_STAGE_DIR="$TMP_DIR/runtime"
 mkdir -p "$APP_STAGE_DIR"
 
 progress_step "准备预编译服务或现场构建"
@@ -784,9 +816,9 @@ Wants=network-online.target
 Type=simple
 User=$RUN_USER
 Group=$RUN_GROUP
-WorkingDirectory=/opt/wps-adapter
-EnvironmentFile=-/etc/wps-adapter/wps-adapter.env
-ExecStart=/opt/wps-adapter/wps-adapter serve
+WorkingDirectory=$APP_DIR
+EnvironmentFile=-$ENV_FILE
+ExecStart=$RUNTIME_DIR/wps-adapter serve
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -794,15 +826,15 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/etc/wps-adapter/secrets /var/lib/wps-adapter/uploads
+ReadWritePaths=$CONFIG_DIR $DATA_DIR
 
 [Install]
 WantedBy=multi-user.target
 EOF
         printf '%s\n' '[Service]' \
-            'EnvironmentFile=-/etc/wps-adapter/wps-adapter-hardening.env' \
+            "EnvironmentFile=-$HARDENING_ENV_FILE" \
             >"$TMP_DIR/wps-adapter-hardening.conf"
-        cat >"$HARDENING_ENV_STAGE" <<'EOF'
+        cat >"$HARDENING_ENV_STAGE" <<EOF
 # Deployment overrides for the low-memory VPS. No credentials belong here.
 WPS_ENABLE_RANGE=true
 WPS_AUTO_REFRESH=true
@@ -811,7 +843,7 @@ WPS_UPLOAD_MIN_FREE_BYTES=536870912
 WPS_MAX_UPLOAD_BYTES=1073741824
 WPS_UPLOAD_RETRIES=2
 WPS_UPLOAD_RETRY_DELAY=0.5
-WPS_UPLOAD_RESUME_DIR=/var/lib/wps-adapter/uploads
+WPS_UPLOAD_RESUME_DIR=$RESUME_DIR
 WPS_MAX_UPLOADS=2
 WPS_MAX_DOWNLOADS=4
 WPS_TRANSFER_WAIT_TIMEOUT=30
@@ -824,14 +856,25 @@ WPS_MAX_JSON_RESPONSE_BYTES=8388608
 WPS_MAX_RESPONSE_BODY_BYTES=16777216
 EOF
     else
-        awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" '
+        awk -v run_user="$RUN_USER" -v run_group="$RUN_GROUP" \
+            -v app_dir="$APP_DIR" -v env_file="$ENV_FILE" -v runtime_dir="$RUNTIME_DIR" \
+            -v config_dir="$CONFIG_DIR" -v data_dir="$DATA_DIR" '
             /^User=/ { print "User=" run_user; next }
             /^Group=/ { print "Group=" run_group; next }
-            /^ExecStart=/ { print "ExecStart=/opt/wps-adapter/wps-adapter serve"; next }
+            /^WorkingDirectory=/ { print "WorkingDirectory=" app_dir; next }
+            /^EnvironmentFile=/ && index($0, "wps-adapter.env") { print "EnvironmentFile=-" env_file; next }
+            /^ExecStart=/ { print "ExecStart=" runtime_dir "/wps-adapter serve"; next }
+            /^ReadWritePaths=/ { print "ReadWritePaths=" config_dir " " data_dir; next }
             { print }
         ' "$SOURCE_DIR/deploy/wps-adapter.service" >"$UNIT_FILE"
-        cp -p "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" "$TMP_DIR/wps-adapter-hardening.conf"
-        cp -p "$SOURCE_DIR/deploy/wps-adapter-hardening.env" "$HARDENING_ENV_STAGE"
+        sed \
+            -e "s#EnvironmentFile=-/etc/wps-adapter/wps-adapter-hardening.env#EnvironmentFile=-$HARDENING_ENV_FILE#" \
+            -e "s#EnvironmentFile=-/opt/wps-adapter/config/wps-adapter-hardening.env#EnvironmentFile=-$HARDENING_ENV_FILE#" \
+            "$SOURCE_DIR/deploy/wps-adapter-hardening.conf" >"$TMP_DIR/wps-adapter-hardening.conf"
+        sed \
+            -e "s#/var/lib/wps-adapter/uploads#$RESUME_DIR#g" \
+            -e "s#/opt/wps-adapter/data/uploads#$RESUME_DIR#g" \
+            "$SOURCE_DIR/deploy/wps-adapter-hardening.env" >"$HARDENING_ENV_STAGE"
     fi
 fi
 
@@ -849,12 +892,18 @@ stage_secret() {
         install -o root -g root -m 600 /dev/null "$staged_path"
     fi
 }
-stage_secret "$COOKIE_FILE" "$STAGED_COOKIE"
-stage_secret "$CSRF_FILE" "$STAGED_CSRF"
-stage_secret "$WORKSPACE_FILE" "$STAGED_WORKSPACE"
+stage_secret "$SOURCE_COOKIE_FILE" "$STAGED_COOKIE"
+stage_secret "$SOURCE_CSRF_FILE" "$STAGED_CSRF"
+stage_secret "$SOURCE_WORKSPACE_FILE" "$STAGED_WORKSPACE"
+for extra in web-settings.json auth-settings.json; do
+    source_extra="$SECRET_DIR/$extra"
+    [[ -f "$source_extra" ]] || source_extra="$LEGACY_SECRET_DIR/$extra"
+    [[ -f "$source_extra" ]] || continue
+    install -o root -g root -m 600 "$source_extra" "$TMP_DIR/$extra"
+done
 
-if [[ -s "$USER_FILE" ]]; then
-    stage_secret "$USER_FILE" "$STAGED_USER"
+if [[ -s "$SOURCE_USER_FILE" ]]; then
+    stage_secret "$SOURCE_USER_FILE" "$STAGED_USER"
 else
     ADAPTER_USER="$ADAPTER_USER_ARG"
     if [[ -z "$ADAPTER_USER" ]]; then
@@ -867,8 +916,8 @@ else
     chmod 600 "$STAGED_USER"
 fi
 
-if [[ -s "$PASSWORD_FILE" ]]; then
-    stage_secret "$PASSWORD_FILE" "$STAGED_PASSWORD"
+if [[ -s "$SOURCE_PASSWORD_FILE" ]]; then
+    stage_secret "$SOURCE_PASSWORD_FILE" "$STAGED_PASSWORD"
 else
     ask_secret "适配器 Basic Auth 密码"
     [[ -n "$REPLY" ]] || die "适配器密码不能为空"
@@ -880,7 +929,7 @@ fi
 SERVICE_FILE="/etc/systemd/system/wps-adapter.service"
 OVERRIDE_FILE="/etc/systemd/system/wps-adapter.service.d/override.conf"
 OVERRIDE_DIR="/etc/systemd/system/wps-adapter.service.d"
-HARDENING_ENV_FILE="$ETC_DIR/wps-adapter-hardening.env"
+HARDENING_ENV_FILE="$CONFIG_DIR/wps-adapter-hardening.env"
 SERVICE_WAS_ACTIVE=0
 SERVICE_WAS_ENABLED=0
 UNIT_WAS_PRESENT=0
@@ -909,7 +958,7 @@ restore_directory_state() {
         rmdir -- "$directory" >/dev/null 2>&1 || true
     fi
 }
-ETC_DIR_STATE="$(directory_state "$ETC_DIR")"
+ETC_DIR_STATE="$(directory_state "$CONFIG_DIR")"
 SECRET_DIR_STATE="$(directory_state "$SECRET_DIR")"
 OVERRIDE_DIR_STATE="$(directory_state "$OVERRIDE_DIR")"
 read -r ETC_DIR_WAS_PRESENT ETC_DIR_UID ETC_DIR_GID ETC_DIR_MODE <<<"$ETC_DIR_STATE"
@@ -918,7 +967,7 @@ read -r OVERRIDE_DIR_WAS_PRESENT OVERRIDE_DIR_UID OVERRIDE_DIR_GID OVERRIDE_DIR_
 if service_is_active; then SERVICE_WAS_ACTIVE=1; fi
 if service_is_enabled; then SERVICE_WAS_ENABLED=1; fi
 if [[ "$SERVICE_MODE" == "systemd" && -e "$SERVICE_FILE" ]]; then UNIT_WAS_PRESENT=1; fi
-[[ -e "$APP_DIR" ]] && APP_WAS_PRESENT=1
+[[ -e "$RUNTIME_DIR" ]] && APP_WAS_PRESENT=1
 [[ -e "$ENV_FILE" ]] && ENV_WAS_PRESENT=1
 [[ -e "$OVERRIDE_FILE" ]] && OVERRIDE_WAS_PRESENT=1
 [[ -e "$HARDENING_ENV_FILE" ]] && HARDENING_ENV_WAS_PRESENT=1
@@ -927,7 +976,7 @@ ENV_BACKUP="$TMP_DIR/env.before"
 UNIT_BACKUP="$TMP_DIR/unit.before"
 OVERRIDE_BACKUP="$TMP_DIR/override.before"
 HARDENING_ENV_BACKUP="$TMP_DIR/hardening.env.before"
-APP_BACKUP="$TMP_DIR/app.before"
+APP_BACKUP="$TMP_DIR/runtime.before"
 COOKIE_BACKUP="$TMP_DIR/cookie.before"
 CSRF_BACKUP="$TMP_DIR/csrf.before"
 USER_BACKUP="$TMP_DIR/user.before"
@@ -952,13 +1001,11 @@ rollback() {
     if (( status != 0 && COMMIT_STARTED )); then
         service_stop >/dev/null 2>&1 || true
         if (( APP_NEW_MOVED )); then
-            rm -rf -- "$APP_DIR" >/dev/null 2>&1 || true
+            rm -rf -- "$RUNTIME_DIR" >/dev/null 2>&1 || true
         fi
         if (( APP_OLD_MOVED )); then
-            rm -rf -- "$APP_DIR" >/dev/null 2>&1 || true
-            [[ -e "$APP_BACKUP" ]] && mv "$APP_BACKUP" "$APP_DIR" >/dev/null 2>&1 || true
-        elif (( APP_NEW_MOVED == 0 && APP_WAS_PRESENT == 0 )); then
-            rm -rf -- "$APP_DIR" >/dev/null 2>&1 || true
+            rm -rf -- "$RUNTIME_DIR" >/dev/null 2>&1 || true
+            [[ -e "$APP_BACKUP" ]] && mv "$APP_BACKUP" "$RUNTIME_DIR" >/dev/null 2>&1 || true
         fi
         if (( ENV_WAS_PRESENT )); then mv -f "$ENV_BACKUP" "$ENV_FILE" >/dev/null 2>&1 || true; else rm -f -- "$ENV_FILE" >/dev/null 2>&1 || true; fi
         if [[ "$SERVICE_MODE" == "systemd" ]]; then
@@ -977,7 +1024,7 @@ rollback() {
         done
         restore_directory_state "$OVERRIDE_DIR" "$OVERRIDE_DIR_WAS_PRESENT" "$OVERRIDE_DIR_UID" "$OVERRIDE_DIR_GID" "$OVERRIDE_DIR_MODE"
         restore_directory_state "$SECRET_DIR" "$SECRET_DIR_WAS_PRESENT" "$SECRET_DIR_UID" "$SECRET_DIR_GID" "$SECRET_DIR_MODE"
-        restore_directory_state "$ETC_DIR" "$ETC_DIR_WAS_PRESENT" "$ETC_DIR_UID" "$ETC_DIR_GID" "$ETC_DIR_MODE"
+        restore_directory_state "$CONFIG_DIR" "$ETC_DIR_WAS_PRESENT" "$ETC_DIR_UID" "$ETC_DIR_GID" "$ETC_DIR_MODE"
         service_reload >/dev/null 2>&1 || true
         if (( SERVICE_WAS_ACTIVE )); then service_start >/dev/null 2>&1 || true; fi
         if (( SERVICE_WAS_ENABLED )); then service_enable >/dev/null 2>&1 || true; else service_disable >/dev/null 2>&1 || true; fi
@@ -990,13 +1037,16 @@ trap rollback EXIT
 COMMIT_STARTED=1
 progress_step "切换应用文件和服务配置"
 if (( SERVICE_WAS_ACTIVE )); then service_stop; fi
-install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$ETC_DIR" "$SECRET_DIR"
 install -d -m 755 "$(dirname "$APP_DIR")"
 if [[ "$SERVICE_MODE" == "systemd" ]]; then
     install -d -m 755 "$OVERRIDE_DIR"
 fi
-if (( APP_WAS_PRESENT )); then mv "$APP_DIR" "$APP_BACKUP"; APP_OLD_MOVED=1; fi
-mv "$APP_STAGE_DIR" "$APP_DIR"
+if (( APP_WAS_PRESENT )); then
+    mv "$RUNTIME_DIR" "$APP_BACKUP"
+    APP_OLD_MOVED=1
+fi
+install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$APP_DIR" "$CONFIG_DIR" "$SECRET_DIR" "$DATA_DIR" "$LOG_DIR"
+mv "$APP_STAGE_DIR" "$RUNTIME_DIR"
 APP_NEW_MOVED=1
 for pair in \
     "$STAGED_WORKSPACE:$WORKSPACE_FILE" \
@@ -1005,6 +1055,11 @@ for pair in \
     staged="${pair%%:*}"
     target="${pair#*:}"
     install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$staged" "$target"
+done
+for extra in web-settings.json auth-settings.json; do
+    staged="$TMP_DIR/$extra"
+    [[ -f "$staged" ]] || continue
+    install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$staged" "$SECRET_DIR/$extra"
 done
 install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$ENV_TARGET_FILE" "${ENV_FILE}.new"
 mv -f "${ENV_FILE}.new" "$ENV_FILE"
@@ -1036,8 +1091,13 @@ health_check "http://127.0.0.1:$PORT/healthz" \
         die "服务已启动但健康检查失败，请查看 $LOG_FILE"
     }
 
+if [[ -d "$LEGACY_CONFIG_DIR" && ! -L "$LEGACY_CONFIG_DIR" ]]; then
+    rm -rf -- "$LEGACY_CONFIG_DIR"
+fi
+
 printf '\n原生部署完成。\n'
 printf '监听端口：%s\n' "$PORT"
+printf '部署目录：%s\n' "$APP_DIR"
 printf 'WebDAV： http://<VPS地址>:%s/dav/\n' "$PORT"
 printf '网页：   http://<VPS地址>:%s/\n' "$PORT"
 printf '运行用户：%s\n' "$RUN_USER"

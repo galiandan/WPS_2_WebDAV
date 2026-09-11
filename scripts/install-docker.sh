@@ -8,11 +8,27 @@ REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-a9d128cbec084e095b8eddce02f82ec24473d0ae}"
 BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.2}"
 BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
-APP_DIR="/opt/wps-adapter"
-ETC_DIR="/etc/wps-adapter"
-SECRET_DIR="$ETC_DIR/secrets"
-RESUME_DIR="/var/lib/wps-adapter/uploads"
-ENV_FILE="$ETC_DIR/wps-adapter.env"
+DEFAULT_APP_DIR="/opt/wps-adapter"
+LEGACY_CONFIG_DIR="/etc/wps-adapter"
+LEGACY_SECRET_DIR="$LEGACY_CONFIG_DIR/secrets"
+LEGACY_ENV_FILE="$LEGACY_CONFIG_DIR/wps-adapter.env"
+CURRENT_DIR="$(pwd -P 2>/dev/null || true)"
+case "$CURRENT_DIR" in
+    ""|/|/root|/home|/home/*|/tmp|/var/tmp|/opt|/usr|/var|/etc)
+        APP_DIR="${WPS_ADAPTER_DIR:-$DEFAULT_APP_DIR}"
+        ;;
+    *)
+        APP_DIR="${WPS_ADAPTER_DIR:-$CURRENT_DIR}"
+        ;;
+esac
+CONFIG_DIR="$APP_DIR/config"
+SECRET_DIR="$CONFIG_DIR/secrets"
+DATA_DIR="$APP_DIR/data"
+RESUME_DIR="$DATA_DIR/uploads"
+ENV_FILE="$CONFIG_DIR/wps-adapter.env"
+RUNTIME_DIR="$APP_DIR/runtime"
+ENV_SOURCE_FILE="$ENV_FILE"
+[[ -f "$ENV_SOURCE_FILE" ]] || ENV_SOURCE_FILE="$LEGACY_ENV_FILE"
 IMAGE_NAME="wps-enterprise-adapter:latest"
 CONTAINER_NAME="wps-adapter"
 
@@ -41,6 +57,8 @@ die() {
     printf '安装失败：%s\n' "$*" >&2
     exit 1
 }
+
+[[ "$APP_DIR" == /* && "$APP_DIR" != "/" ]] || die "部署目录必须是非根目录的绝对路径"
 
 progress_step() {
     ((CURRENT_STEP += 1))
@@ -417,6 +435,7 @@ usage() {
   --help              显示帮助
 
 环境变量：
+  WPS_ADAPTER_DIR                    自定义部署目录；未设置时按当前 pwd 选择
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
   WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.2
@@ -544,7 +563,8 @@ ask_secret() {
 
 read_env_value() {
     local key="$1"
-    [[ -f "$ENV_FILE" ]] || return 0
+    local source_file="$ENV_SOURCE_FILE"
+    [[ -f "$source_file" ]] || return 0
     awk -v key="$key" '
         $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
             value = $0
@@ -554,7 +574,7 @@ read_env_value() {
             print value
             exit
         }
-    ' "$ENV_FILE"
+    ' "$source_file"
 }
 
 set_env_value() {
@@ -632,11 +652,21 @@ validate_safe_value "WPS 群组 ID" "$GROUP_ID"
 ROOT_ID="${ROOT_ID_ARG:-${OLD_ROOT_ID:-auto}}"
 validate_safe_value "WPS 根目录 ID" "$ROOT_ID"
 
-WORKSPACE_FILE="${OLD_WORKSPACE_FILE:-$SECRET_DIR/wps-workspace.json}"
-COOKIE_FILE="${OLD_COOKIE_FILE:-$SECRET_DIR/wps-cookie}"
-CSRF_FILE="${OLD_CSRF_FILE:-$SECRET_DIR/wps-csrf}"
-USER_FILE="${OLD_USER_FILE:-$SECRET_DIR/adapter-username}"
-PASSWORD_FILE="${OLD_PASSWORD_FILE:-$SECRET_DIR/adapter-password}"
+SOURCE_WORKSPACE_FILE="${OLD_WORKSPACE_FILE:-$LEGACY_SECRET_DIR/wps-workspace.json}"
+SOURCE_COOKIE_FILE="${OLD_COOKIE_FILE:-$LEGACY_SECRET_DIR/wps-cookie}"
+SOURCE_CSRF_FILE="${OLD_CSRF_FILE:-$LEGACY_SECRET_DIR/wps-csrf}"
+SOURCE_USER_FILE="${OLD_USER_FILE:-$LEGACY_SECRET_DIR/adapter-username}"
+SOURCE_PASSWORD_FILE="${OLD_PASSWORD_FILE:-$LEGACY_SECRET_DIR/adapter-password}"
+WORKSPACE_FILE="$SECRET_DIR/wps-workspace.json"
+COOKIE_FILE="$SECRET_DIR/wps-cookie"
+CSRF_FILE="$SECRET_DIR/wps-csrf"
+USER_FILE="$SECRET_DIR/adapter-username"
+PASSWORD_FILE="$SECRET_DIR/adapter-password"
+[[ -e "$WORKSPACE_FILE" ]] && SOURCE_WORKSPACE_FILE="$WORKSPACE_FILE"
+[[ -e "$COOKIE_FILE" ]] && SOURCE_COOKIE_FILE="$COOKIE_FILE"
+[[ -e "$CSRF_FILE" ]] && SOURCE_CSRF_FILE="$CSRF_FILE"
+[[ -e "$USER_FILE" ]] && SOURCE_USER_FILE="$USER_FILE"
+[[ -e "$PASSWORD_FILE" ]] && SOURCE_PASSWORD_FILE="$PASSWORD_FILE"
 for secret_path in "$WORKSPACE_FILE" "$COOKIE_FILE" "$CSRF_FILE" "$USER_FILE" "$PASSWORD_FILE"; do
     [[ "$secret_path" == /* ]] || die "secret 文件路径必须是绝对路径"
     [[ "$secret_path" == "$SECRET_DIR"/* ]] || die "secret 文件必须位于 $SECRET_DIR 目录内"
@@ -654,7 +684,7 @@ done
     && "$COOKIE_FILE" != "$PASSWORD_FILE" && "$CSRF_FILE" != "$USER_FILE" \
     && "$CSRF_FILE" != "$PASSWORD_FILE" && "$USER_FILE" != "$PASSWORD_FILE" ]] \
     || die "secret 文件路径不能重复"
-for protected_path in "$ETC_DIR" "$SECRET_DIR" "$ENV_FILE" "$APP_DIR"; do
+for protected_path in "$CONFIG_DIR" "$SECRET_DIR" "$ENV_FILE" "$APP_DIR" "$DATA_DIR" "$RUNTIME_DIR"; do
     if [[ -L "$protected_path" || ( -e "$protected_path" && ! -d "$protected_path" \
         && "$protected_path" != "$ENV_FILE" ) ]]; then
         die "安装目标类型不正确或是符号链接：$protected_path"
@@ -717,7 +747,7 @@ restore_directory_state() {
         rmdir -- "$directory" >/dev/null 2>&1 || true
     fi
 }
-ETC_DIR_STATE="$(directory_state "$ETC_DIR")"
+ETC_DIR_STATE="$(directory_state "$CONFIG_DIR")"
 SECRET_DIR_STATE="$(directory_state "$SECRET_DIR")"
 read -r ETC_DIR_WAS_PRESENT ETC_DIR_UID ETC_DIR_GID ETC_DIR_MODE <<<"$ETC_DIR_STATE"
 read -r SECRET_DIR_WAS_PRESENT SECRET_DIR_UID SECRET_DIR_GID SECRET_DIR_MODE <<<"$SECRET_DIR_STATE"
@@ -759,12 +789,12 @@ rollback() {
             rm -f -- "$ENV_FILE" >/dev/null 2>&1 || true
         fi
         restore_directory_state "$SECRET_DIR" "$SECRET_DIR_WAS_PRESENT" "$SECRET_DIR_UID" "$SECRET_DIR_GID" "$SECRET_DIR_MODE"
-        restore_directory_state "$ETC_DIR" "$ETC_DIR_WAS_PRESENT" "$ETC_DIR_UID" "$ETC_DIR_GID" "$ETC_DIR_MODE"
+        restore_directory_state "$CONFIG_DIR" "$ETC_DIR_WAS_PRESENT" "$ETC_DIR_UID" "$ETC_DIR_GID" "$ETC_DIR_MODE"
         if [[ -n "$APP_BACKUP" && ( -e "$APP_BACKUP" || -L "$APP_BACKUP" ) ]]; then
-            rm -rf -- "$APP_DIR" >/dev/null 2>&1 || true
-            mv "$APP_BACKUP" "$APP_DIR" >/dev/null 2>&1 || true
+            rm -rf -- "$RUNTIME_DIR" >/dev/null 2>&1 || true
+            mv "$APP_BACKUP" "$RUNTIME_DIR" >/dev/null 2>&1 || true
         elif (( APP_NEW_MOVED )); then
-            rm -rf -- "$APP_DIR" >/dev/null 2>&1 || true
+            rm -rf -- "$RUNTIME_DIR" >/dev/null 2>&1 || true
         fi
         if (( NATIVE_STOPPED )); then
             systemctl start wps-adapter.service >/dev/null 2>&1 || true
@@ -787,8 +817,8 @@ trap rollback EXIT
 
 ARCHIVE="$TMP_DIR/source.tar.gz"
 SOURCE_DIR="$TMP_DIR/source"
-mkdir -p /var/lib/wps-adapter/uploads
-chown "$RUN_USER:$RUN_GROUP" /var/lib/wps-adapter/uploads
+mkdir -p "$RESUME_DIR"
+chown "$RUN_USER:$RUN_GROUP" "$RESUME_DIR"
 install -d -m 700 "$RESUME_DIR"
 archive_tree_is_safe() {
     local root="$1"
@@ -832,11 +862,11 @@ if host_uses_systemd && systemctl is-active --quiet wps-adapter.service; then
 fi
 
 progress_step "准备配置和保留现有凭据"
-if [[ -f "$ENV_FILE" ]]; then
+if [[ -f "$ENV_SOURCE_FILE" ]]; then
     ENV_WAS_PRESENT=1
     ENV_BACKUP="$TMP_DIR/wps-adapter.env.before"
-    cp -p "$ENV_FILE" "$ENV_BACKUP"
-    cp -p "$ENV_FILE" "$TMP_DIR/wps-adapter.env"
+    cp -p "$ENV_SOURCE_FILE" "$ENV_BACKUP"
+    cp -p "$ENV_SOURCE_FILE" "$TMP_DIR/wps-adapter.env"
 elif (( USE_PREBUILT )); then
     : >"$TMP_DIR/wps-adapter.env"
 else
@@ -857,7 +887,7 @@ set_env_value ADAPTER_PORT "$PORT"
 chown "$RUN_USER:$RUN_GROUP" "$ENV_TARGET_FILE"
 chmod 600 "$ENV_TARGET_FILE"
 
-APP_STAGE_DIR="$TMP_DIR/app"
+APP_STAGE_DIR="$TMP_DIR/runtime"
 mkdir -p "$APP_STAGE_DIR"
 
 progress_step "构建 Docker 镜像（构建输出会持续显示）"
@@ -937,11 +967,17 @@ stage_secret() {
         install -o root -g root -m 600 /dev/null "$staged_path"
     fi
 }
-stage_secret "$COOKIE_FILE" "$STAGED_COOKIE"
-stage_secret "$CSRF_FILE" "$STAGED_CSRF"
-stage_secret "$WORKSPACE_FILE" "$STAGED_WORKSPACE"
-if [[ -s "$USER_FILE" ]]; then
-    stage_secret "$USER_FILE" "$STAGED_USER"
+stage_secret "$SOURCE_COOKIE_FILE" "$STAGED_COOKIE"
+stage_secret "$SOURCE_CSRF_FILE" "$STAGED_CSRF"
+stage_secret "$SOURCE_WORKSPACE_FILE" "$STAGED_WORKSPACE"
+for extra in web-settings.json auth-settings.json; do
+    source_extra="$SECRET_DIR/$extra"
+    [[ -f "$source_extra" ]] || source_extra="$LEGACY_SECRET_DIR/$extra"
+    [[ -f "$source_extra" ]] || continue
+    install -o root -g root -m 600 "$source_extra" "$TMP_DIR/$extra"
+done
+if [[ -s "$SOURCE_USER_FILE" ]]; then
+    stage_secret "$SOURCE_USER_FILE" "$STAGED_USER"
 else
     ADAPTER_USER="$ADAPTER_USER_ARG"
     if [[ -z "$ADAPTER_USER" ]]; then
@@ -953,8 +989,8 @@ else
     printf '%s\n' "$ADAPTER_USER" >"$STAGED_USER"
     chmod 600 "$STAGED_USER"
 fi
-if [[ -s "$PASSWORD_FILE" ]]; then
-    stage_secret "$PASSWORD_FILE" "$STAGED_PASSWORD"
+if [[ -s "$SOURCE_PASSWORD_FILE" ]]; then
+    stage_secret "$SOURCE_PASSWORD_FILE" "$STAGED_PASSWORD"
 else
     ask_secret "适配器 Basic Auth 密码"
     [[ -n "$REPLY" ]] || die "适配器密码不能为空"
@@ -998,8 +1034,14 @@ fi
 
 SECRET_MUTATION_STARTED=1
 progress_step "切换凭据、配置和容器"
-install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$ETC_DIR" "$SECRET_DIR"
+if [[ -d "$RUNTIME_DIR" || -L "$RUNTIME_DIR" ]]; then
+    APP_BACKUP="$TMP_DIR/runtime.before"
+    mv "$RUNTIME_DIR" "$APP_BACKUP"
+    APP_OLD_MOVED=1
+fi
 install -d -m 755 "$(dirname "$APP_DIR")"
+install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$CONFIG_DIR" "$SECRET_DIR"
+install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 700 "$DATA_DIR"
 for pair in \
     "$STAGED_WORKSPACE:$WORKSPACE_FILE" \
     "$STAGED_COOKIE:$COOKIE_FILE" "$STAGED_CSRF:$CSRF_FILE" \
@@ -1007,6 +1049,11 @@ for pair in \
     staged="${pair%%:*}"
     target="${pair#*:}"
     install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$staged" "$target"
+done
+for extra in web-settings.json auth-settings.json; do
+    staged="$TMP_DIR/$extra"
+    [[ -f "$staged" ]] || continue
+    install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$staged" "$SECRET_DIR/$extra"
 done
 if [[ -f "$ENV_FILE" ]]; then
     install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$ENV_TARGET_FILE" "${ENV_FILE}.new"
@@ -1029,10 +1076,10 @@ docker run --detach \
     --security-opt no-new-privileges:true \
     --env-file "$ENV_FILE" \
     --env ADAPTER_BIND=0.0.0.0 \
-    --volume "$SECRET_DIR:/etc/wps-adapter/secrets:rw" \
-    --volume "$RESUME_DIR:/var/lib/wps-adapter/uploads:rw" \
-    --volume "$USER_FILE:/etc/wps-adapter/secrets/$USER_BASENAME:ro" \
-    --volume "$PASSWORD_FILE:/etc/wps-adapter/secrets/$PASSWORD_BASENAME:ro" \
+    --volume "$SECRET_DIR:$SECRET_DIR:rw" \
+    --volume "$RESUME_DIR:$RESUME_DIR:rw" \
+    --volume "$USER_FILE:$SECRET_DIR/$USER_BASENAME:ro" \
+    --volume "$PASSWORD_FILE:$SECRET_DIR/$PASSWORD_BASENAME:ro" \
     --publish "$BIND:$PORT:$PORT" \
     "$IMAGE_NAME" >/dev/null
 progress_step "执行容器健康检查"
@@ -1042,15 +1089,9 @@ docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" | grep -qx true \
 health_check "http://127.0.0.1:$PORT/healthz" \
     || die "容器已启动但健康检查失败，请查看 docker logs $CONTAINER_NAME"
 
-if [[ -d "$APP_DIR" || -L "$APP_DIR" ]]; then
-    APP_BACKUP="${APP_DIR}.before-docker.$(date +%s)"
-    [[ ! -e "$APP_BACKUP" ]] || die "应用备份目录已存在：$APP_BACKUP"
-    mv "$APP_DIR" "$APP_BACKUP"
-    APP_OLD_MOVED=1
-fi
-mv "$APP_STAGE_DIR" "$APP_DIR"
+mv "$APP_STAGE_DIR" "$RUNTIME_DIR"
 APP_NEW_MOVED=1
-chown -R "$RUN_USER:$RUN_GROUP" "$APP_DIR"
+chown -R "$RUN_USER:$RUN_GROUP" "$RUNTIME_DIR"
 
 if (( NATIVE_WAS_ACTIVE && NATIVE_SYSTEMD )); then
     systemctl disable wps-adapter.service
@@ -1059,11 +1100,18 @@ fi
 if [[ -n "$OLD_CONTAINER_NAME" ]]; then
     docker rm -f "$OLD_CONTAINER_NAME" >/dev/null
 fi
+if [[ -n "$APP_BACKUP" && ( -e "$APP_BACKUP" || -L "$APP_BACKUP" ) ]]; then
+    rm -rf -- "$APP_BACKUP"
+fi
+if [[ -d "$LEGACY_CONFIG_DIR" && ! -L "$LEGACY_CONFIG_DIR" ]]; then
+    rm -rf -- "$LEGACY_CONFIG_DIR"
+fi
 ENV_BACKUP=""
 APP_BACKUP=""
 
 printf '\nDocker 部署完成。\n'
 printf '监听端口：%s\n' "$PORT"
+printf '部署目录：%s\n' "$APP_DIR"
 printf 'WebDAV： http://<VPS地址>:%s/dav/\n' "$PORT"
 printf '网页：   http://<VPS地址>:%s/\n' "$PORT"
 printf '容器：   %s\n' "$CONTAINER_NAME"

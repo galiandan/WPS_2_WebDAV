@@ -35,7 +35,7 @@ const MaxSpaces = 128
 const MaxFileBytes = 16 * 1024
 
 // DefaultFile mirrors DEFAULT_WORKSPACE_FILE.
-const DefaultFile = "/etc/wps-adapter/secrets/wps-workspace.json"
+const DefaultFile = "/opt/wps-adapter/config/secrets/wps-workspace.json"
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,256}$`)
 

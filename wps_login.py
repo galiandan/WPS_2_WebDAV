@@ -8,8 +8,7 @@ origin and the important session cookies are HttpOnly.  This module uses the
 Chrome DevTools Protocol only with a temporary, isolated browser profile.  A
 person completes the login in the official WPS page, then the helper reads
 the cookies Chrome itself has stored and sends the minimum useful snapshot to
-the adapter host over HTTP or HTTPS.  Remote HTTP requires explicit opt-in.
-SSH and local-file targets remain available as fallbacks.
+the adapter host through SSH.
 
 No WPS password is handled by this process and no cookie value is printed.
 The server-side adapter continues to use its existing ``rtk`` refresh flow
@@ -20,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import getpass
 import ipaddress
 import json
 import math
@@ -41,7 +39,6 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from http.client import HTTPConnection, HTTPSConnection, HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
@@ -60,11 +57,8 @@ class WpsCredentials:
 DEFAULT_LOGIN_URL = "https://365.kdocs.cn/space/"
 DEFAULT_PERSONAL_URL = "https://drive.wps.cn/"
 DEFAULT_COOKIE_DOMAIN_SUFFIX = "kdocs.cn"
-DEFAULT_REMOTE_COOKIE_PATH = "/etc/wps-adapter/secrets/wps-cookie"
-DEFAULT_REMOTE_CSRF_PATH = "/etc/wps-adapter/secrets/wps-csrf"
-DEFAULT_REMOTE_WORKSPACE_PATH = "/etc/wps-adapter/secrets/wps-workspace.json"
-REMOTE_SECRET_DIR = "/etc/wps-adapter/secrets"
-DEFAULT_ADAPTER_PORT = 54321
+DEFAULT_REMOTE_APP_DIR = "/opt/wps-adapter"
+REMOTE_SECRET_DIR = "/opt/wps-adapter/config/secrets"
 DEFAULT_SSH_PORT = 22
 MAX_WORKSPACE_SPACES = 128
 MAX_WORKSPACE_NAME_LENGTH = 4096
@@ -593,45 +587,23 @@ def _atomic_write(path: str | Path, value: str) -> None:
         except FileNotFoundError:
             pass
 
-
-def write_local_credentials(
-    credentials: WpsCredentials,
-    *,
-    output_dir: str | Path,
-) -> tuple[Path, Path]:
-    """Write a local credential pair without putting values on argv."""
-
-    directory = Path(output_dir)
-    if not directory.is_absolute():
-        raise LoginError("本地凭据目录必须是绝对路径")
-    cookie_path = directory / "wps-cookie"
-    csrf_path = directory / "wps-csrf"
-    _atomic_write(cookie_path, credentials.cookie)
-    _atomic_write(csrf_path, credentials.csrf_token)
-    return cookie_path, csrf_path
-
-
-def write_local_workspace(
-    workspace: WpsWorkspaceSelection,
-    *,
-    output_dir: str | Path,
-) -> Path:
-    """Write the selected WPS workspace next to local credentials."""
-
-    directory = Path(output_dir)
-    if not directory.is_absolute():
-        raise LoginError("本地凭据目录必须是绝对路径")
-    workspace_path = directory / "wps-workspace.json"
-    _atomic_write(
-        workspace_path,
-        json.dumps(_workspace_payload(workspace), ensure_ascii=True, separators=(",", ":")),
-    )
-    return workspace_path
+def _validate_remote_app_dir(value: str) -> str:
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise LoginError("VPS 部署目录必须是绝对路径")
+    if "\x00" in value or "\r" in value or "\n" in value:
+        raise LoginError("VPS 部署目录不能包含控制字符")
+    normalized = posixpath.normpath(value)
+    if normalized != value or normalized in {"/", ".", ".."}:
+        raise LoginError("VPS 部署目录不能包含路径穿越")
+    for part in normalized.split("/")[1:]:
+        if not part or part in {".", ".."}:
+            raise LoginError("VPS 部署目录不能包含空目录或路径穿越")
+    return normalized
 
 
 _REMOTE_WRITE_SCRIPT = r'''import json, os, stat, sys, tempfile
 
-SECRET_DIR = "/etc/wps-adapter/secrets"
+SECRET_DIR = "/opt/wps-adapter/config/secrets"
 
 def validate_secret_path(path):
     if not isinstance(path, str) or not path.startswith(SECRET_DIR + "/"):
@@ -810,10 +782,15 @@ print("credentials-updated")
 '''
 
 
-def _validate_remote_secret_path(path: str, *, label: str) -> None:
-    if not isinstance(path, str) or not path.startswith(REMOTE_SECRET_DIR + "/"):
-        raise LoginError(f"远程{label}路径必须位于 /etc/wps-adapter/secrets 目录")
-    relative = path[len(REMOTE_SECRET_DIR) + 1:]
+def _validate_remote_secret_path(
+    path: str,
+    *,
+    label: str,
+    secret_dir: str = REMOTE_SECRET_DIR,
+) -> None:
+    if not isinstance(path, str) or not path.startswith(secret_dir + "/"):
+        raise LoginError(f"远程{label}路径必须位于适配器 config/secrets 目录")
+    relative = path[len(secret_dir) + 1:]
     if (
         not relative
         or "/" in relative
@@ -831,10 +808,8 @@ def push_credentials_over_ssh(
     credentials: WpsCredentials,
     *,
     ssh_target: str,
-    cookie_path: str = DEFAULT_REMOTE_COOKIE_PATH,
-    csrf_path: str = DEFAULT_REMOTE_CSRF_PATH,
+    remote_dir: str = DEFAULT_REMOTE_APP_DIR,
     workspace: WpsWorkspaceSelection | None = None,
-    workspace_path: str = DEFAULT_REMOTE_WORKSPACE_PATH,
     identity_file: str | None = None,
     port: int = DEFAULT_SSH_PORT,
     password_auth: bool = False,
@@ -850,10 +825,15 @@ def push_credentials_over_ssh(
         raise LoginError("SSH 端口必须在 1 到 65535 之间")
     if not _is_positive_timeout(timeout):
         raise LoginError("SSH 超时时间必须为正数")
-    _validate_remote_secret_path(cookie_path, label="凭据")
-    _validate_remote_secret_path(csrf_path, label="凭据")
+    remote_dir = _validate_remote_app_dir(remote_dir)
+    remote_secret_dir = posixpath.join(remote_dir, "config", "secrets")
+    cookie_path = posixpath.join(remote_secret_dir, "wps-cookie")
+    csrf_path = posixpath.join(remote_secret_dir, "wps-csrf")
+    workspace_path = posixpath.join(remote_secret_dir, "wps-workspace.json")
+    _validate_remote_secret_path(cookie_path, label="凭据", secret_dir=remote_secret_dir)
+    _validate_remote_secret_path(csrf_path, label="凭据", secret_dir=remote_secret_dir)
     if workspace is not None:
-        _validate_remote_secret_path(workspace_path, label="工作区")
+        _validate_remote_secret_path(workspace_path, label="工作区", secret_dir=remote_secret_dir)
         workspace_data = _workspace_payload(workspace)
     else:
         workspace_data = None
@@ -872,9 +852,14 @@ def push_credentials_over_ssh(
         payload_data["workspace_path"] = workspace_path
         payload_data["workspace"] = workspace_data
     payload = json.dumps(payload_data, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    remote_script = _REMOTE_WRITE_SCRIPT.replace(
+        'SECRET_DIR = "/opt/wps-adapter/config/secrets"',
+        "SECRET_DIR = " + repr(remote_secret_dir),
+        1,
+    )
     remote_command = (
         "python3 -c "
-        + shlex.quote(_REMOTE_WRITE_SCRIPT)
+        + shlex.quote(remote_script)
     )
     command = ["ssh", "-F", "/dev/null"]
     if identity_file:
@@ -920,85 +905,8 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
-def _adapter_url_parts(
-    adapter_url: str,
-    *,
-    allow_insecure_http: bool = False,
-) -> tuple[str, str, int | None]:
-    if not isinstance(adapter_url, str) or not adapter_url:
-        raise LoginError("适配器地址不能为空")
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in adapter_url):
-        raise LoginError("适配器地址不能包含控制字符")
-    parts = urlsplit(adapter_url)
-    try:
-        port = parts.port
-    except ValueError as exc:
-        raise LoginError("适配器地址中的端口无效") from exc
-    host = parts.hostname
-    if (
-        parts.scheme not in {"https", "http"}
-        or not host
-        or parts.username
-        or parts.password
-        or parts.query
-        or parts.fragment
-        or parts.path not in {"", "/"}
-    ):
-        raise LoginError("适配器地址应为不带路径、账号或查询参数的 HTTP 或 HTTPS 地址")
-    if (
-        parts.scheme == "http"
-        and not _is_loopback_host(host)
-        and not allow_insecure_http
-    ):
-        raise LoginError("远程 HTTP 会明文传输凭据；确认后请使用 --allow-http")
-    return parts.scheme, host, port
-
-
-def is_remote_http_url(adapter_url: str) -> bool:
-    """Return whether an adapter URL sends credentials over remote HTTP."""
-
-    scheme, host, _ = _adapter_url_parts(adapter_url, allow_insecure_http=True)
-    return scheme == "http" and not _is_loopback_host(host)
-
-
-def _validate_adapter_auth(username: str, password: str) -> None:
-    if not isinstance(username, str) or not username or ":" in username:
-        raise LoginError("适配器用户名不能为空且不能包含冒号")
-    if not isinstance(password, str) or not password:
-        raise LoginError("适配器密码不能为空")
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in username + password):
-        raise LoginError("适配器账号或密码不能包含控制字符")
-
-
-def _cookie_payload(cookies: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
-    payload: list[dict[str, str]] = []
-    for raw_cookie in cookies:
-        if not isinstance(raw_cookie, Mapping):
-            continue
-        name = raw_cookie.get("name")
-        value = raw_cookie.get("value")
-        if (
-            not isinstance(name, str)
-            or not isinstance(value, str)
-            or not _safe_cookie_part(name, name=True)
-            or not _safe_cookie_part(value)
-        ):
-            continue
-        item = {"name": name, "value": value}
-        for field_name in ("domain", "path"):
-            field_value = raw_cookie.get(field_name)
-            if isinstance(field_value, str) and _safe_cookie_part(field_value):
-                item[field_name] = field_value
-        payload.append(item)
-    if not payload:
-        raise LoginError("没有可同步的 WPS Cookie")
-    if len(payload) > 256:
-        raise LoginError("WPS Cookie 数量异常")
-    return payload
-
-
 def _read_limited_http_response(response: object, *, max_bytes: int) -> bytes:
-    """Read a helper response without allowing an untrusted peer to exhaust RAM."""
+    """Read a WPS response without allowing an upstream peer to exhaust RAM."""
 
     if max_bytes <= 0:
         raise LoginError("响应大小限制必须为正数")
@@ -1010,93 +918,17 @@ def _read_limited_http_response(response: object, *, max_bytes: int) -> bytes:
         except (TypeError, ValueError):
             declared_length = None
         if declared_length is not None and (declared_length < 0 or declared_length > max_bytes):
-            raise LoginError("适配器响应过大")
+            raise LoginError("响应过大")
     reader = getattr(response, "read", None)
     if not callable(reader):
-        raise LoginError("适配器响应无效")
+        raise LoginError("响应无效")
     try:
         body = reader(max_bytes + 1)
     except TypeError:
-        # Small test doubles and older wrappers may expose read() without a
-        # size argument; real HTTPResponse objects take the bounded path.
         body = reader()
     if not isinstance(body, bytes) or len(body) > max_bytes:
-        raise LoginError("适配器响应过大")
+        raise LoginError("响应过大")
     return body
-
-
-def push_credentials_over_https(
-    credentials: WpsCredentials,
-    *,
-    cookies: Sequence[Mapping[str, object]],
-    workspace: WpsWorkspaceSelection | None = None,
-    adapter_url: str,
-    username: str,
-    password: str,
-    timeout: float = 30.0,
-    allow_insecure_http: bool = False,
-    connection_factory: Callable[[str, int | None, float], object] | None = None,
-) -> None:
-    """Send a selected WPS cookie snapshot to the authenticated adapter.
-
-    The adapter URL is never redirected. Remote HTTP is available only when
-    explicitly enabled by the caller. The password is used only to construct
-    the in-memory Basic Auth header.
-    """
-
-    scheme, host, port = _adapter_url_parts(
-        adapter_url,
-        allow_insecure_http=allow_insecure_http,
-    )
-    _validate_adapter_auth(username, password)
-    if not _is_positive_timeout(timeout):
-        raise LoginError("适配器同步超时时间必须为正数")
-    if not credentials.cookie or not credentials.csrf_token:
-        raise LoginError("WPS 登录凭据不完整")
-    payload_data: dict[str, object] = {"cookies": _cookie_payload(cookies)}
-    if workspace is not None:
-        payload_data["workspace"] = _workspace_payload(workspace)
-    body = json.dumps(payload_data, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
-    authorization = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-    if connection_factory is None:
-        connection_factory = (
-            HTTPSConnection if scheme == "https" else HTTPConnection
-        )
-    try:
-        connection = connection_factory(host, port, timeout)
-    except (OSError, TypeError, ValueError) as exc:
-        raise LoginError("无法连接适配器") from exc
-    response_status: int | None = None
-    try:
-        try:
-            connection.request(  # type: ignore[attr-defined]
-                "POST",
-                "/api/v1/session/import",
-                body=body,
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "Authorization": f"Basic {authorization}",
-                    "Connection": "close",
-                },
-            )
-            response = connection.getresponse()  # type: ignore[attr-defined]
-            response_status = getattr(response, "status", None)
-            _read_limited_http_response(response, max_bytes=MAX_ADAPTER_RESPONSE_BYTES)
-        except (HTTPException, OSError, TimeoutError, ValueError) as exc:
-            raise LoginError("适配器同步凭据失败，请检查地址和网络") from exc
-    finally:
-        try:
-            connection.close()  # type: ignore[attr-defined]
-        except OSError:
-            pass
-
-    if response_status == 401:
-        raise LoginError("适配器认证失败，请检查适配器账号和密码")
-    if response_status == 404:
-        raise LoginError("适配器没有凭据导入接口，请先更新 VPS 上的适配器")
-    if not isinstance(response_status, int) or not 200 <= response_status < 300:
-        raise LoginError(f"适配器拒绝了凭据同步（HTTP {response_status or 'unknown'}）")
 
 
 class _WebSocket:
@@ -1997,19 +1829,12 @@ def login_and_sync(
     domain_suffix: str = DEFAULT_COOKIE_DOMAIN_SUFFIX,
     wait_timeout: float = 300.0,
     ssh_target: str = "",
-    ssh_cookie_path: str = DEFAULT_REMOTE_COOKIE_PATH,
-    ssh_csrf_path: str = DEFAULT_REMOTE_CSRF_PATH,
-    ssh_workspace_path: str = DEFAULT_REMOTE_WORKSPACE_PATH,
+    remote_dir: str = DEFAULT_REMOTE_APP_DIR,
     ssh_identity: str | None = None,
     ssh_port: int = DEFAULT_SSH_PORT,
     ssh_password_auth: bool = False,
-    output_dir: str | None = None,
     ssh_timeout: float = 30.0,
-    adapter_url: str = "",
-    adapter_user: str = "",
-    adapter_password: str | None = None,
-    adapter_timeout: float = 30.0,
-    allow_insecure_http: bool = False,
+    request_timeout: float = 30.0,
     workspace_url: str | None = None,
     workspace_selector: Callable[[Sequence[WpsWorkspaceCandidate]], object] | None = None,
     workspace_folder_selector: Callable[
@@ -2019,13 +1844,12 @@ def login_and_sync(
 ) -> tuple[str, ...]:
     """Open WPS, wait for a human login, then sync a safe credential snapshot."""
 
-    target_count = sum(bool(target) for target in (ssh_target, output_dir, adapter_url))
-    if target_count != 1:
-        raise LoginError("请在 --adapter-url、--ssh-target 和 --output-dir 中选择一个同步目标")
+    if not ssh_target:
+        raise LoginError("必须通过 SSH 私钥或 SSH 密码同步到 VPS")
     if not _is_positive_timeout(wait_timeout):
         raise LoginError("登录等待时间必须为正数")
-    if output_dir is not None and not Path(output_dir).is_absolute():
-        raise LoginError("本地凭据目录必须是绝对路径")
+    if not _is_positive_timeout(request_timeout):
+        raise LoginError("WPS 请求超时时间必须为正数")
     browser_url = login_url
     if workspace_url is not None:
         login_host = _host_from_url(login_url)
@@ -2036,14 +1860,6 @@ def login_and_sync(
                 "--workspace-url 必须是具体文件夹地址：/space/<企业ID>/<群组ID>/<文件夹ID>"
             )
         browser_url = workspace_url
-    if adapter_url:
-        _adapter_url_parts(
-            adapter_url,
-            allow_insecure_http=allow_insecure_http,
-        )
-        _validate_adapter_auth(adapter_user, adapter_password or "")
-        if not _is_positive_timeout(adapter_timeout):
-            raise LoginError("适配器同步超时时间必须为正数")
     discovered_workspaces: tuple[WpsWorkspaceCandidate, ...] = ()
     with ChromeLoginSession(login_url=browser_url, browser=browser) as session:
         print("WPS 登录窗口已打开。请只在这个官方 WPS 窗口中完成登录。", flush=True)
@@ -2072,7 +1888,7 @@ def login_and_sync(
                 validated_credentials = credentials
                 validated_names = names
                 validated_cookies = selected_cookies
-                account_mode = detect_wps_mode(credentials, timeout=adapter_timeout)
+                account_mode = detect_wps_mode(credentials, timeout=request_timeout)
                 all_cookies = session.cookies()
                 if account_mode == "personal":
                     personal_suffix = domain_suffix
@@ -2143,7 +1959,7 @@ def login_and_sync(
                     credentials,
                     tenant_id=workspace.tenant_id,
                     base_url=browser_url,
-                    timeout=adapter_timeout,
+                    timeout=request_timeout,
                     mode=workspace.mode,
                 )
             except LoginError as exc:
@@ -2172,7 +1988,7 @@ def login_and_sync(
                     credentials,
                     selected_candidates,
                     browser_url,
-                    adapter_timeout,
+                    request_timeout,
                 )
             except LoginError:
                 raise
@@ -2203,7 +2019,7 @@ def login_and_sync(
         credentials,
         workspace,
         base_url=browser_url,
-        timeout=adapter_timeout,
+        timeout=request_timeout,
     )
     # The selected folder is the one WebDAV target, but every selected space
     # must also be readable because all of them are exposed in the web UI.
@@ -2220,40 +2036,23 @@ def login_and_sync(
                 mode=workspace.mode,
             ),
             base_url=browser_url,
-            timeout=adapter_timeout,
+            timeout=request_timeout,
         )
     print("工作区验证成功，准备同步凭据。", flush=True)
     if ssh_target:
         push_credentials_over_ssh(
             credentials,
             ssh_target=ssh_target,
-            cookie_path=ssh_cookie_path,
-            csrf_path=ssh_csrf_path,
+            remote_dir=remote_dir,
             workspace=workspace,
-            workspace_path=ssh_workspace_path,
             identity_file=ssh_identity,
             port=ssh_port,
             password_auth=ssh_password_auth,
             timeout=ssh_timeout,
         )
         print("已通过 SSH 更新 VPS 凭据，适配器下次请求会读取新会话。", flush=True)
-    elif adapter_url:
-        push_credentials_over_https(
-            credentials,
-            cookies=selected_cookies,
-            workspace=workspace,
-            adapter_url=adapter_url,
-            username=adapter_user,
-            password=adapter_password or "",
-            timeout=adapter_timeout,
-            allow_insecure_http=allow_insecure_http,
-        )
-        scheme = urlsplit(adapter_url).scheme.upper()
-        print(f"已通过 {scheme} 更新适配器凭据，服务无需重启。", flush=True)
     else:
-        cookie_path, csrf_path = write_local_credentials(credentials, output_dir=output_dir or "")
-        workspace_path = write_local_workspace(workspace, output_dir=output_dir or "")
-        print(f"已写入本地凭据文件：{cookie_path}、{csrf_path}；工作区信息：{workspace_path}", flush=True)
+        raise LoginError("没有有效的 SSH 同步目标")
     return names
 
 
@@ -2293,28 +2092,6 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--domain-suffix", default=DEFAULT_COOKIE_DOMAIN_SUFFIX)
     parser.add_argument("--wait-timeout", type=_positive_float_value, default=300.0)
     parser.add_argument(
-        "--adapter-url",
-        default=os.environ.get("WPS_ADAPTER_URL", ""),
-        help="HTTP or HTTPS adapter origin for direct credential sync",
-    )
-    parser.add_argument(
-        "--adapter-user",
-        default=os.environ.get("WPS_ADAPTER_USER", ""),
-        help="adapter Basic Auth username; the password is prompted securely",
-    )
-    parser.add_argument(
-        "--adapter-port",
-        type=_port_value,
-        default=None,
-        help="adapter port; use with --adapter-url when it has no port",
-    )
-    parser.add_argument(
-        "--allow-http",
-        action="store_true",
-        help="allow sending the WPS session to a remote adapter over HTTP",
-    )
-    parser.add_argument("--adapter-timeout", type=_positive_float_value, default=30.0)
-    parser.add_argument(
         "--ssh-target",
         default=os.environ.get("WPS_ADAPTER_SSH_TARGET", ""),
         help="remote SSH target, for example root@203.0.113.10",
@@ -2330,26 +2107,27 @@ def add_login_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="force password/keyboard-interactive SSH authentication",
     )
-    parser.add_argument("--ssh-cookie-path", default=DEFAULT_REMOTE_COOKIE_PATH)
-    parser.add_argument("--ssh-csrf-path", default=DEFAULT_REMOTE_CSRF_PATH)
-    parser.add_argument("--ssh-workspace-path", default=DEFAULT_REMOTE_WORKSPACE_PATH)
+    parser.add_argument(
+        "--remote-dir",
+        default=os.environ.get("WPS_ADAPTER_DIR", DEFAULT_REMOTE_APP_DIR),
+        help="VPS 上的适配器部署目录；配置会写入该目录/config/secrets",
+    )
     parser.add_argument("--ssh-timeout", type=_positive_float_value, default=30.0)
     parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="write credentials and wps-workspace.json to this local absolute directory",
+        "--request-timeout",
+        type=_positive_float_value,
+        default=30.0,
+        help="WPS 空间探测和验证超时时间（秒）",
     )
 
 
 @dataclass(frozen=True, slots=True)
 class _LoginTarget:
-    adapter_url: str = ""
-    adapter_port: int | None = None
-    adapter_user: str = ""
     ssh_target: str = ""
     ssh_identity: str | None = None
     ssh_port: int = DEFAULT_SSH_PORT
     ssh_password_auth: bool = False
+    remote_dir: str = DEFAULT_REMOTE_APP_DIR
 
 
 def _prompt_port(label: str, default: int) -> int:
@@ -2392,24 +2170,28 @@ def _prompt_login_target() -> _LoginTarget:
     print("选择连接方式：")
     print("  1) SSH 私钥")
     print("  2) SSH 密码")
-    print("  3) HTTP/HTTPS 适配器接口")
     while True:
         choice = input("连接方式 [1]: ").strip() or "1"
-        if choice in {"1", "2", "3"}:
+        if choice in {"1", "2"}:
             break
-        print("请输入 1、2 或 3。")
+        print("请输入 1 或 2。")
 
     if choice in {"1", "2"}:
         user = input("SSH 用户名 [root]: ").strip() or "root"
         if not user or any(char.isspace() or char in "@/\\" for char in user):
             raise LoginError("SSH 用户名格式不正确")
         port = _prompt_port("SSH 端口", DEFAULT_SSH_PORT)
+        remote_dir = _validate_remote_app_dir(
+            input(f"VPS 部署目录 [{DEFAULT_REMOTE_APP_DIR}]: ").strip()
+            or DEFAULT_REMOTE_APP_DIR
+        )
         if choice == "2":
             print("WPS 登录完成后，系统 ssh 会在传输凭据时询问 SSH 密码。")
             return _LoginTarget(
                 ssh_target=f"{user}@{host}",
                 ssh_port=port,
                 ssh_password_auth=True,
+                remote_dir=remote_dir,
             )
         identity = input("SSH 私钥路径 [~/.ssh/id_ed25519]: ").strip()
         identity = identity or "~/.ssh/id_ed25519"
@@ -2417,46 +2199,10 @@ def _prompt_login_target() -> _LoginTarget:
             ssh_target=f"{user}@{host}",
             ssh_identity=os.path.expanduser(identity),
             ssh_port=port,
+            remote_dir=remote_dir,
         )
 
-    host_for_url = host
-    if ":" in host and not host.startswith("["):
-        host_for_url = f"[{host}]"
-    adapter_port = _prompt_port("适配器端口", DEFAULT_ADAPTER_PORT)
-    default_url = f"http://{host_for_url}:{adapter_port}"
-    entered_url = input(f"适配器 HTTP/HTTPS 地址 [{default_url}]: ").strip()
-    adapter_url = entered_url or default_url
-    try:
-        explicit_port = urlsplit(adapter_url).port
-    except ValueError:
-        explicit_port = None
-    if entered_url and explicit_port is not None and explicit_port != adapter_port:
-        raise LoginError("适配器地址中的端口与端口输入不一致")
-    return _LoginTarget(
-        adapter_url=adapter_url,
-        adapter_port=adapter_port,
-    )
-
-
-def _apply_adapter_port(adapter_url: str, port: int | None) -> str:
-    if port is None:
-        return adapter_url
-    if not 1 <= port <= 65535:
-        raise LoginError("适配器端口必须在 1 到 65535 之间")
-    parts = urlsplit(adapter_url)
-    try:
-        existing_port = parts.port
-    except ValueError as exc:
-        raise LoginError("适配器地址中的端口无效") from exc
-    if existing_port is not None and existing_port != port:
-        raise LoginError("适配器地址中的端口与 --adapter-port 不一致")
-    if existing_port is not None:
-        return adapter_url
-    if not parts.hostname:
-        raise LoginError("适配器地址缺少主机名")
-    hostname = parts.hostname
-    netloc = f"[{hostname}]" if ":" in hostname else hostname
-    return urlunsplit((parts.scheme, f"{netloc}:{port}", parts.path, parts.query, parts.fragment))
+    raise LoginError("连接方式无效")
 
 
 def _select_workspaces(
@@ -2535,55 +2281,16 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         _prompt_login_target()
         if (
             interactive
-            and not args.adapter_url
             and not args.ssh_target
-            and args.output_dir is None
         )
         else _LoginTarget(
-            adapter_url=args.adapter_url,
-            adapter_port=args.adapter_port,
-            adapter_user=args.adapter_user,
             ssh_target=args.ssh_target,
             ssh_identity=args.ssh_identity,
             ssh_port=args.ssh_port,
             ssh_password_auth=args.ssh_password_auth,
+            remote_dir=_validate_remote_app_dir(args.remote_dir),
         )
     )
-    target_count = sum(
-        bool(target)
-        for target in (
-            interactive_target.adapter_url,
-            interactive_target.ssh_target,
-            args.output_dir,
-        )
-    )
-    if target_count != 1:
-        raise LoginError("请只选择一种同步目标：HTTP/HTTPS、SSH 或本地目录")
-    adapter_url = (
-        _apply_adapter_port(
-            interactive_target.adapter_url,
-            interactive_target.adapter_port,
-        )
-        if interactive_target.adapter_url
-        else ""
-    )
-    allow_insecure_http = args.allow_http
-    if adapter_url and is_remote_http_url(adapter_url):
-        print(
-            "警告：HTTP 不加密，WPS Cookie、Basic Auth 和文件请求可能被窃听。",
-            flush=True,
-        )
-        if not allow_insecure_http:
-            confirmation = input("仍然通过 HTTP 发送 Cookie？ [y/N]: ").strip().casefold()
-            if confirmation not in {"y", "yes"}:
-                raise LoginError("已取消明文 HTTP 凭据同步；如确认风险可使用 --allow-http")
-            allow_insecure_http = True
-    adapter_user = interactive_target.adapter_user
-    adapter_password: str | None = None
-    if adapter_url:
-        if not adapter_user:
-            adapter_user = input("适配器用户名: ").strip()
-        adapter_password = getpass.getpass("适配器密码（不会显示）: ")
     login_and_sync(
         login_url=args.login_url,
         workspace_url=args.workspace_url,
@@ -2591,19 +2298,12 @@ def run_login(args: argparse.Namespace, *, interactive: bool = True) -> int:
         domain_suffix=args.domain_suffix,
         wait_timeout=args.wait_timeout,
         ssh_target=interactive_target.ssh_target,
-        ssh_cookie_path=args.ssh_cookie_path,
-        ssh_csrf_path=args.ssh_csrf_path,
-        ssh_workspace_path=args.ssh_workspace_path,
+        remote_dir=interactive_target.remote_dir,
         ssh_identity=interactive_target.ssh_identity,
         ssh_port=interactive_target.ssh_port,
         ssh_password_auth=interactive_target.ssh_password_auth,
-        output_dir=args.output_dir,
         ssh_timeout=args.ssh_timeout,
-        adapter_url=adapter_url,
-        adapter_user=adapter_user,
-        adapter_password=adapter_password,
-        adapter_timeout=args.adapter_timeout,
-        allow_insecure_http=allow_insecure_http,
+        request_timeout=args.request_timeout,
         workspace_selector=_select_workspaces if interactive and not args.workspace_url else None,
         workspace_folder_selector=(
             lambda credentials, candidates, base_url, timeout: select_workspace_folders(
@@ -2633,7 +2333,6 @@ def run_login_safely(args: argparse.Namespace, *, interactive: bool = True) -> i
 
 
 __all__ = [
-    "_apply_adapter_port",
     "_prompt_login_target",
     "add_login_arguments",
     "run_login",
@@ -2641,7 +2340,7 @@ __all__ = [
 ]
 
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:

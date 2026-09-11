@@ -18,7 +18,7 @@ Docker：
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/install-docker.sh' | sudo bash -s -- --port 18080
 ```
 
-安装器会先从国内加速的 GitHub Release 下载对应 Linux 架构的预编译二进制。预编译资产下载失败、无法执行、没有对应架构或 Docker 运行镜像制作失败时，才会从脚本固定的 40 位 Git 提交归档下载源码并现场编译；不要求 VPS 已安装 `git`，也不执行归档、二进制或工具链哈希校验。可用 `--source-ref` 指定源码回退提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。两种方式使用同一套 `/etc/wps-adapter/secrets/`，但同一台机器只能让一种方式占用某个端口。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
+安装器会先从国内加速的 GitHub Release 下载对应 Linux 架构的预编译二进制。预编译资产下载失败、无法执行、没有对应架构或 Docker 运行镜像制作失败时，才会从脚本固定的 40 位 Git 提交归档下载源码并现场编译；不要求 VPS 已安装 `git`，也不执行归档、二进制或工具链哈希校验。可用 `--source-ref` 指定源码回退提交号。Native 会识别 `apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`，有 systemd 时注册服务，没有 systemd 时使用便携后台模式。Docker 会使用这些包管理器安装 Docker，并识别 systemd、OpenRC 和 SysV service。配置、凭据、数据、日志和运行文件都集中在部署目录的 `config/`、`data/`、`logs/` 和 `runtime/`；当前目录是根目录或用户主目录时默认使用 `/opt/wps-adapter`，其他明确工作目录则使用当前目录。脚本会把服务进程和凭据文件设置为当前用户；若直接以 root 执行，root 就是当前用户。
 
 如果是从原生切换到 Docker，需要显式确认停用原生服务：
 
@@ -40,7 +40,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 export WPS_ADAPTER_GO_BUILDER_IMAGE=docker.m.daocloud.io/library/golang:1.25.0
 ```
 
-手动使用 Docker Compose 时，`/etc/wps-adapter/wps-adapter.env` 只会注入容器，不能替代 Compose 的宿主端口变量。自定义端口时先执行：
+手动使用 Docker Compose 时，`/opt/wps-adapter/config/wps-adapter.env` 只会注入容器，不能替代 Compose 的宿主端口变量。自定义端口时先执行：
 
 ```bash
 export ADAPTER_BIND=0.0.0.0
@@ -78,11 +78,12 @@ docker compose -f /opt/wps-adapter/deploy/docker-compose.yml up -d --build
 sudo git clone --branch main https://ghfast.top/https://github.com/galiandan/WPS_2_WebDAV.git /opt/wps-adapter
 cd /opt/wps-adapter
 cd go
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.commit=$(git -C .. rev-parse HEAD)" -o /opt/wps-adapter/wps-adapter ./cmd/wps-adapter
-/opt/wps-adapter/wps-adapter --version
+sudo install -d -m 755 /opt/wps-adapter/runtime
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.commit=$(git -C .. rev-parse HEAD)" -o /opt/wps-adapter/runtime/wps-adapter ./cmd/wps-adapter
+/opt/wps-adapter/runtime/wps-adapter --version
 ```
 
-升级时先备份 systemd 单元和非秘密配置，再更新代码。不要用仓库文件覆盖 `/etc/wps-adapter/secrets/`。手工安装 systemd 单元时，请把 `User=` 和 `Group=` 改为实际服务用户；一键安装脚本会自动完成这一步。
+升级时先备份 systemd 单元和非秘密配置，再更新代码。不要用仓库文件覆盖 `/opt/wps-adapter/config/secrets/`。手工安装 systemd 单元时，请把 `User=` 和 `Group=` 改为实际服务用户；一键安装脚本会自动完成这一步。
 
 ## 3. Create secret files
 
@@ -91,24 +92,24 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.commit=$(git -C .. rev-
 ```bash
 SERVICE_USER="$(id -un)"
 SERVICE_GROUP="$(id -gn)"
-sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 700 /etc/wps-adapter/secrets
-sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-cookie
-sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-csrf
-sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/wps-workspace.json
-sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/adapter-username
-sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /etc/wps-adapter/secrets/adapter-password
+sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 700 /opt/wps-adapter/config/secrets
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /opt/wps-adapter/config/secrets/wps-cookie
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /opt/wps-adapter/config/secrets/wps-csrf
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /opt/wps-adapter/config/secrets/wps-workspace.json
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /opt/wps-adapter/config/secrets/adapter-username
+sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 /dev/null /opt/wps-adapter/config/secrets/adapter-password
 ```
 
-优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。配置 HTTPS 反向代理后，助手可以通过受 Basic Auth 保护的接口直接写入 `wps-cookie`、`wps-csrf` 和 `wps-workspace.json`；没有 HTTPS 时可以确认风险后使用 HTTP，或使用 SSH 备用方式。不需要把 Cookie 粘贴进命令行。
+优先在账号所有者自己的电脑上运行 [`login.md`](login.md) 中的登录助手。登录助手固定通过 SSH 私钥或 SSH 密码写入 `wps-cookie`、`wps-csrf` 和 `wps-workspace.json`，不经过适配器的 HTTP/HTTPS 端口。不需要把 Cookie 粘贴进命令行。
 
 适配器 Basic Auth 的用户名和密码分别写入 `adapter-username`、`adapter-password`。这些文件只允许服务用户读取。不要把 WPS 密码、Cookie 或 Basic Auth 密码放入 `.env`、Git、Issue 或聊天。
 
 ## 4. Configure the service
 
 ```bash
-sudo cp /opt/wps-adapter/.env.example /etc/wps-adapter/wps-adapter.env
-sudo chmod 600 /etc/wps-adapter/wps-adapter.env
-sudoedit /etc/wps-adapter/wps-adapter.env
+sudo cp /opt/wps-adapter/.env.example /opt/wps-adapter/config/wps-adapter.env
+sudo chmod 600 /opt/wps-adapter/config/wps-adapter.env
+sudoedit /opt/wps-adapter/config/wps-adapter.env
 ```
 
 至少设置：
@@ -118,11 +119,11 @@ WPS_GROUP_ID=auto
 WPS_ROOT_ID=auto
 WPS_ROOT_NAME="WPS Drive"
 WPS_MODE=auto
-WPS_WORKSPACE_FILE=/etc/wps-adapter/secrets/wps-workspace.json
-WPS_COOKIE_FILE=/etc/wps-adapter/secrets/wps-cookie
-WPS_CSRF_TOKEN_FILE=/etc/wps-adapter/secrets/wps-csrf
-ADAPTER_USERNAME_FILE=/etc/wps-adapter/secrets/adapter-username
-ADAPTER_PASSWORD_FILE=/etc/wps-adapter/secrets/adapter-password
+WPS_WORKSPACE_FILE=/opt/wps-adapter/config/secrets/wps-workspace.json
+WPS_COOKIE_FILE=/opt/wps-adapter/config/secrets/wps-cookie
+WPS_CSRF_TOKEN_FILE=/opt/wps-adapter/config/secrets/wps-csrf
+ADAPTER_USERNAME_FILE=/opt/wps-adapter/config/secrets/adapter-username
+ADAPTER_PASSWORD_FILE=/opt/wps-adapter/config/secrets/adapter-password
 ADAPTER_BIND=127.0.0.1
 ADAPTER_PORT=18080
 ```
@@ -131,25 +132,25 @@ ADAPTER_PORT=18080
 
 `WPS_ROOT_NAME` 是网页设置尚未保存时使用的默认名称；名称会显示在网页标题、左上角品牌、根目录面包屑、根目录标题以及适配器返回的根目录元数据中，不会重命名 WPS 远端文件夹。修改配置文件后重启服务即可生效：Native 执行 `sudo systemctl restart wps-adapter`，Docker 执行 `sudo docker restart wps-adapter`。
 
-更推荐直接打开网页点击右上角齿轮修改名称。网页保存的值位于 `/etc/wps-adapter/secrets/web-settings.json`，优先级高于 `WPS_ROOT_NAME`，并且不需要重启服务。
+更推荐直接打开网页点击右上角齿轮修改名称。网页保存的值位于 `/opt/wps-adapter/config/secrets/web-settings.json`，优先级高于 `WPS_ROOT_NAME`，并且不需要重启服务。
 
-打开网页后直接使用安装时设置的适配器用户名和密码登录。网页和 WebDAV 共用这一组凭据，网页登录成功后使用 HttpOnly Cookie；服务不创建用户数据库，也没有注册入口。替换 `/etc/wps-adapter/secrets/adapter-username` 或 `/etc/wps-adapter/secrets/adapter-password` 后，网页和 WebDAV 会同时使用新凭据，无需重启服务。
+打开网页后直接使用安装时设置的适配器用户名和密码登录。网页和 WebDAV 共用这一组凭据，网页登录成功后使用 HttpOnly Cookie；服务不创建用户数据库，也没有注册入口。替换 `/opt/wps-adapter/config/secrets/adapter-username` 或 `/opt/wps-adapter/config/secrets/adapter-password` 后，网页和 WebDAV 会同时使用新凭据，无需重启服务。
 
-网页登录后可在“设置 → 登录安全”启用 TOTP 两步验证或注册 Passkey。状态保存在 `/etc/wps-adapter/secrets/auth-settings.json`，不会写入环境文件；TOTP 恢复码只在启用时显示一次，Passkey 私钥始终留在浏览器或硬件设备中。TOTP 可在 HTTP 下工作，但 HTTP 不适合公网；Passkey 通常要求 HTTPS。
+网页登录后可在“设置 → 登录安全”启用 TOTP 两步验证或注册 Passkey。状态保存在 `/opt/wps-adapter/config/secrets/auth-settings.json`，不会写入环境文件；TOTP 恢复码只在启用时显示一次，Passkey 私钥始终留在浏览器或硬件设备中。TOTP 可在 HTTP 下工作，但 HTTP 不适合公网；Passkey 通常要求 HTTPS。
 
 检查配置不会访问 WPS：
 
 ```bash
 cd /opt/wps-adapter
 set -a
-. /etc/wps-adapter/wps-adapter.env
+. /opt/wps-adapter/config/wps-adapter.env
 set +a
-/opt/wps-adapter/wps-adapter check-config
+/opt/wps-adapter/runtime/wps-adapter check-config
 ```
 
 ## 5. Install service (Native manual deployment)
 
-Native 一键安装器已经自动处理本节。只有手工部署或没有使用一键安装器时，才需要按下面的 systemd 步骤执行；没有 systemd 的系统应使用一键安装器的便携后台模式，并将日志写在 `/etc/wps-adapter/wps-adapter.log`。
+Native 一键安装器已经自动处理本节。只有手工部署或没有使用一键安装器时，才需要按下面的 systemd 步骤执行；没有 systemd 的系统应使用一键安装器的便携后台模式，并将日志写在部署目录的 `logs/wps-adapter.log`。
 
 ```bash
 sudo install -m 644 /opt/wps-adapter/deploy/wps-adapter.service \
@@ -158,7 +159,7 @@ sudo install -d -m 755 /etc/systemd/system/wps-adapter.service.d
 sudo install -m 644 /opt/wps-adapter/deploy/wps-adapter-hardening.conf \
   /etc/systemd/system/wps-adapter.service.d/override.conf
 sudo install -m 600 /opt/wps-adapter/deploy/wps-adapter-hardening.env \
-  /etc/wps-adapter/wps-adapter-hardening.env
+  /opt/wps-adapter/config/wps-adapter-hardening.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now wps-adapter
 systemctl status wps-adapter --no-pager
@@ -174,7 +175,7 @@ sudo journalctl -u wps-adapter -n 100 --no-pager
 
 ## 6. Reverse proxy
 
-让反向代理终止 TLS，并将请求转发到 `http://127.0.0.1:<port>`。保留适配器 Basic Auth；不要在代理访问日志中记录 `Authorization` 头、查询参数或请求体。登录助手的 HTTPS 凭据导入也必须经过这条 TLS 入口。WebDAV 客户端使用：
+让反向代理终止 TLS，并将请求转发到 `http://127.0.0.1:<port>`。保留适配器 Basic Auth；不要在代理访问日志中记录 `Authorization` 头、查询参数或请求体。登录助手不经过反向代理，凭据同步只使用 SSH。WebDAV 客户端使用：
 
 ```text
 https://<vps-host>/dav/
@@ -189,19 +190,19 @@ https://<vps-host>/dav/
 ```bash
 sudo cp /etc/systemd/system/wps-adapter.service \
   /etc/systemd/system/wps-adapter.service.before-upgrade
-sudo cp /etc/wps-adapter/wps-adapter.env \
-  /etc/wps-adapter/wps-adapter.env.before-upgrade
+sudo cp /opt/wps-adapter/config/wps-adapter.env \
+  /opt/wps-adapter/config/wps-adapter.env.before-upgrade
 ```
 
 更新代码后重新安装 service 文件、执行 `systemctl daemon-reload` 和 `systemctl restart wps-adapter`，再检查 `/healthz`。回滚只恢复代码和非秘密配置；不要从 Git 或备份中恢复旧 Cookie。
 
 ## 8. Session expiry
 
-服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手，通过 HTTPS、确认过风险的 HTTP 或 SSH 方式更新凭据。服务无需因凭据同步而重启。
+服务遇到 WPS `401` 时会先检查 secret 是否被手动替换，然后尝试已确认的 `grant_token` 刷新流程并重试一次。若 `rtk` 已被撤销或 WPS 要求重新登录，在账号所有者自己的电脑上重新运行 [`login.md`](login.md) 的登录助手，通过 SSH 私钥或 SSH 密码更新凭据。服务无需因凭据同步而重启。
 
 ## 9. Uninstall
 
-Native 和 Docker 共用一个卸载脚本。脚本会自动识别两种部署方式，停止并删除适配器服务、应用代码、配置和 `/etc/wps-adapter/secrets/` 中的本机凭据：
+Native 和 Docker 共用一个卸载脚本。脚本会自动识别两种部署方式，停止并删除适配器服务、应用代码、配置和 `/opt/wps-adapter/config/secrets/` 中的本机凭据：
 
 ```bash
 set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'https://ghfast.top/https://raw.githubusercontent.com/galiandan/WPS_2_WebDAV/main/scripts/uninstall.sh' | sudo bash -s --

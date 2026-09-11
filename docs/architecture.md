@@ -42,7 +42,7 @@ WebDAV clients / REST clients / browser UI
 - 网页不创建本地用户数据库；网页登录直接校验安装时的 Basic Auth 凭据，会话令牌只存在进程内，服务重启后失效。网页与 WebDAV 始终使用同一组账号。
 - Basic Auth 继续保护 WebDAV，并作为 REST、设置和登录助手的兼容凭据通道。
 - WPS Cookie 和 CSRF 只存放在本机或 VPS 的权限受限 secret 文件中。
-- 交互式登录由本地 `wps_login.py` 助手启动官方 WPS 页面完成，并可通过 HTTP/HTTPS 同步到服务；远程 HTTP 需要用户确认风险；服务器不代填密码、SSO、验证码或风控。
+- 交互式登录由本地 `wps_login.py` 助手启动官方 WPS 页面完成，凭据只通过 SSH 私钥或 SSH 密码同步到服务；服务器不代填密码、SSO、验证码或风控。
 - `rtk` 是当前自动续期原型所需的 WPS 持久刷新 Cookie。没有它时，重新运行本地登录助手。
 
 ## Resource model

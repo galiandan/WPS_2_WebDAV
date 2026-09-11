@@ -10,8 +10,8 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/opt/wps-adapter
-EnvironmentFile=-/etc/wps-adapter/wps-adapter.env
-ExecStart=/opt/wps-adapter/wps-adapter serve
+EnvironmentFile=-/opt/wps-adapter/config/wps-adapter.env
+ExecStart=/opt/wps-adapter/runtime/wps-adapter serve
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -21,7 +21,7 @@ ProtectSystem=strict
 ProtectHome=true
 # The optional root-managed credential refresh helper atomically replaces
 # these files after a confirmed WPS session refresh.
-ReadWritePaths=/etc/wps-adapter/secrets /var/lib/wps-adapter/uploads
+ReadWritePaths=/opt/wps-adapter/config /opt/wps-adapter/data
 
 [Install]
 WantedBy=multi-user.target

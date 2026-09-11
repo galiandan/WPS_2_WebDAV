@@ -13,7 +13,7 @@ import (
 
 // Defaults and limits mirroring settings.py.
 const (
-	DefaultWebSettingsFile  = "/etc/wps-adapter/secrets/web-settings.json"
+	DefaultWebSettingsFile  = "/opt/wps-adapter/config/secrets/web-settings.json"
 	DefaultRootName         = "WPS Drive"
 	LegacyRootName          = "WPS Enterprise Drive"
 	MaxWebSettingsFileBytes = int64(16 * 1024)

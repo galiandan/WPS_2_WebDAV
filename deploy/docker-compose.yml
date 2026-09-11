@@ -18,7 +18,7 @@ services:
     security_opt:
       - no-new-privileges:true
     env_file:
-      - /etc/wps-adapter/wps-adapter.env
+      - /opt/wps-adapter/config/wps-adapter.env
     environment:
       ADAPTER_BIND: 0.0.0.0
     ports:
@@ -28,7 +28,7 @@ services:
       # file beside the target before atomically replacing it. Overlay the
       # Basic Auth files as read-only mounts. Keep custom file names in sync
       # with the two entries below if the env file overrides their paths.
-      - /etc/wps-adapter/secrets:/etc/wps-adapter/secrets:rw
-      - /var/lib/wps-adapter/uploads:/var/lib/wps-adapter/uploads:rw
-      - /etc/wps-adapter/secrets/adapter-username:/etc/wps-adapter/secrets/adapter-username:ro
-      - /etc/wps-adapter/secrets/adapter-password:/etc/wps-adapter/secrets/adapter-password:ro
+      - /opt/wps-adapter/config:/opt/wps-adapter/config:rw
+      - /opt/wps-adapter/data:/opt/wps-adapter/data:rw
+      - /opt/wps-adapter/config/secrets/adapter-username:/opt/wps-adapter/config/secrets/adapter-username:ro
+      - /opt/wps-adapter/config/secrets/adapter-password:/opt/wps-adapter/config/secrets/adapter-password:ro

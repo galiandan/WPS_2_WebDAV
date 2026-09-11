@@ -6,7 +6,7 @@
 - `wps-adapter-hardening.conf`：systemd drop-in。
 - `wps-adapter-hardening.env`：低内存 VPS 的非秘密资源限制。
 
-Native 安装器优先使用 systemd；没有 systemd 的主机会使用便携后台模式，并将 PID 和日志保存到 `/etc/wps-adapter/`。安装器会识别常见 Linux 包管理器：`apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`。
+Native 安装器优先使用 systemd；没有 systemd 的主机会使用便携后台模式，并将 PID 和日志保存到部署目录的 `data/` 和 `logs/`。安装器会识别常见 Linux 包管理器：`apt`、`dnf`、`yum`、`apk`、`pacman`、`zypper` 和 `xbps-install`。
 
 Docker 部署文件：
 
@@ -15,7 +15,7 @@ Docker 部署文件：
 
 Docker 安装器会在当前发行版提供时自动安装 Buildx，并优先使用 Buildx 构建；没有该插件时才使用 Docker 自带的兼容构建器。
 
-推荐直接使用仓库中的 `scripts/install-native.sh` 或 `scripts/install-docker.sh`；两者都支持 `--port PORT`、`--run-user USER`，默认使用执行 `sudo` 的当前用户，并且不会覆盖 `/etc/wps-adapter/secrets/`。安装器先从国内加速的 GitHub Release 下载预编译二进制，失败后才下载固定提交源码并现场编译；不会执行归档、二进制或工具链哈希校验。安装器默认将群组和根目录设为 `auto`，登录助手可以选择多个网页空间，但只设置一个 WebDAV 根目录；登录时可直接选择具体文件夹，也可跳过后在网页设置中选择。网页显示名称可在登录网页后点击右上角齿轮修改，并保存到 `/etc/wps-adapter/secrets/web-settings.json`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的预编译 Release 目录。
+推荐直接使用仓库中的 `scripts/install-native.sh` 或 `scripts/install-docker.sh`；两者都支持 `--port PORT`、`--run-user USER`，默认使用执行 `sudo` 的当前用户，并将所有应用配置集中到部署目录的 `config/`。执行命令时若当前目录是根目录或用户主目录，默认部署目录为 `/opt/wps-adapter`；在其他工作目录执行时使用当前目录。安装器先从国内加速的 GitHub Release 下载预编译二进制，失败后才下载固定提交源码并现场编译；不会执行归档、二进制或工具链哈希校验。登录助手只通过 SSH 私钥或 SSH 密码写入 `config/secrets/`。网页显示名称可在登录网页后点击右上角齿轮修改，并保存到 `config/secrets/web-settings.json`。可用 `WPS_ADAPTER_DIR` 覆盖部署目录，或用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的预编译 Release 目录。
 
 卸载时使用仓库中的 `scripts/uninstall.sh`。脚本会自动识别 Native 和 Docker，并删除本机配置、凭据、服务和应用文件；`--remove-image` 还会删除项目 Docker 镜像。没有 Docker 时会自动跳过 Docker 清理。卸载不会删除 WPS 云盘上的文件或 Docker 软件本身。
 

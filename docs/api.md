@@ -6,7 +6,7 @@
 
 打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页直接使用安装时设置的适配器 Basic Auth 账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、在线浏览 TXT、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以受限并发预取最多 24 个直接子文件夹，缓存 30 秒；进入已预取的文件夹时不再重复等待 WPS 列目录请求。刷新目录或执行写操作会清理这批缓存。
 
-网页不提供注册功能，也不创建额外的用户数据库。唯一网页登录账号就是安装时写入 `/etc/wps-adapter/secrets/adapter-username` 和 `/etc/wps-adapter/secrets/adapter-password` 的适配器账号；浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。替换这两个文件后，网页登录和 WebDAV 会同时使用新凭据。
+网页不提供注册功能，也不创建额外的用户数据库。唯一网页登录账号就是安装时写入 `/opt/wps-adapter/config/secrets/adapter-username` 和 `/opt/wps-adapter/config/secrets/adapter-password` 的适配器账号；浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。替换这两个文件后，网页登录和 WebDAV 会同时使用新凭据。
 
 ## WebDAV
 
@@ -103,7 +103,7 @@ Content-Type: application/json
 {"name":"我的云盘"}
 ```
 
-成功响应为 `200` JSON。名称只影响适配器网页、虚拟根目录元数据和 WebDAV `displayname`，不会重命名 WPS 远端文件夹。服务会将名称以权限受限的 JSON 文件保存到 `/etc/wps-adapter/secrets/web-settings.json`，不访问 WPS，因此即使 WPS 当前未连接也可以修改。
+成功响应为 `200` JSON。名称只影响适配器网页、虚拟根目录元数据和 WebDAV `displayname`，不会重命名 WPS 远端文件夹。服务会将名称以权限受限的 JSON 文件保存到 `/opt/wps-adapter/config/secrets/web-settings.json`，不访问 WPS，因此即使 WPS 当前未连接也可以修改。
 
 ### WebDAV storage location
 
@@ -127,11 +127,11 @@ Content-Type: application/json
 {"path":"/A/web"}
 ```
 
-保存后，WebDAV 地址仍然是 `/dav/`，但它映射到新的 WPS 文件夹；网页的 A、B 空间根目录不会改变。这个操作不会在 WPS 中移动、复制或删除任何文件；它只更新 `/etc/wps-adapter/secrets/wps-workspace.json` 的顶层 `group_id`、`root_id`、`root_path`，并保留 `spaces` 数组不变。服务会立即清理目录缓存并使用新位置，无需重启。
+保存后，WebDAV 地址仍然是 `/dav/`，但它映射到新的 WPS 文件夹；网页的 A、B 空间根目录不会改变。这个操作不会在 WPS 中移动、复制或删除任何文件；它只更新 `/opt/wps-adapter/config/secrets/wps-workspace.json` 的顶层 `group_id`、`root_id`、`root_path`，并保留 `spaces` 数组不变。服务会立即清理目录缓存并使用新位置，无需重启。
 
 ### Importing a WPS session
 
-`POST /api/v1/session/import` 使用适配器自己的 Basic Auth，建议通过 HTTPS 访问；没有域名或证书时也可以在可信网络使用 HTTP。它供本地 Python 登录助手使用，不供浏览器页面直接调用。请求体只接受从临时官方 WPS 登录窗口筛选出的 Cookie：
+`POST /api/v1/session/import` 是保留的受保护管理接口，使用适配器自己的 Basic Auth；它不再被 `wps_login.py` 调用，登录助手固定通过 SSH 写入配置目录。若自行调用该接口，必须自行承担传输协议的安全责任。请求体只接受从临时官方 WPS 登录窗口筛选出的 Cookie：
 
 ```json
 {
@@ -151,7 +151,7 @@ Content-Type: application/json
 }
 ```
 
-登录助手默认使用所选 WebDAV 空间的 `root_id=0`；如果选了文件夹，则顶层 `root_id/root_path` 指向该文件夹。`spaces` 中的每个空间始终使用 `root_id=0`，供网页从空间根目录开始浏览。输入 `s` 或直接回车可以省略目录选择，之后在网页设置中选择唯一的 WebDAV 根目录。服务端会再次限制 WPS 域名、检查 `rtk`/`csrf` 和工作区 ID，然后更新配置的 `WPS_COOKIE_FILE`、`WPS_CSRF_TOKEN_FILE` 和 `WPS_WORKSPACE_FILE`。发送 `workspace` 时必须已配置 `WPS_GROUP_ID=auto` 或 `WPS_ROOT_ID=auto`；成功响应为 `200` JSON，服务会立即切换自动根目录并清理目录缓存。凭据更新后不需要重启服务。通过 HTTP 访问时，Cookie 和 Basic Auth 会明文传输。
+登录助手默认使用所选 WebDAV 空间的 `root_id=0`；如果选了文件夹，则顶层 `root_id/root_path` 指向该文件夹。`spaces` 中的每个空间始终使用 `root_id=0`，供网页从空间根目录开始浏览。输入 `s` 或直接回车可以省略目录选择，之后在网页设置中选择唯一的 WebDAV 根目录。服务端会再次限制 WPS 域名、检查 `rtk`/`csrf` 和工作区 ID，然后更新配置的 `WPS_COOKIE_FILE`、`WPS_CSRF_TOKEN_FILE` 和 `WPS_WORKSPACE_FILE`。发送 `workspace` 时必须已配置 `WPS_GROUP_ID=auto` 或 `WPS_ROOT_ID=auto`；成功响应为 `200` JSON，服务会立即切换自动根目录并清理目录缓存。凭据更新后不需要重启服务。
 
 所有写操作如果带有 `Origin` 或 `Referer`，适配器会要求其主机与当前请求的 `Host` 一致，用于阻止浏览器缓存 Basic Auth 后的跨站写入；没有这两个头的 WebDAV、curl 和 NAS 请求仍可正常使用。
 
