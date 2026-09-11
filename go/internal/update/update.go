@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	defaultAPIURL   = "https://ghfast.top/https://api.github.com/repos/galiandan/WPS_2_WebDAV/releases/latest"
-	defaultAssetURL = "https://ghfast.top/https://github.com/galiandan/WPS_2_WebDAV/releases/download"
+	defaultAPIURL   = "https://gh-proxy.com/https://api.github.com/repos/galiandan/WPS_2_WebDAV/releases/latest"
+	defaultAssetURL = "https://gh-proxy.com/https://github.com/galiandan/WPS_2_WebDAV/releases/download"
 	checkTTL        = 10 * time.Minute
 	maxReleaseBody  = 2 << 20
 	maxBinarySize   = 512 << 20

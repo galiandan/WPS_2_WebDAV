@@ -37,6 +37,13 @@ func TestNormalizeVersionAndNewerThan(t *testing.T) {
 	}
 }
 
+func TestNewUsesDomesticUpdateSource(t *testing.T) {
+	updater := New("1.0.7")
+	if updater.apiURL != defaultAPIURL || updater.assetBaseURL != defaultAssetURL {
+		t.Fatalf("update sources = %q / %q, want domestic defaults", updater.apiURL, updater.assetBaseURL)
+	}
+}
+
 func TestFetchLatestUsesArchitectureAsset(t *testing.T) {
 	assetName := "wps-adapter-linux-" + runtime.GOARCH
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

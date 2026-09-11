@@ -109,15 +109,15 @@ Content-Type: application/json
 
 ### 更新
 
-`GET /api/v1/update` 使用网页会话或适配器 Basic Auth 查询最新 Release。发现新版本时，网页首页会显示更新按钮：
+`GET /api/v1/update` 使用网页会话或适配器 Basic Auth 查询最新 Release。网页会在后台检查；发现新版本时首页显示更新按钮，也可以点击桌面端顶部下载图标或移动端侧边菜单的“检查更新”手动检查。检查失败会保留文件页面，不会静默改变文件操作状态：
 
 ```json
 {
   "state": "available",
-  "current_version": "1.0.5",
-  "latest_version": "1.0.6",
+  "current_version": "1.0.6",
+  "latest_version": "1.0.7",
   "update_available": true,
-  "release_url": "https://github.com/galiandan/WPS_2_WebDAV/releases/tag/v1.0.6",
+  "release_url": "https://github.com/galiandan/WPS_2_WebDAV/releases/tag/v1.0.7",
   "message": "发现新版本"
 }
 ```

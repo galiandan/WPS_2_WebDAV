@@ -295,6 +295,7 @@ input, select {
 .brand-title { font-size: 15px; font-weight: 600; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brand-subtitle { color: var(--text-3); font-size: 10px; letter-spacing: .10em; line-height: 14px; text-transform: uppercase; }
 .header-actions { align-items: center; display: flex; flex-wrap: nowrap; gap: 6px; justify-content: flex-end; }
+.update-check-button.busy .icon { animation: spin .8s linear infinite; }
 .header-divider { background: var(--line); height: 28px; margin: 0 6px; width: 1px; }
 .icon-button { background: transparent; border-color: transparent; min-height: 36px; padding: 0; width: 36px; }
 .icon-button:hover { background: var(--surface-2); border-color: transparent; }
@@ -680,7 +681,7 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
   .brand-title { max-width: 44vw; }
   .brand-subtitle, .header-divider { display: none; }
   .header-actions { margin-left: auto; }
-  .header-actions #refresh-button, .header-actions #settings-button, .header-actions #theme-button, .header-actions #logout-button { display: none; }
+  .header-actions #refresh-button, .header-actions #update-check-button, .header-actions #settings-button, .header-actions #theme-button, .header-actions #logout-button { display: none; }
   .header-actions .connection { max-width: 44px; overflow: hidden; padding-left: 9px; padding-right: 9px; }
   .header-actions #connection-label { display: none; }
   .header-actions .connection > .icon { margin: 0; }

@@ -1827,12 +1827,13 @@
   /* ============ 更新 ============ */
   let updateStatus = null;
   let updatePollTimer = null;
+  let updateCheckInFlight = null;
 
   function updateIsActive() {
     return updateStatus && ["checking", "downloading", "restarting"].includes(updateStatus.state);
   }
 
-  function renderUpdateStatus(data) {
+  function renderUpdateStatus(data, { manual = false } = {}) {
     if (!data) return;
     const banner = $("update-banner");
     const button = $("update-button");
@@ -1840,7 +1841,7 @@
     const message = $("update-message");
     const active = updateIsActive();
     const available = Boolean(data.update_available && data.latest_version);
-    const dismissed = PREF.get("update-dismissed", "") === data.latest_version;
+    const dismissed = !manual && PREF.get("update-dismissed", "") === data.latest_version;
     banner.hidden = !(active || (available && !dismissed));
     if (available) version.textContent = `v${data.latest_version}`;
     if (active) {
@@ -1856,17 +1857,40 @@
     }
   }
 
-  async function checkForUpdate() {
-    try {
-      const data = await apiRequest("update");
-      updateStatus = data;
-      renderUpdateStatus(data);
-      return data;
-    } catch (_) {
-      // Update checks are optional. A mirror outage must never affect the
-      // file manager or turn a successful login into an error state.
-      return null;
-    }
+  async function checkForUpdate({ manual = false } = {}) {
+    if (updateCheckInFlight) return updateCheckInFlight;
+    const buttons = [$("update-check-button"), $("sidebar-update-button")].filter(Boolean);
+    updateCheckInFlight = (async () => {
+      buttons.forEach((button) => {
+        button.disabled = true;
+        button.classList.add("busy");
+      });
+      try {
+        const data = await apiRequest("update");
+        updateStatus = data;
+        renderUpdateStatus(data, { manual });
+        if (manual) {
+          if (data && data.update_available && data.latest_version) {
+            toast(`发现新版本 v${data.latest_version}`, "info");
+          } else if (data && data.state === "idle") {
+            toast("当前已是最新版本", "success");
+          } else if (data && data.state === "error") {
+            toast(data.message || "暂时无法检查更新", "error");
+          }
+        }
+        return data;
+      } catch (_) {
+        if (manual) toast("更新检查失败，请稍后重试", "error");
+        return null;
+      } finally {
+        buttons.forEach((button) => {
+          button.disabled = false;
+          button.classList.remove("busy");
+        });
+        updateCheckInFlight = null;
+      }
+    })();
+    return updateCheckInFlight;
   }
 
   function scheduleUpdatePoll() {
@@ -2537,6 +2561,11 @@
   $("logout-button").addEventListener("click", logout);
   $("update-button").addEventListener("click", startUpdate);
   $("update-dismiss").addEventListener("click", dismissUpdate);
+  $("update-check-button").addEventListener("click", () => checkForUpdate({ manual: true }));
+  $("sidebar-update-button").addEventListener("click", () => {
+    closeMobileNav();
+    checkForUpdate({ manual: true });
+  });
   $("connection").addEventListener("click", () => toggleStatusPanel());
   $("status-panel-close").addEventListener("click", () => toggleStatusPanel(false));
   $("status-refresh-button").addEventListener("click", async () => {
