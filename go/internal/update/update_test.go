@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -69,5 +72,41 @@ func TestFetchLatestRejectsNonHTTPSAPI(t *testing.T) {
 	u.apiURL = "http://example.invalid/latest"
 	if _, err := u.fetchLatest(context.Background()); err == nil {
 		t.Fatal("accepted a non-HTTPS update API")
+	}
+}
+
+func TestInstallReplacesTargetAfterVersionCheck(t *testing.T) {
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "wps-adapter")
+	if err := os.WriteFile(target, []byte("old"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WPS_ADAPTER_UPDATE_BINARY", target)
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1.0.5/wps-adapter-linux-"+runtime.GOARCH {
+			t.Fatalf("download path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("#!/bin/sh\nprintf '1.0.5 commit=test\\n'\n"))
+	}))
+	defer server.Close()
+
+	u := New("1.0.4")
+	u.assetBaseURL = server.URL
+	u.client = server.Client()
+	_, err := u.install(release{
+		Version:   "1.0.5",
+		Tag:       "v1.0.5",
+		AssetName: "wps-adapter-linux-" + runtime.GOARCH,
+	})
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "1.0.5") {
+		t.Fatalf("target was not replaced: %q", content)
 	}
 }
