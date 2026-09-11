@@ -2065,6 +2065,13 @@ def login_and_sync(
                     domain_suffix=domain_suffix,
                     timeout=wait_timeout,
                 )
+                # Keep the first validated snapshot. Enterprise WPS can
+                # rotate or temporarily hide a cross-domain CSRF cookie while
+                # the account probe is running; a second CDP cookie read must
+                # not discard credentials that already passed validation.
+                validated_credentials = credentials
+                validated_names = names
+                validated_cookies = selected_cookies
                 account_mode = detect_wps_mode(credentials, timeout=adapter_timeout)
                 all_cookies = session.cookies()
                 if account_mode == "personal":
@@ -2076,24 +2083,34 @@ def login_and_sync(
                         host="drive.wps.cn",
                         domain_suffix=personal_suffix,
                     )
-                    credentials, names = credentials_from_cookies(
-                        all_cookies,
-                        base_url=DEFAULT_PERSONAL_URL,
-                        domain_suffix=personal_suffix,
-                        mode="personal",
-                    )
+                    try:
+                        credentials, names = credentials_from_cookies(
+                            all_cookies,
+                            base_url=DEFAULT_PERSONAL_URL,
+                            domain_suffix=personal_suffix,
+                            mode="personal",
+                        )
+                    except LoginError:
+                        credentials = validated_credentials
+                        names = validated_names
+                        selected_cookies = validated_cookies
                 else:
                     selected_cookies = _select_login_cookies(
                         all_cookies,
                         host=_host_from_url(browser_url),
                         domain_suffix=domain_suffix,
                     )
-                    credentials, names = credentials_from_cookies(
-                        all_cookies,
-                        base_url=browser_url,
-                        domain_suffix=domain_suffix,
-                        mode="business",
-                    )
+                    try:
+                        credentials, names = credentials_from_cookies(
+                            all_cookies,
+                            base_url=browser_url,
+                            domain_suffix=domain_suffix,
+                            mode="business",
+                        )
+                    except LoginError:
+                        credentials = validated_credentials
+                        names = validated_names
+                        selected_cookies = validated_cookies
                 page_workspace = workspace_root_from_page_url(session.current_url())
                 if account_mode == "personal":
                     workspace = WpsWorkspaceSelection("personal", "", "0", mode="personal")
@@ -2624,7 +2641,7 @@ __all__ = [
 ]
 
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 
 def _standalone_parser() -> argparse.ArgumentParser:
