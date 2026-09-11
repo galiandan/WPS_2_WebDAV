@@ -21,7 +21,7 @@ ProtectSystem=strict
 ProtectHome=true
 # The optional root-managed credential refresh helper atomically replaces
 # these files after a confirmed WPS session refresh.
-ReadWritePaths=/opt/wps-adapter/config /opt/wps-adapter/data
+ReadWritePaths=/opt/wps-adapter/config /opt/wps-adapter/data /opt/wps-adapter/runtime
 
 [Install]
 WantedBy=multi-user.target

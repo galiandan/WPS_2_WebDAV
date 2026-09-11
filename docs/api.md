@@ -4,7 +4,7 @@
 
 ## 浏览器页面
 
-打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页直接使用安装时设置的适配器 Basic Auth 账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、在线浏览 TXT、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以受限并发预取最多 24 个直接子文件夹，缓存 30 秒；进入已预取的文件夹时不再重复等待 WPS 列目录请求。刷新目录或执行写操作会清理这批缓存。
+打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页直接使用安装时设置的适配器 Basic Auth 账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、在线浏览 TXT、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以受限并发预取最多 24 个直接子文件夹，缓存 30 秒；进入已预取或已经访问过的文件夹时，网页先立即显示缓存内容，再后台刷新，不会先清空列表等待 WPS。刷新目录或执行写操作会清理这批缓存。
 
 网页不提供注册功能，也不创建额外的用户数据库。唯一网页登录账号就是安装时写入 `/opt/wps-adapter/config/secrets/adapter-username` 和 `/opt/wps-adapter/config/secrets/adapter-password` 的适配器账号；浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。替换这两个文件后，网页登录和 WebDAV 会同时使用新凭据。
 
@@ -65,6 +65,8 @@ DELETE /api/v1/entries?path=/folder/file.txt
 PATCH /api/v1/entries?path=/folder/file.txt
 GET  /api/v1/settings
 PATCH /api/v1/settings
+GET   /api/v1/update
+POST  /api/v1/update
 POST  /api/v1/session/import
 GET   /api/v1/storage
 GET   /api/v1/storage/entries?path=/空间名称/子文件夹
@@ -104,6 +106,25 @@ Content-Type: application/json
 ```
 
 成功响应为 `200` JSON。名称只影响适配器网页、虚拟根目录元数据和 WebDAV `displayname`，不会重命名 WPS 远端文件夹。服务会将名称以权限受限的 JSON 文件保存到 `/opt/wps-adapter/config/secrets/web-settings.json`，不访问 WPS，因此即使 WPS 当前未连接也可以修改。
+
+### 更新
+
+`GET /api/v1/update` 使用网页会话或适配器 Basic Auth 查询最新 Release。发现新版本时，网页首页会显示更新按钮：
+
+```json
+{
+  "state": "available",
+  "current_version": "1.0.4",
+  "latest_version": "1.0.5",
+  "update_available": true,
+  "release_url": "https://github.com/galiandan/WPS_2_WebDAV/releases/tag/v1.0.5",
+  "message": "发现新版本"
+}
+```
+
+网页按钮发送 `POST /api/v1/update`。服务返回 `202` 后在后台下载当前 Linux 架构的 Release 二进制，确认其 `--version` 与 Release 标签一致，再原子替换部署目录中的运行文件并重启自身。`state` 可能是 `checking`、`downloading`、`restarting`、`available`、`idle` 或 `error`。更新不会执行 shell、不会接触 Docker Socket，也不会修改 `config/` 中的凭据和工作区文件。Native 需要 systemd 的 `ReadWritePaths` 包含 `runtime/`；Docker 安装器会将 `runtime/` 作为可写挂载并从该目录启动服务。旧 Docker 部署需要先通过最新安装器重新部署一次，才能获得 Docker 的持久化自更新入口。
+
+更新服务默认请求国内加速的 GitHub API 和 Release 地址。如果 VPS 无法访问默认镜像，可以设置 `WPS_ADAPTER_UPDATE_API_URL` 和 `WPS_ADAPTER_UPDATE_BASE_URL`，两者必须使用 HTTPS。项目遵循当前安装约定，不执行哈希校验，但会限制响应大小、拒绝符号链接目标，并运行新文件的版本检查。
 
 ### WebDAV storage location
 

@@ -22,6 +22,7 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/securefile"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/update"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/wps"
 	"github.com/galiandan/WPS_2_WebDAV/go/web"
@@ -56,6 +57,7 @@ type Application struct {
 	Budget   *budget.Budget
 	Storage  *storage.MultiSpace
 	Locks    *httpserver.DavLockStore
+	Updater  *update.Updater
 
 	rest *httpserver.RESTDispatcher
 	dav  *httpserver.DAVDispatcher
@@ -142,6 +144,7 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		return fail(err)
 	}
 	application.Settings = settings
+	application.Updater = update.New(version)
 	if cfg.AuthEnabled() {
 		adapterAuth := adapterAuthConfig(cfg)
 		authStatePath := filepath.Join(filepath.Dir(cfg.WebSettingsDir), "auth-settings.json")
@@ -269,6 +272,7 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		rest.SetWebAuth(application.Sessions)
 	}
 	rest.SetStorageLocations(application.storageLocations())
+	rest.SetUpdater(application.Updater)
 	davDownloads := downloadStorage{storage: davStorage}
 	dav, err := httpserver.NewDAVDispatcher(davStorage, limits,
 		httpserver.DAVLimits{

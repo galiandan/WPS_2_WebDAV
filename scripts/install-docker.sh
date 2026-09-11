@@ -6,7 +6,7 @@ set -Eeuo pipefail
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
 SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-ee120fc8c82de13b4a842e81f72459b4e0e0a7c1}"
-BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.4}"
+BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.5}"
 BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 DEFAULT_APP_DIR="/opt/wps-adapter"
 LEGACY_CONFIG_DIR="/etc/wps-adapter"
@@ -438,7 +438,7 @@ usage() {
   WPS_ADAPTER_DIR                    自定义部署目录；未设置时按当前 pwd 选择
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
-  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.4
+  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.5
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
   WPS_ADAPTER_GO_BUILDER_IMAGE         自定义 Go 1.25 构建镜像地址
@@ -953,6 +953,18 @@ else
     build_application_image
 fi
 
+if [[ ! -x "$APP_STAGE_DIR/wps-adapter" ]]; then
+    IMAGE_EXPORT_CONTAINER="$(docker create "$IMAGE_NAME")" \
+        || die "无法读取刚构建的 Docker 镜像中的服务二进制"
+    if ! docker cp "$IMAGE_EXPORT_CONTAINER:/usr/local/bin/wps-adapter" \
+        "$APP_STAGE_DIR/wps-adapter" >/dev/null 2>&1; then
+        docker rm "$IMAGE_EXPORT_CONTAINER" >/dev/null 2>&1 || true
+        die "无法准备 Docker 更新所需的运行文件"
+    fi
+    docker rm "$IMAGE_EXPORT_CONTAINER" >/dev/null 2>&1 || true
+    chmod 755 "$APP_STAGE_DIR/wps-adapter"
+fi
+
 STAGED_COOKIE="$TMP_DIR/wps-cookie"
 STAGED_CSRF="$TMP_DIR/wps-csrf"
 STAGED_WORKSPACE="$TMP_DIR/wps-workspace.json"
@@ -1062,6 +1074,13 @@ else
     install -o "$RUN_USER" -g "$RUN_GROUP" -m 600 "$ENV_TARGET_FILE" "$ENV_FILE"
 fi
 
+# Keep the executable in the deployment directory so the running service can
+# update itself without a Docker Socket. The container starts this mounted
+# file, so a later restart continues to use the upgraded binary.
+mv "$APP_STAGE_DIR" "$RUNTIME_DIR"
+APP_NEW_MOVED=1
+chown -R "$RUN_USER:$RUN_GROUP" "$RUNTIME_DIR"
+
 NEW_CONTAINER_STARTED=1
 # The directory must stay writable because credential rotation creates a
 # temporary file beside the target before atomically replacing it. Overlay the
@@ -1076,22 +1095,21 @@ docker run --detach \
     --security-opt no-new-privileges:true \
     --env-file "$ENV_FILE" \
     --env ADAPTER_BIND=0.0.0.0 \
+    --env "WPS_ADAPTER_UPDATE_BINARY=$RUNTIME_DIR/wps-adapter" \
     --volume "$SECRET_DIR:$SECRET_DIR:rw" \
     --volume "$RESUME_DIR:$RESUME_DIR:rw" \
+    --volume "$RUNTIME_DIR:$RUNTIME_DIR:rw" \
     --volume "$USER_FILE:$SECRET_DIR/$USER_BASENAME:ro" \
     --volume "$PASSWORD_FILE:$SECRET_DIR/$PASSWORD_BASENAME:ro" \
     --publish "$BIND:$PORT:$PORT" \
-    "$IMAGE_NAME" >/dev/null
+    --entrypoint "$RUNTIME_DIR/wps-adapter" \
+    "$IMAGE_NAME" serve >/dev/null
 progress_step "执行容器健康检查"
 sleep 1
 docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" | grep -qx true \
     || die "Docker 容器没有正常运行"
 health_check "http://127.0.0.1:$PORT/healthz" \
     || die "容器已启动但健康检查失败，请查看 docker logs $CONTAINER_NAME"
-
-mv "$APP_STAGE_DIR" "$RUNTIME_DIR"
-APP_NEW_MOVED=1
-chown -R "$RUN_USER:$RUN_GROUP" "$RUNTIME_DIR"
 
 if (( NATIVE_WAS_ACTIVE && NATIVE_SYSTEMD )); then
     systemctl disable wps-adapter.service

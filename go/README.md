@@ -26,17 +26,17 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/wps-adapter-lin
 
 ## 构建元数据
 
-默认版本为 `1.0.2`。发布构建应注入提交号和 UTC 构建时间：
+默认版本为 `1.0.5`。发布构建应注入提交号和 UTC 构建时间：
 
 ```sh
 CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-s -w -X main.version=1.0.2 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -ldflags "-s -w -X main.version=1.0.5 -X main.commit=$(git rev-parse HEAD) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o /tmp/wps-adapter ./cmd/wps-adapter
 ```
 
 ```sh
 /tmp/wps-adapter --version
-# 1.0.2 commit=<commit> build_time=<UTC时间>
+# 1.0.5 commit=<commit> build_time=<UTC时间>
 ```
 
 ## 命令
@@ -52,7 +52,8 @@ CGO_ENABLED=0 go build -trimpath \
 - `internal/app/`：凭据、workspace、WPS 客户端、预算、存储和 HTTP 组装。
 - `internal/wps/`：WPS 控制面、签名对象存储、上传、下载和 refresh。
 - `internal/storage/`：路径、当前空间映射、分页、缓存和 COPY 中继。
-- `internal/httpserver/`：REST、WebDAV、网页会话认证、Basic Auth、锁和静态资源路由。
+- `internal/httpserver/`：REST、WebDAV、网页会话认证、Basic Auth、锁、更新接口和静态资源路由。
+- `internal/update/`：Release 检查、架构资产选择、原子替换和进程重启。
 - `web/`：嵌入二进制的 `index.html`、`style.css`、`app.js`，没有前端构建步骤或外部资源。
 
 ## 运行约束

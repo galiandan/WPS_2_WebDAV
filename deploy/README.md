@@ -36,3 +36,5 @@ docker compose -f deploy/docker-compose.yml up -d --build
 Docker Compose 示例将 secret 目录保持可写，以支持“同目录临时文件 + 原子替换”的会话轮换；同时把默认的 Basic Auth 文件覆盖为只读挂载。若环境文件使用自定义文件名，需要同步修改 Compose 的两个只读文件挂载。
 
 Compose 的目录挂载必须保持可写：Cookie/CSRF 轮换需要在目录内创建临时文件后再原子替换目标文件。
+
+网页首页的一键更新由安装器部署的 Docker 运行方式提供：它把 `runtime/` 挂载到容器并从该目录启动二进制，因此更新后容器重启仍然使用新文件。手工 Compose 示例继续从镜像内的 `/usr/local/bin/wps-adapter` 启动，适合开发和手工构建；需要一键更新时请使用 `scripts/install-docker.sh` 重新部署一次。

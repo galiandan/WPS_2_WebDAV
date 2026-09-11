@@ -9,7 +9,7 @@ SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-ee120fc8c82de13b4a842e81f72459b4e0e0a7c1}"
 # Release assets are preferred. The source path below remains the complete
 # fallback for hosts that cannot reach the binary mirror or have an unsupported
 # prebuilt architecture.
-BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.4}"
+BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.5}"
 BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 # The service is built with a fixed toolchain only when the host does not
 # already provide a compatible Go compiler. The toolchain stays in the
@@ -429,7 +429,7 @@ usage() {
   WPS_ADAPTER_DIR                    自定义部署目录；未设置时按当前 pwd 选择
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
-  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.4
+  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.5
   WPS_ADAPTER_GO_URL                   自定义 Go 工具链 HTTPS 地址
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
@@ -826,7 +826,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$CONFIG_DIR $DATA_DIR
+ReadWritePaths=$CONFIG_DIR $DATA_DIR $RUNTIME_DIR
 
 [Install]
 WantedBy=multi-user.target
@@ -864,7 +864,7 @@ EOF
             /^WorkingDirectory=/ { print "WorkingDirectory=" app_dir; next }
             /^EnvironmentFile=/ && index($0, "wps-adapter.env") { print "EnvironmentFile=-" env_file; next }
             /^ExecStart=/ { print "ExecStart=" runtime_dir "/wps-adapter serve"; next }
-            /^ReadWritePaths=/ { print "ReadWritePaths=" config_dir " " data_dir; next }
+            /^ReadWritePaths=/ { print "ReadWritePaths=" config_dir " " data_dir " " runtime_dir; next }
             { print }
         ' "$SOURCE_DIR/deploy/wps-adapter.service" >"$UNIT_FILE"
         sed \

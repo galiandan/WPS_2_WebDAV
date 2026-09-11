@@ -754,6 +754,11 @@
     return pending;
   }
 
+  function cachedDirectoryEntries(path) {
+    const cached = directoryCache.get(canonicalPath(path));
+    return cached && Array.isArray(cached.entries) ? cached.entries : null;
+  }
+
   function pumpPrefetch(generation) {
     if (generation !== prefetchGeneration) return;
     while (prefetchActive < PREFETCH_CONCURRENCY && prefetchQueue.length) {
@@ -1627,6 +1632,8 @@
     const targetPath = canonicalPath(path);
     const previousPath = state.path;
     const preserveCurrentList = targetPath === state.path && force && state.entries.length > 0;
+    const cachedEntries = preserveCurrentList ? state.entries : cachedDirectoryEntries(targetPath);
+    const showCachedImmediately = preserveCurrentList || Array.isArray(cachedEntries);
     const requestGeneration = ++navigationGeneration;
     closeActionMenu();
     if (targetPath !== previousPath) state.selectedPath = "";
@@ -1638,22 +1645,27 @@
     syncHash(targetPath);
     renderBreadcrumbs();
     state.loading = true;
-    state.refreshing = preserveCurrentList;
+    state.refreshing = showCachedImmediately;
+    if (showCachedImmediately) state.entries = cachedEntries;
     $("refresh-button").classList.add("busy");
     $("refresh-progress").hidden = !state.refreshing;
     if (!quiet) setStatus(state.refreshing ? "正在刷新..." : "正在读取...");
     if (!state.refreshing) renderSkeleton();
     renderEntries({ animate: false });
     try {
+      // Start the status probe and directory request together. The former is
+      // useful for the status badge, but it should never add a full network
+      // round trip before a directory can be displayed.
+      const entriesRequest = directoryEntries(targetPath, force || showCachedImmediately)
+        .then((entries) => ({ entries }))
+        .catch((error) => ({ error }));
       const connection = await checkConnection(quiet);
       if (connection !== "connected") {
         if (requestGeneration !== navigationGeneration) return;
+        await entriesRequest;
         state.loading = false;
-        const cached = !force ? directoryCache.get(targetPath) : null;
-        const fallbackEntries = preserveCurrentList
-          ? state.entries
-          : cached && Array.isArray(cached.entries) ? cached.entries : [];
-        state.entries = fallbackEntries;
+        state.refreshing = false;
+        state.entries = showCachedImmediately ? cachedEntries : [];
         if (state.entries.length) {
           if (targetPath === "/") renderSpaceNav(state.entries);
           setStatus(`${connectionMessage(connection)}（显示缓存内容，尚未确认最新状态）`, "error");
@@ -1661,7 +1673,9 @@
         renderEntries({ animate: true });
         return;
       }
-      const entries = await directoryEntries(targetPath, force);
+      const result = await entriesRequest;
+      if (result.error) throw result.error;
+      const entries = result.entries;
       if (requestGeneration !== navigationGeneration) return;
       state.loading = false;
       state.refreshing = false;
@@ -1796,6 +1810,95 @@
     } catch (error) {
       setStatus("云盘名称读取失败，使用默认名称", "error");
     }
+  }
+
+  /* ============ 更新 ============ */
+  let updateStatus = null;
+  let updatePollTimer = null;
+
+  function updateIsActive() {
+    return updateStatus && ["checking", "downloading", "restarting"].includes(updateStatus.state);
+  }
+
+  function renderUpdateStatus(data) {
+    if (!data) return;
+    const banner = $("update-banner");
+    const button = $("update-button");
+    const version = $("update-version");
+    const message = $("update-message");
+    const active = updateIsActive();
+    const available = Boolean(data.update_available && data.latest_version);
+    const dismissed = PREF.get("update-dismissed", "") === data.latest_version;
+    banner.hidden = !(active || (available && !dismissed));
+    if (available) version.textContent = `v${data.latest_version}`;
+    if (active) {
+      button.disabled = true;
+      button.classList.add("is-loading");
+      button.querySelector("span").textContent = data.state === "restarting" ? "正在重启" : "正在更新";
+      message.textContent = data.message || "正在更新服务，请稍候...";
+    } else {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.querySelector("span").textContent = "立即更新";
+      message.textContent = data.message || "可以一键更新，配置和文件不会改变。";
+    }
+  }
+
+  async function checkForUpdate() {
+    try {
+      const data = await apiRequest("update");
+      updateStatus = data;
+      renderUpdateStatus(data);
+      return data;
+    } catch (_) {
+      // Update checks are optional. A mirror outage must never affect the
+      // file manager or turn a successful login into an error state.
+      return null;
+    }
+  }
+
+  function scheduleUpdatePoll() {
+    if (updatePollTimer) clearTimeout(updatePollTimer);
+    updatePollTimer = setTimeout(async () => {
+      updatePollTimer = null;
+      const data = await checkForUpdate();
+      if (data && data.state === "restarting") {
+        setStatus("更新完成，正在重启服务...", "pending");
+        window.setTimeout(() => window.location.reload(), 2200);
+      } else if (data && data.state === "error") {
+        setStatus(data.message || "更新失败，当前版本未改变", "error");
+      } else if (data && updateIsActive()) {
+        scheduleUpdatePoll();
+      }
+    }, 1800);
+  }
+
+  async function startUpdate() {
+    if (updateIsActive()) return;
+    const button = $("update-button");
+    button.disabled = true;
+    try {
+      const data = await apiRequest("update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      updateStatus = data;
+      renderUpdateStatus(data);
+      setStatus("正在更新服务，请稍候...", "pending");
+      toast("已开始更新，服务重启后页面会自动刷新", "info", 5000);
+      scheduleUpdatePoll();
+    } catch (error) {
+      button.disabled = false;
+      showError(error);
+    }
+  }
+
+  function dismissUpdate() {
+    if (updateStatus && updateStatus.latest_version) {
+      PREF.set("update-dismissed", updateStatus.latest_version);
+    }
+    $("update-banner").hidden = true;
   }
 
   /* ============ 对话框（输入 / 确认） ============ */
@@ -2420,6 +2523,8 @@
   $("password-toggle").addEventListener("click", togglePassword);
   $("passkey-login-button").addEventListener("click", passkeyLogin);
   $("logout-button").addEventListener("click", logout);
+  $("update-button").addEventListener("click", startUpdate);
+  $("update-dismiss").addEventListener("click", dismissUpdate);
   $("connection").addEventListener("click", () => toggleStatusPanel());
   $("status-panel-close").addEventListener("click", () => toggleStatusPanel(false));
   $("status-refresh-button").addEventListener("click", async () => {
@@ -2659,6 +2764,9 @@
     }
     renderBreadcrumbs();
     load(initial);
+    // This is intentionally fire-and-forget: the first directory render must
+    // not wait for a GitHub mirror or make the app feel blocked on startup.
+    checkForUpdate();
   }
 
   async function boot() {

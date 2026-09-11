@@ -131,6 +131,13 @@
     </div>
   </header>
 
+  <section id="update-banner" class="update-banner" role="status" aria-live="polite" hidden>
+    <span class="update-banner-icon" aria-hidden="true"><svg class="icon"><use href="#i-refresh"/></svg></span>
+    <div class="update-banner-copy"><strong>发现新版本 <span id="update-version"></span></strong><span id="update-message">可以一键更新，配置和文件不会改变。</span></div>
+    <button id="update-button" class="primary update-button" type="button"><svg class="icon"><use href="#i-download"/></svg><span>立即更新</span></button>
+    <button id="update-dismiss" class="icon-button small" type="button" title="暂不更新" aria-label="暂不更新"><svg class="icon"><use href="#i-x"/></svg></button>
+  </section>
+
   <div id="status-panel" class="status-panel" role="dialog" aria-label="WPS 连接状态" hidden>
     <div class="status-panel-head"><strong>连接状态</strong><button id="status-panel-close" class="icon-button small" type="button" title="关闭状态面板" aria-label="关闭状态面板"><svg class="icon"><use href="#i-x"/></svg></button></div>
     <div class="status-panel-service"><span class="status-indicator ok" aria-hidden="true"></span><div><strong>网页服务</strong><span>适配器正在运行</span></div></div>

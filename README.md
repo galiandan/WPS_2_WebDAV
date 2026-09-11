@@ -48,7 +48,7 @@ Docker 安装器也会先下载预编译二进制并制作最小运行镜像；�
 
 安装器会把配置、凭据、断点数据、日志和运行文件集中在部署目录：如果执行安装命令时当前目录是 `/`、`/root`、`/home` 或用户主目录，部署目录为 `/opt/wps-adapter`；在其他明确的工作目录执行时，部署目录就是当前目录。目录结构为 `config/`、`data/`、`logs/` 和 `runtime/`。systemd 注册单元仍位于系统规定的 `/etc/systemd/system/`。
 
-预编译 Release 默认使用 `v1.0.4`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
+预编译 Release 默认使用 `v1.0.5`。如果你维护自己的 Release 镜像，可在安装命令前设置 `WPS_ADAPTER_BINARY_BASE_URL`（目录地址，文件名由安装器追加）和 `WPS_ADAPTER_BINARY_RELEASE_TAG`。预编译资产名称为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64` 等；当前没有对应资产时会自动进入源码回退路径。
 
 ### 2. 在自己的电脑登录 WPS
 
@@ -82,6 +82,8 @@ WPS 登录后自动恢复的旧文件夹不会被误当成目标目录。网页�
 ~~~text
 http://<VPS地址>:54321/
 ~~~
+
+网页打开后会在后台检查项目 Release。发现新版本时，首页顶部会出现“立即更新”；点击后服务会下载当前 Linux 架构的预编译二进制，检查版本后自动替换并重启。配置、Cookie、工作区选择和 WPS 云端文件不会被修改，更新期间不要重复点击按钮。更新检查失败不会影响文件浏览。更新默认使用国内加速地址，也可以通过 `WPS_ADAPTER_UPDATE_API_URL` 和 `WPS_ADAPTER_UPDATE_BASE_URL` 指向你自己的 HTTPS Release 镜像。
 
 WebDAV：
 
@@ -224,6 +226,8 @@ contract_tests/  脱敏 JSON 契约金标准，供 Go 回归测试读取
 - 大文件失败后会在当前请求内有限重试；跨进程断点恢复仍属于实验性能力。
 - 文件夹 COPY 使用流式中继；LOCK 是当前进程内的兼容锁，服务重启后失效。
 - 网页可以同时显示多个 WPS 空间；WebDAV 始终只有一个根目录，并且可以映射到已选空间中的任意一个文件夹。
+- 网页目录切换优先立即显示浏览器缓存，并在后台刷新最新内容；首次访问没有缓存时仍会显示加载状态。
+- 网页一键更新依赖可访问的 HTTPS Release 镜像；如果当前部署目录不可写或没有对应架构的 Release 资产，服务会保留当前版本并显示失败原因。
 - 递归 PROPFIND、递归 COPY、上传和下载都受深度、条目、并发和磁盘预算限制。
 
 ## 安全

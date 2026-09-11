@@ -1,7 +1,9 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/update"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
 
@@ -38,6 +41,14 @@ type StorageLocationController interface {
 	Locations() (mode string, locations []StorageLocation, err error)
 	Browse(path string) ([]model.RemoteEntry, error)
 	Select(path string) error
+}
+
+// UpdateController is deliberately narrow: the HTTP layer can inspect and
+// start an update, but it never receives a command, path, or Docker handle.
+type UpdateController interface {
+	Check(context.Context) (update.Status, error)
+	Status() update.Status
+	Start() error
 }
 
 // CurrentStorageLocationController optionally supplies the one location
@@ -160,12 +171,18 @@ type RESTDispatcher struct {
 	// Python getattr fallback.
 	maxUploadBytes int64
 	locations      StorageLocationController
+	updater        UpdateController
 }
 
 // SetStorageLocations enables the authenticated storage-location settings
 // routes without changing the established dispatcher constructor contract.
 func (d *RESTDispatcher) SetStorageLocations(controller StorageLocationController) {
 	d.locations = controller
+}
+
+// SetUpdater enables the authenticated update status and start routes.
+func (d *RESTDispatcher) SetUpdater(controller UpdateController) {
+	d.updater = controller
 }
 
 // NewRESTDispatcher wires the dispatcher; a zero limits value selects the
@@ -214,6 +231,9 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 	case "POST":
 		if route.Suffix == "session/import" {
 			return d.session.Import(w, r)
+		}
+		if route.Suffix == "update" {
+			return d.doUpdateStart(w, r)
 		}
 		if route.Suffix == "folders" || route.Suffix == "folder" {
 			return d.doRestFolders(w, r, route)
@@ -340,6 +360,8 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 			return err
 		}
 		return sendJSON(w, r, http.StatusOK, settingsPayload{Status: "ok", Name: name}, d.limits, nil)
+	case "update":
+		return d.doUpdateStatus(w, r)
 	case "storage":
 		if err := discardBody(w, r, d.limits); err != nil {
 			return err
@@ -367,6 +389,43 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	// The download route lands with the download stage.
 	sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
 	return nil
+}
+
+func (d *RESTDispatcher) doUpdateStatus(w http.ResponseWriter, r *http.Request) error {
+	if d.updater == nil {
+		return model.NewStorageError(model.KindUnsupportedOperation, "update is unavailable")
+	}
+	if err := discardBody(w, r, d.limits); err != nil {
+		return err
+	}
+	status, err := d.updater.Check(r.Context())
+	if err != nil {
+		// Keep update outages separate from file operations. Returning the
+		// cached state lets the page remain usable when the mirror is down.
+		status = d.updater.Status()
+		status.Message = "暂时无法检查更新"
+	}
+	return sendJSON(w, r, http.StatusOK, status, d.limits, nil)
+}
+
+func (d *RESTDispatcher) doUpdateStart(w http.ResponseWriter, r *http.Request) error {
+	if d.updater == nil {
+		return model.NewStorageError(model.KindUnsupportedOperation, "update is unavailable")
+	}
+	if err := discardBody(w, r, d.limits); err != nil {
+		return err
+	}
+	if err := d.updater.Start(); err != nil {
+		if errors.Is(err, update.ErrInProgress) {
+			return sendJSON(w, r, http.StatusConflict, map[string]any{
+				"error": "update is already in progress",
+				"code":  "update_in_progress",
+				"state": d.updater.Status().State,
+			}, d.limits, nil)
+		}
+		return err
+	}
+	return sendJSON(w, r, http.StatusAccepted, d.updater.Status(), d.limits, nil)
 }
 
 func (d *RESTDispatcher) doStorageLocations(w http.ResponseWriter, r *http.Request) error {

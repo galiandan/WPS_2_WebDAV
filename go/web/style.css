@@ -477,6 +477,18 @@ h1 { font-size: 22px; font-weight: 600; line-height: 30px; margin: 0; }
 .status-refresh .icon { height: 16px; width: 16px; }
 .status-refresh.busy .icon { animation: spin 1s linear infinite; }
 
+/* 更新提示 */
+.update-banner { align-items: center; background: var(--accent-soft); border-bottom: 1px solid var(--accent-ring); color: var(--text); display: flex; gap: 11px; min-height: 54px; padding: 8px max(20px, calc((100vw - 1180px) / 2)); }
+.update-banner-icon { align-items: center; background: var(--surface); border: 1px solid var(--accent-ring); border-radius: 50%; color: var(--accent); display: inline-flex; flex: 0 0 30px; height: 30px; justify-content: center; width: 30px; }
+.update-banner-icon .icon { height: 16px; width: 16px; }
+.update-banner-copy { display: flex; flex: 1; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.update-banner-copy strong { font-size: 13px; font-weight: 650; }
+.update-banner-copy > span { color: var(--text-2); font-size: 12px; }
+.update-button { flex: 0 0 auto; min-height: 34px; padding: 6px 11px; }
+.update-button .icon { height: 15px; width: 15px; }
+.update-button.is-loading .icon { animation: spin .8s linear infinite; }
+.update-banner > .icon-button { flex: 0 0 30px; }
+
 /* 骨架 */
 #skeleton { padding: 6px 12px 14px; }
 #skeleton[data-view="grid"] { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); padding: 14px 0; }
@@ -677,6 +689,11 @@ dialog[open] .modal-card { animation: modal-in .24s var(--ease-out) both; }
   .sidebar { top: 56px; height: calc(100vh - 56px); }
   .mobile-scrim { inset: 56px 0 0; }
   .content { padding: 20px 16px 32px; }
+  .update-banner { align-items: flex-start; padding: 10px 12px; }
+  .update-banner-copy { align-content: center; flex-direction: column; gap: 2px; min-height: 34px; }
+  .update-button { align-self: center; padding-left: 9px; padding-right: 9px; }
+  .update-button span { display: none; }
+  .update-banner > .icon-button { align-self: center; }
   .workspace-head { margin-bottom: 14px; }
   h1 { font-size: 22px; }
   .navigation-row { align-items: stretch; flex-direction: column; gap: 8px; }
