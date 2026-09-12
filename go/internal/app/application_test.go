@@ -419,8 +419,11 @@ func TestWebPageEntriesServeFixedBytes(t *testing.T) {
 		if ct := response.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
 			t.Errorf("%s Content-Type = %q", path, ct)
 		}
-		if cc := response.Header.Get("Cache-Control"); cc != "no-store" {
+		if cc := response.Header.Get("Cache-Control"); cc != "no-cache" {
 			t.Errorf("%s Cache-Control = %q", path, cc)
+		}
+		if etag := response.Header.Get("ETag"); etag != web.PageETag() || etag == "" {
+			t.Errorf("%s ETag = %q, want the embedded page validator", path, etag)
 		}
 		if csp := response.Header.Get("Content-Security-Policy"); csp != webContentSecurityPolicy {
 			t.Errorf("%s CSP = %q", path, csp)
@@ -478,8 +481,11 @@ func TestWebAssetsServeFixedBytes(t *testing.T) {
 		if ct := response.Header.Get("Content-Type"); ct != contentType {
 			t.Errorf("%s Content-Type = %q", name, ct)
 		}
-		if cc := response.Header.Get("Cache-Control"); cc != "no-store" {
+		if cc := response.Header.Get("Cache-Control"); cc != "no-cache" {
 			t.Errorf("%s Cache-Control = %q", name, cc)
+		}
+		if etag := response.Header.Get("ETag"); etag == "" {
+			t.Errorf("%s is missing its ETag", name)
 		}
 		if sniff := response.Header.Get("X-Content-Type-Options"); sniff != "nosniff" {
 			t.Errorf("%s X-Content-Type-Options = %q", name, sniff)
@@ -488,6 +494,110 @@ func TestWebAssetsServeFixedBytes(t *testing.T) {
 			t.Errorf("%s unexpectedly carries a CSP", name)
 		}
 	}
+}
+
+func TestWebResourcesRevalidateWithETag(t *testing.T) {
+	cfg := withAuth(t, fixtureConfig(t))
+	server, _ := newTestServer(t, cfg)
+
+	// The page and every asset answer a matching If-None-Match with a
+	// header-only 304 that keeps the validator and the cache policy.
+	targets := []struct {
+		path string
+		etag string
+	}{
+		{"/", web.PageETag()},
+		{"/assets/style.css", mustAssetETag(t, "style.css")},
+		{"/assets/app.js", mustAssetETag(t, "app.js")},
+	}
+	for _, target := range targets {
+		conditionalHeaders := func(value string) map[string]string {
+			return map[string]string{
+				"Authorization": authHeaders["Authorization"],
+				"If-None-Match": value,
+			}
+		}
+		response := get(t, server.URL+target.path, conditionalHeaders(target.etag))
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotModified {
+			t.Errorf("%s conditional GET = %d, want 304", target.path, response.StatusCode)
+		}
+		if len(body) != 0 {
+			t.Errorf("%s 304 carried a body %q", target.path, body)
+		}
+		if response.Header.Get("Content-Length") != "" {
+			t.Errorf("%s 304 must not carry Content-Length", target.path)
+		}
+		if response.Header.Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s 304 Cache-Control = %q", target.path, response.Header.Get("Cache-Control"))
+		}
+		if response.Header.Get("ETag") != target.etag {
+			t.Errorf("%s 304 ETag = %q, want %q", target.path, response.Header.Get("ETag"), target.etag)
+		}
+		if response.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s 304 dropped nosniff", target.path)
+		}
+
+		// Weak comparison: the W/ prefix and list members match the strong
+		// tag, and "*" matches whatever is current.
+		for _, value := range []string{"W/" + target.etag, `"stale", ` + target.etag, "*"} {
+			response := get(t, server.URL+target.path, conditionalHeaders(value))
+			response.Body.Close()
+			if response.StatusCode != http.StatusNotModified {
+				t.Errorf("%s If-None-Match %s = %d, want 304", target.path, value, response.StatusCode)
+			}
+		}
+
+		// A validator that does not name the current build gets the full
+		// new representation.
+		response = get(t, server.URL+target.path, conditionalHeaders(`"outdated"`))
+		body, _ = io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK || len(body) == 0 {
+			t.Errorf("%s stale revalidation = %d body %d bytes", target.path, response.StatusCode, len(body))
+		}
+	}
+}
+
+func TestWebPageConditionalKeepsCSP(t *testing.T) {
+	cfg := withAuth(t, fixtureConfig(t))
+	server, _ := newTestServer(t, cfg)
+	response := get(t, server.URL+"/", map[string]string{
+		"Authorization": authHeaders["Authorization"],
+		"If-None-Match": web.PageETag(),
+	})
+	response.Body.Close()
+	if response.StatusCode != http.StatusNotModified {
+		t.Fatalf("conditional page = %d, want 304", response.StatusCode)
+	}
+	if csp := response.Header.Get("Content-Security-Policy"); csp != webContentSecurityPolicy {
+		t.Errorf("304 Content-Security-Policy = %q, want %q", csp, webContentSecurityPolicy)
+	}
+}
+
+func TestWebETagsDeriveFromContent(t *testing.T) {
+	pageTag := web.PageETag()
+	if pageTag == mustAssetETag(t, "style.css") || pageTag == mustAssetETag(t, "app.js") {
+		t.Error("the page tag must not collide with an asset tag")
+	}
+	if mustAssetETag(t, "style.css") == mustAssetETag(t, "app.js") {
+		t.Error("distinct assets must not share a validator")
+	}
+	for _, tag := range []string{pageTag, mustAssetETag(t, "style.css"), mustAssetETag(t, "app.js")} {
+		if len(tag) != len(`"sha256-"`)+64 || tag[0] != '"' || tag[len(tag)-1] != '"' {
+			t.Errorf("ETag %q is not a quoted sha256 validator", tag)
+		}
+	}
+}
+
+func mustAssetETag(t *testing.T, name string) string {
+	t.Helper()
+	etag, ok := web.AssetETag(name)
+	if !ok {
+		t.Fatalf("asset %q carries no ETag", name)
+	}
+	return etag
 }
 
 func TestWebAssetUnknownNamesRefused(t *testing.T) {

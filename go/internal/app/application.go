@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/budget"
@@ -880,9 +881,32 @@ func (a *Application) serveHealth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ifNoneMatchMatches applies RFC 9110 weak comparison for If-None-Match:
+// W/ prefixes and surrounding whitespace are ignored, comma-separated lists
+// match member-wise, and "*" matches whatever representation is current.
+func ifNoneMatchMatches(header, etag string) bool {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return false
+	}
+	if header == "*" {
+		return true
+	}
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == etag {
+			return true
+		}
+	}
+	return false
+}
+
 // serveWebApp mirrors _handle_web_app: the fixed page bytes with the CSP
 // that F4 froze. The root name arrives via the settings API, never through
-// template substitution.
+// template substitution. The page revalidates: a matching If-None-Match
+// answers with a header-only 304, so the browser's stored copy is reused
+// only while it still matches the running build.
 func (a *Application) serveWebApp(w http.ResponseWriter, r *http.Request) {
 	body := web.Page()
 	if body == nil {
@@ -891,10 +915,21 @@ func (a *Application) serveWebApp(w http.ResponseWriter, r *http.Request) {
 		httpserver.SendPlainError(w, r, http.StatusNotFound, "web page is unavailable")
 		return
 	}
+	etag := web.PageETag()
+	if ifNoneMatchMatches(r.Header.Get("If-None-Match"), etag) {
+		header := w.Header()
+		header.Set("Cache-Control", web.CacheControl)
+		header.Set("ETag", etag)
+		header.Set("Content-Security-Policy", webContentSecurityPolicy)
+		header.Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	header := w.Header()
 	header.Set("Content-Type", "text/html; charset=utf-8")
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	header.Set("Cache-Control", web.CacheControl)
+	header.Set("ETag", etag)
 	header.Set("Content-Security-Policy", webContentSecurityPolicy)
 	header.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
@@ -904,18 +939,28 @@ func (a *Application) serveWebApp(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveWebAsset mirrors _handle_web_asset: whitelisted assets only, with
-// the fixed MIME types, nosniff, and no-store. Unknown names close the
-// connection like Python's 404.
+// the fixed MIME types, nosniff, and revalidation through the content
+// ETag. Unknown names close the connection like Python's 404.
 func (a *Application) serveWebAsset(w http.ResponseWriter, r *http.Request, name string) {
 	body, contentType, ok := web.Asset(name)
 	if !ok {
 		httpserver.SendPlainError(w, r, http.StatusNotFound, "unknown web asset")
 		return
 	}
+	etag, _ := web.AssetETag(name)
+	if ifNoneMatchMatches(r.Header.Get("If-None-Match"), etag) {
+		header := w.Header()
+		header.Set("Cache-Control", web.CacheControl)
+		header.Set("ETag", etag)
+		header.Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	header := w.Header()
 	header.Set("Content-Type", contentType)
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	header.Set("Cache-Control", web.CacheControl)
+	header.Set("ETag", etag)
 	header.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
