@@ -884,6 +884,10 @@ remove_env_value ADAPTER_USER_DB
 remove_env_value ADAPTER_REGISTRATION_ENABLED
 set_env_value ADAPTER_BIND "$BIND"
 set_env_value ADAPTER_PORT "$PORT"
+# Container images carry no /tmp guarantee, and every upload larger than the
+# spool memory threshold needs a stat-able spool directory; point the spool
+# at the bind-mounted resume directory instead of the OS temp directory.
+set_env_value WPS_UPLOAD_SPOOL_DIR "$RESUME_DIR"
 chown "$RUN_USER:$RUN_GROUP" "$ENV_TARGET_FILE"
 chmod 600 "$ENV_TARGET_FILE"
 
@@ -935,6 +939,7 @@ if (( USE_PREBUILT )); then
             set_env_value ADAPTER_PASSWORD_FILE "$PASSWORD_FILE"
             set_env_value ADAPTER_BIND "$BIND"
             set_env_value ADAPTER_PORT "$PORT"
+            set_env_value WPS_UPLOAD_SPOOL_DIR "$RESUME_DIR"
             chown "$RUN_USER:$RUN_GROUP" "$ENV_TARGET_FILE"
             chmod 600 "$ENV_TARGET_FILE"
         fi
