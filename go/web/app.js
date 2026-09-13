@@ -1829,6 +1829,12 @@
   let updatePollTimer = null;
   let updateCheckInFlight = null;
   let localVersion = "";
+  // True while a started update is checking, downloading, or restarting.
+  // The self-restart severs the polling connection on purpose, so poll
+  // errors inside this window are expected and must not surface as a
+  // failure — the poll loop rides them out until the new service answers.
+  let updateInProgress = false;
+  let updatePollFailures = 0;
 
   function updateIsActive() {
     return updateStatus && ["checking", "downloading", "restarting"].includes(updateStatus.state);
@@ -1940,9 +1946,16 @@
       try {
         const data = await apiRequest("update");
         updateStatus = data;
+        updateInProgress = updateIsActive();
         renderUpdateStatus(data);
         return data;
       } catch (_) {
+        if (updateInProgress) {
+          // The self-restart closes the listener for a moment; a poll error
+          // there is expected. Keep the last in-flight status on screen and
+          // let scheduleUpdatePoll retry — never flip to a fake failure.
+          return null;
+        }
         updateStatus = {
           state: "error",
           current_version: knownCurrentVersion(),
@@ -1969,9 +1982,23 @@
         setStatus("更新完成，正在重启服务...", "pending");
         window.setTimeout(() => window.location.reload(), 2200);
       } else if (data && data.state === "error") {
+        updateInProgress = false;
+        updatePollFailures = 0;
         setStatus(data.message || "更新失败，当前版本未改变", "error");
+      } else if (data && !updateIsActive() && updateInProgress) {
+        // The restarted service answers with a settled state: the update
+        // succeeded, so reload into the new binary's page.
+        window.location.reload();
       } else if (data && updateIsActive()) {
+        updatePollFailures = 0;
         scheduleUpdatePoll();
+      } else if (!data && updateInProgress) {
+        updatePollFailures += 1;
+        if (updatePollFailures <= 15) {
+          scheduleUpdatePoll();
+        } else {
+          setStatus("服务重启时间较长，请稍后刷新页面确认版本", "pending");
+        }
       }
     }, 1800);
   }
@@ -1991,6 +2018,8 @@
         body: "{}",
       });
       updateStatus = data;
+      updateInProgress = true;
+      updatePollFailures = 0;
       renderUpdateStatus(data);
       setStatus("正在更新服务，请稍候...", "pending");
       toast("已开始更新，服务重启后页面会自动刷新", "info", 5000);
