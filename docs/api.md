@@ -114,10 +114,10 @@ Content-Type: application/json
 ```json
 {
   "state": "available",
-  "current_version": "1.0.13",
-  "latest_version": "1.0.14",
+  "current_version": "1.0.14",
+  "latest_version": "1.0.15",
   "update_available": true,
-  "release_url": "https://github.com/galiandan/WPS_2_WebDAV/releases/tag/v1.0.14",
+  "release_url": "https://github.com/galiandan/WPS_2_WebDAV/releases/tag/v1.0.15",
   "message": "发现新版本"
 }
 ```
