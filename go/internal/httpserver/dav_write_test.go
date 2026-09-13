@@ -216,6 +216,27 @@ func TestDavDeleteAnswers204(t *testing.T) {
 	}
 }
 
+// The DAV root maps onto an ordinary business folder; a DELETE on it must
+// be refused locally instead of taking the mapped tree to the recycle bin.
+func TestDavDeleteRefusesRoot(t *testing.T) {
+	mutations := &recordingMutations{}
+	router, _ := newWriteRouter(t, map[string]model.RemoteEntry{"/": rootFolder()}, mutations, nil)
+
+	for _, target := range []string{"/dav/", "/dav"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, writeRequest("DELETE", target, nil, ""))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("DELETE %s = %d, want 400 (body %q)", target, recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "root cannot be deleted") {
+			t.Fatalf("DELETE %s body = %q, want the root guard message", target, recorder.Body.String())
+		}
+	}
+	if len(mutations.deletes) != 0 {
+		t.Fatalf("deletes = %v, want no storage call", mutations.deletes)
+	}
+}
+
 func TestDavDestinationValidation(t *testing.T) {
 	router, _ := newWriteRouter(t, map[string]model.RemoteEntry{"/bench-one.txt": fileEntryAt("bench-one.txt")}, nil, nil)
 	cases := map[string]string{

@@ -95,7 +95,18 @@ func (v *DAVView) CreateFolderPath(path string) (model.RemoteEntry, error) {
 	return v.base.CreateFolderPath(mapped)
 }
 
+// DeletePath refuses the DAV root before mapping: "/" maps onto an ordinary
+// business folder whose deletion the storage layer's own root guard cannot
+// see, and a client cleaning up its mount must never take the mapped tree
+// with it.
 func (v *DAVView) DeletePath(path string) error {
+	parts, err := SplitRemotePath(path)
+	if err != nil {
+		return err
+	}
+	if len(parts) == 0 {
+		return model.NewStorageError(model.KindInvalidPath, "the root cannot be deleted")
+	}
 	mapped, err := v.mapPath(path)
 	if err != nil {
 		return err

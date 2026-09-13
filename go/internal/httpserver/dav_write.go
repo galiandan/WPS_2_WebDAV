@@ -171,10 +171,20 @@ func (d *DAVDispatcher) doDavMkcol(w http.ResponseWriter, r *http.Request, davPa
 }
 
 // doDavDelete mirrors do_DELETE's DAV branch: the body is discarded first,
-// then the lock check, then the delete answers 204.
+// then the lock check, then the delete answers 204. Deleting the DAV root is
+// refused locally: the root maps onto an ordinary business folder, so the
+// storage layer's own root guard cannot see it, and a client cleaning up its
+// mount must never take the mapped tree with it.
 func (d *DAVDispatcher) doDavDelete(w http.ResponseWriter, r *http.Request, davPath string) error {
 	if err := discardBody(w, r, d.limits); err != nil {
 		return err
+	}
+	parts, err := storage.SplitRemotePath(davPath)
+	if err != nil {
+		return err
+	}
+	if len(parts) == 0 {
+		return model.NewStorageError(model.KindInvalidPath, "the root cannot be deleted")
 	}
 	allowed, err := checkLocks(w, r, d.locks, false, davPath)
 	if err != nil {
