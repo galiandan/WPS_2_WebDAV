@@ -22,7 +22,12 @@ func PageGzip() []byte { return pageGzip() }
 
 var assetGzips = sync.OnceValue(func() map[string][]byte {
 	variants := make(map[string][]byte, len(assetContentTypes))
-	for name := range assetContentTypes {
+	for name, contentType := range assetContentTypes {
+		// Compress text assets only; already-compressed media (JPEG) gains
+		// nothing from a precomputed gzip variant.
+		if !strings.HasPrefix(contentType, "text/") {
+			continue
+		}
 		if data, _, ok := Asset(name); ok {
 			variants[name] = gzipBytes(data)
 		}

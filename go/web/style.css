@@ -6,6 +6,8 @@
    - tabler/tabler(42k★):彩色渐变类型图标、页头排版
    所有交互契约(ID/类名/结构)保持与 app.js 兼容。 */
 
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=Great+Vibes&family=Noto+Sans+SC:wght@300..500&family=Noto+Serif+SC:wght@400;500;600&family=Pinyon+Script&family=Raleway:wght@200;300&family=Spectral:ital,wght@1,300&display=swap');
+
 /* ============ 1. 设计令牌 ============ */
 :root {
   color-scheme: light;
@@ -236,217 +238,384 @@ input, select {
 .noscript { background: var(--warn-soft); color: var(--warn); padding: 18px; text-align: center; }
 .spin-icon .icon { animation: spin .48s var(--ease-out); }
 
-/* ============ 3. 登录:极光 + 玻璃卡片 ============ */
+/* ============ 3. 登录:雾蓝夜色开屏 ============
+   视觉复刻自 Sui 的 InternalBeyond 开屏页(CC BY-NC-SA 4.0,非商业使用):
+   雾蓝夜色照片底、整屏毛玻璃幕帘、左对齐衬线文字列、手写体签名、
+   发光细线、玻璃按钮与错落淡入;登录成功后雾气溶解进入工作台。 */
 .auth-screen {
-  align-items: center;
-  background: transparent;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  min-height: 100svh;
+  inset: 0;
   overflow: hidden;
-  padding: 48px 18px 28px;
-  position: relative;
+  position: fixed;
+  transition: opacity 1.4s ease-out 1.7s, visibility 1.4s ease-out 1.7s;
+  z-index: 20;
 }
-/* 两颗漂移的极光光球(dub / clay 风格)。 */
-.auth-screen::before,
-.auth-screen::after {
-  border-radius: 50%;
-  content: "";
-  filter: blur(85px);
-  pointer-events: none;
+.auth-screen.leaving { opacity: 0; pointer-events: none; visibility: hidden; }
+.auth-bg {
+  background: url("/assets/bg-internal.jpg") center 40% / cover no-repeat;
+  inset: 0;
   position: fixed;
   z-index: 0;
 }
-.auth-screen::before {
-  animation: aurora-a 20s ease-in-out infinite alternate;
-  background: radial-gradient(circle at 32% 32%, rgba(99, 102, 241, .5), transparent 68%);
-  height: 520px;
-  left: -140px;
-  top: -160px;
-  width: 560px;
-}
-.auth-screen::after {
-  animation: aurora-b 26s ease-in-out infinite alternate;
-  background: radial-gradient(circle at 60% 60%, rgba(168, 85, 247, .42), rgba(34, 211, 238, .18) 60%, transparent 75%);
-  bottom: -180px;
-  height: 560px;
-  right: -150px;
-  width: 580px;
-}
-.auth-shell {
-  display: block;
-  max-width: 460px;
-  position: relative;
-  width: 100%;
+/* 幕帘:深蓝罩色 + 整屏毛玻璃;溶解时散开露出照片。 */
+.auth-veil {
+  backdrop-filter: blur(4px) saturate(1) brightness(1);
+  -webkit-backdrop-filter: blur(4px) saturate(1) brightness(1);
+  background: rgba(15, 41, 95, 0.22);
+  inset: 0;
+  position: fixed;
+  transition: backdrop-filter 2.4s ease-out, background 2.4s ease-out,
+    -webkit-backdrop-filter 2.4s ease-out;
   z-index: 1;
 }
-.auth-card {
-  background: var(--glass);
-  border: 1px solid var(--glass-line);
-  border-radius: 22px;
-  box-shadow: var(--shadow-2), inset 0 1px 0 var(--glass-line);
-  backdrop-filter: blur(22px) saturate(1.5);
-  -webkit-backdrop-filter: blur(22px) saturate(1.5);
-  padding: 38px 36px 30px;
-  width: 100%;
+.auth-screen.leaving .auth-veil {
+  backdrop-filter: blur(0px) saturate(1) brightness(1);
+  -webkit-backdrop-filter: blur(0px) saturate(1) brightness(1);
+  background: rgba(31, 50, 88, 0);
 }
 @supports not (backdrop-filter: blur(1px)) {
-  .auth-card { background: var(--surface); }
+  .auth-veil { background: rgba(22, 42, 82, 0.5); }
+  .auth-screen.leaving .auth-veil { background: rgba(31, 50, 88, 0); }
 }
-.auth-card-brand {
+/* 环境光:右上光源、底部雾带与缓慢的黎明呼吸(splash-glow 同款)。 */
+.auth-glow {
+  animation: auth-dawn 58s ease-in-out infinite alternate;
+  background:
+    radial-gradient(ellipse 120% 95% at 74% 16%, rgba(186, 212, 247, 0.14) 0%, rgba(176, 204, 242, 0.06) 34%, transparent 66%),
+    radial-gradient(ellipse 90% 40% at 50% 88%, rgba(130, 162, 210, 0.10) 0%, rgba(130, 162, 210, 0.04) 42%, transparent 72%),
+    linear-gradient(to bottom, rgba(120, 152, 205, 0.10) 0%, rgba(104, 138, 195, 0.08) 50%, rgba(88, 122, 182, 0.07) 100%);
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 2;
+}
+@keyframes auth-dawn { 0% { opacity: 0.88; filter: brightness(1) saturate(1.03); } 100% { opacity: 1; filter: brightness(1.08) saturate(1.06); } }
+.auth-screen.leaving .auth-glow { opacity: 0; transition: opacity 1.4s ease-out; }
+.auth-shell {
   align-items: center;
-  color: var(--text);
   display: flex;
-  flex-direction: column;
-  font-size: 17px;
-  font-weight: 700;
-  gap: 12px;
-  margin-bottom: 30px;
+  flex: 1;
+  min-height: 0;
+  padding-left: clamp(28px, 10vw, 210px);
+  padding-right: clamp(28px, 10vw, 210px);
+  position: relative;
+  width: 100%;
+  z-index: 3;
 }
-.brand-mark {
-  align-items: center;
-  background: var(--grad-accent);
-  border-radius: 14px;
-  box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255, 255, 255, .35);
-  color: #fff;
-  display: inline-flex;
-  flex: 0 0 46px;
-  font-size: 20px;
-  font-weight: 800;
-  height: 46px;
-  justify-content: center;
+.auth-card { max-width: 480px; width: 100%; }
+/* 签名行与发光细线(splash-sign / splash-left-rule 同款)。 */
+.auth-sign {
+  animation: auth-rise 1s ease-out 0.1s both;
+  color: rgba(214, 229, 250, 0.82);
+  font-family: 'Cormorant Garamond', Georgia, 'Songti SC', serif;
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 300;
+  letter-spacing: 0.2em;
+  margin: 0 0 14px;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.72), 0 0 20px rgba(0, 0, 0, 0.32), 0 0 4px rgba(140, 180, 240, 0.22);
+  text-transform: uppercase;
 }
-.auth-heading { margin-bottom: 22px; text-align: center; }
-.auth-heading-row { align-items: center; display: flex; justify-content: center; margin-bottom: 10px; min-height: 28px; }
-.auth-kicker { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .1em; margin: 0; text-transform: uppercase; }
+.auth-sign-name {
+  color: rgba(234, 243, 255, 0.96);
+  font-family: 'Great Vibes', 'Snell Roundhand', 'Segoe Script', cursive;
+  font-size: 25px;
+  font-style: normal;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  margin-left: 2px;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.55), 0 0 22px rgba(120, 160, 220, 0.35), 0 0 5px rgba(200, 225, 255, 0.18);
+  vertical-align: -3px;
+}
+.auth-left-rule {
+  animation: auth-rule-in 1.2s ease-out 0.15s both;
+  background: rgba(214, 232, 252, 0.65);
+  box-shadow: 0 0 8px rgba(160, 200, 250, 0.35), 0 0 16px rgba(120, 170, 240, 0.15);
+  height: 0.5px;
+  margin-bottom: 26px;
+  width: 36px;
+}
+@keyframes auth-rule-in { from { opacity: 0; width: 0; } to { opacity: 1; width: 36px; } }
+.auth-heading { text-align: left; }
+.auth-heading-row { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: space-between; }
+.auth-kicker {
+  animation: auth-rise 1s ease-out 0.2s both;
+  color: rgba(222, 234, 250, 0.92);
+  font-family: 'Cormorant Garamond', Georgia, 'Songti SC', serif;
+  font-size: 15.5px;
+  font-style: italic;
+  font-weight: 300;
+  letter-spacing: 0.22em;
+  margin: 0;
+  position: relative;
+  text-shadow: 0 1px 12px rgba(4, 10, 26, 0.8), 0 0 22px rgba(0, 0, 0, 0.38), 0 0 5px rgba(150, 190, 245, 0.25);
+  text-transform: uppercase;
+}
+.auth-hl { color: rgba(248, 252, 255, 1); font-weight: 400; }
 .auth-local-badge {
+  animation: auth-rise 1s ease-out 0.25s both;
   align-items: center;
-  background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
-  border-radius: 999px;
-  color: var(--accent);
+  background: rgba(200, 220, 245, 0.13);
+  border: 1px solid rgba(200, 220, 245, 0.42);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 2px 6px rgba(4, 12, 30, 0.2);
+  color: rgba(236, 244, 255, 0.96);
   display: inline-flex;
+  font-family: 'Raleway', 'Noto Sans SC', sans-serif;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   gap: 6px;
+  letter-spacing: 0.1em;
   padding: 4px 10px;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.58);
 }
-.auth-badge-dot { background: var(--ok); border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); height: 6px; width: 6px; }
+.auth-badge-dot { background: #8fe3c0; border-radius: 50%; box-shadow: 0 0 8px rgba(120, 230, 180, 0.55); height: 6px; width: 6px; }
+/* 主句与次句:宋体陈述 + 细体说明(splash-desc / splash-desc2 同款)。 */
 .auth-heading h1 {
-  background: var(--grad-accent);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  font-size: 32px;
-  font-weight: 750;
-  letter-spacing: -.02em;
-  line-height: 40px;
+  animation: auth-rise 1s ease-out 0.5s both;
+  color: rgba(240, 245, 255, 0.95);
+  font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', serif;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 2;
+  margin: 0 0 10px;
+  text-shadow: 0 2px 14px rgba(4, 10, 26, 0.84), 0 0 24px rgba(0, 0, 0, 0.38), 0 0 8px rgba(150, 190, 245, 0.2);
+}
+.auth-white { color: #fff; }
+#auth-subtitle {
+  animation: auth-rise 1s ease-out 0.8s both;
+  color: rgba(230, 239, 252, 0.92);
+  font-family: 'Raleway', 'Noto Sans SC', sans-serif;
+  font-size: 15.5px;
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  line-height: 2;
   margin: 0;
 }
-.auth-heading p:last-child { color: var(--text-2); font-size: 14px; margin: 8px 0 0; }
+/* 分段控件与表单:整列玻璃(splash-action-btn 配方)。 */
 .auth-methods {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  animation: auth-rise 1s ease-out 1.05s both;
+  background: rgba(200, 220, 245, 0.1);
+  border: 1px solid rgba(200, 220, 245, 0.32);
+  border-radius: 8px;
   display: grid;
   gap: 3px;
   grid-template-columns: 1fr 1fr;
   height: 46px;
-  margin-bottom: 22px;
+  margin: 26px 0 18px;
   overflow: hidden;
   padding: 4px;
   position: relative;
 }
 .auth-method-slider {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  box-shadow: var(--shadow-1);
+  background: rgba(200, 220, 245, 0.2);
+  border: 1px solid rgba(200, 220, 245, 0.42);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
   inset: 4px auto 4px 4px;
   position: absolute;
   transition: transform .32s var(--ease-out);
   width: calc(50% - 6px);
 }
 .auth-methods[data-method="passkey"] .auth-method-slider { transform: translateX(calc(100% + 3px)); }
-.auth-method { background: transparent; border-color: transparent; border-radius: 9px; color: var(--text-2); font-size: 13px; font-weight: 500; min-height: 36px; padding: 6px 10px; position: relative; z-index: 1; }
-.auth-method:hover { background: transparent; border-color: transparent; color: var(--text); }
-.auth-method.active { background: transparent; border-color: transparent; box-shadow: none; color: var(--text); font-weight: 650; }
+.auth-method {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 5px;
+  color: rgba(214, 229, 250, 0.75);
+  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  min-height: 36px;
+  padding: 6px 10px;
+  position: relative;
+  z-index: 1;
+}
+.auth-method:hover { background: transparent; border-color: transparent; color: rgba(240, 246, 255, 0.95); }
+.auth-method.active { background: transparent; border-color: transparent; box-shadow: none; color: #fff; }
 .auth-method-panel { display: flex; flex-direction: column; gap: 16px; min-height: 228px; }
 .auth-method-panel#passkey-login-panel { justify-content: space-between; }
-.auth-method-panel:not(.hidden) { animation: auth-panel-in .28s var(--ease-out) both; }
+.auth-method-panel:not(.hidden) { animation: auth-rise .5s var(--ease-out) both; }
 .auth-form { display: flex; flex-direction: column; }
-.auth-field { color: var(--text-2); display: flex; flex-direction: column; font-size: 13px; gap: 7px; font-weight: 550; }
+.auth-field {
+  animation: auth-rise 1s ease-out 1.15s both;
+  color: rgba(214, 229, 250, 0.8);
+  display: flex;
+  flex-direction: column;
+  font-family: 'Raleway', 'Noto Sans SC', sans-serif;
+  font-size: 13px;
+  font-weight: 300;
+  gap: 7px;
+  letter-spacing: 0.04em;
+}
+.auth-field:nth-child(2) { animation-delay: 1.22s; }
 .auth-input-control {
   align-items: center;
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: 11px;
-  box-shadow: 0 1px 2px rgba(23, 25, 48, .04);
+  background: rgba(200, 220, 245, 0.13);
+  border: 1px solid rgba(200, 220, 245, 0.42);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(14, 30, 62, 0.18), 0 2px 6px rgba(4, 12, 30, 0.2);
   display: flex;
   gap: 10px;
   min-height: 46px;
   padding: 4px 12px;
-  transition: border-color .16s ease, box-shadow .16s ease;
+  transition: background 0.4s, border-color 0.4s, box-shadow 0.25s ease;
 }
 .auth-input-control:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-ring);
+  background: rgba(200, 220, 245, 0.15);
+  border-color: rgba(220, 235, 255, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), 0 6px 16px rgba(4, 12, 30, 0.28), 0 0 12px rgba(150, 190, 245, 0.22);
 }
-.auth-input-control > .icon { color: var(--text-3); height: 17px; width: 17px; }
-.auth-field input { background: transparent; border: 0; border-radius: 0; flex: 1; min-height: 34px; min-width: 0; outline: 0; padding: 6px 0; width: 100%; }
+.auth-input-control > .icon { color: rgba(214, 229, 250, 0.7); height: 17px; width: 17px; }
+.auth-field input {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: rgba(236, 244, 255, 0.96);
+  flex: 1;
+  font-family: inherit;
+  min-height: 34px;
+  min-width: 0;
+  outline: 0;
+  padding: 6px 0;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+  width: 100%;
+}
+.auth-field input::placeholder { color: rgba(173, 184, 208, 0.65); }
 .auth-field input:focus { border-color: transparent; box-shadow: none; }
 .auth-field input:-webkit-autofill {
-  -webkit-box-shadow: 0 0 0 40px var(--surface) inset;
-  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 60px #2a3a60 inset;
+  -webkit-text-fill-color: rgba(236, 244, 255, 0.96);
+  transition: background-color 9999s ease-out;
 }
 .password-control { position: relative; }
 .password-control input { padding-right: 36px; }
-.password-toggle { background: transparent; border: 0; border-radius: 8px; color: var(--text-3); min-height: 34px; padding: 0; position: absolute; right: 0; top: 5px; width: 34px; }
-.password-toggle:hover { background: var(--surface-2); color: var(--text); }
+.password-toggle {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: rgba(214, 229, 250, 0.7);
+  min-height: 34px;
+  padding: 0;
+  position: absolute;
+  right: 0;
+  top: 5px;
+  width: 34px;
+}
+.password-toggle:hover { background: rgba(200, 220, 245, 0.14); color: #fff; }
 .password-toggle .icon { height: 18px; width: 18px; }
-.primary {
-  background: var(--grad-accent);
-  border-color: transparent;
-  box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255, 255, 255, .28);
-  color: #fff;
-  font-weight: 600;
+/* 登录按钮:玻璃主按钮(splash-action-btn 完整配方)。 */
+.auth-submit {
+  background: rgba(200, 220, 245, 0.13);
+  border: 1px solid rgba(200, 220, 245, 0.42);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(14, 30, 62, 0.18), 0 2px 6px rgba(4, 12, 30, 0.2);
+  color: rgba(236, 244, 255, 0.96);
+  font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', serif;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  margin-top: 4px;
+  min-height: 46px;
+  padding: 10px 24px;
+  position: relative;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.58), 0 0 16px rgba(0, 0, 0, 0.22);
+  transition: background 0.4s, border-color 0.4s, color 0.4s, transform 0.16s cubic-bezier(0.22, 0.61, 0.36, 1), box-shadow 0.25s ease;
+  width: 100%;
+  z-index: 10;
 }
-.primary:hover {
-  background: var(--grad-accent-hover);
-  border-color: transparent;
-  box-shadow: 0 10px 26px rgba(99, 102, 241, .42), inset 0 1px 0 rgba(255, 255, 255, .28);
+.auth-submit:hover {
+  background: rgba(200, 220, 245, 0.15);
+  border-color: rgba(220, 235, 255, 0.45);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), inset 0 -1px 0 rgba(14, 30, 62, 0.16), 0 6px 16px rgba(4, 12, 30, 0.28), 0 0 12px rgba(150, 190, 245, 0.2);
   color: #fff;
-  transform: translateY(-1px);
+  transform: translateY(-1.5px);
 }
-.primary:active { transform: translateY(0); }
-.auth-submit { min-height: 48px; margin-top: 4px; width: 100%; }
-.auth-submit.secondary { align-items: center; background: var(--surface); border-color: var(--line-strong); box-shadow: var(--shadow-1); color: var(--text); display: flex; gap: 8px; justify-content: center; }
-.auth-submit.secondary:hover { border-color: var(--accent); color: var(--accent); }
+.auth-submit:active {
+  background: rgba(190, 212, 240, 0.19);
+  border-color: rgba(225, 238, 255, 0.5);
+  box-shadow: inset 0 2px 5px rgba(6, 16, 38, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 3px rgba(4, 12, 30, 0.22);
+  transform: translateY(0.5px) scale(0.985);
+  transition: background 0.08s, border-color 0.08s, color 0.08s, transform 0.08s, box-shadow 0.08s;
+}
+.auth-submit.secondary { display: flex; gap: 8px; justify-content: center; }
 .auth-submit.secondary .icon { height: 17px; width: 17px; }
 .auth-button-spinner { animation: spin .8s linear infinite; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: none; height: 15px; width: 15px; }
 .auth-submit.is-loading .auth-button-spinner { display: inline-block; }
-.auth-message { color: var(--bad); min-height: 22px; margin: 16px 0 0; text-align: center; }
-.auth-message.pending { color: var(--accent); }
-.auth-footnote { border-top: 1px solid var(--line); color: var(--text-3); font-size: 12px; margin: 18px 0 0; padding-top: 14px; text-align: center; }
-.passkey-prompt { align-items: flex-start; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 13px; padding: 16px; }
+.auth-message {
+  animation: auth-rise 1s ease-out 1.3s both;
+  color: #ff9fb0;
+  font-family: 'Raleway', 'Noto Sans SC', sans-serif;
+  min-height: 22px;
+  margin: 16px 0 0;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
+}
+.auth-message.pending { color: #a8c8f0; }
+.auth-footnote {
+  animation: auth-rise 1s ease-out 1.35s both;
+  border-top: 1px solid rgba(200, 220, 245, 0.18);
+  color: rgba(224, 236, 252, 0.86);
+  font-family: 'Raleway', 'Noto Sans SC', sans-serif;
+  font-size: 12px;
+  font-weight: 300;
+  letter-spacing: 0.04em;
+  margin: 18px 0 0;
+  padding-top: 14px;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
+}
+.passkey-prompt {
+  align-items: flex-start;
+  background: rgba(200, 220, 245, 0.1);
+  border: 1px solid rgba(200, 220, 245, 0.32);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  display: flex;
+  gap: 13px;
+  padding: 16px;
+}
 .passkey-prompt-icon {
   align-items: center;
-  background: var(--grad-accent);
-  border-radius: 12px;
-  box-shadow: var(--shadow-accent);
-  color: #fff;
+  background: rgba(200, 220, 245, 0.18);
+  border: 1px solid rgba(200, 220, 245, 0.4);
+  border-radius: 8px;
+  color: rgba(236, 244, 255, 0.96);
   display: inline-flex;
   flex: 0 0 42px;
   height: 42px;
   justify-content: center;
 }
-.passkey-prompt strong { display: block; font-size: 14px; font-weight: 650; margin-top: 1px; }
-.passkey-prompt p { color: var(--text-2); font-size: 12px; line-height: 1.6; margin: 5px 0 0; }
-.auth-security { align-items: center; color: var(--text-3); display: flex; font-size: 12px; gap: 8px; justify-content: center; margin: 18px 0 0; position: relative; z-index: 1; }
-.connection-dot { background: currentColor; border-radius: 50%; display: inline-block; flex: 0 0 7px; height: 7px; width: 7px; }
-.connection-dot.connected { color: var(--ok); }
+.passkey-prompt strong { color: rgba(240, 246, 255, 0.96); display: block; font-size: 14px; font-weight: 600; margin-top: 1px; }
+.passkey-prompt p { color: rgba(214, 229, 250, 0.8); font-size: 12px; line-height: 1.6; margin: 5px 0 0; }
+.auth-security {
+  animation: auth-rise 1s ease-out 1.5s both;
+  color: rgba(224, 236, 252, 0.66);
+  font-family: 'Raleway', 'Noto Sans SC', sans-serif;
+  font-size: 11.5px;
+  font-weight: 300;
+  gap: 8px;
+  justify-content: center;
+  letter-spacing: 0.03em;
+  margin: 0;
+  padding: 18px 20px 22px;
+  position: relative;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
+  z-index: 3;
+}
+.auth-security { display: block; }
+.connection-dot {
+  background: currentColor;
+  border-radius: 50%;
+  display: inline-block;
+  height: 7px;
+  margin-right: 7px;
+  vertical-align: 2px;
+  width: 7px;
+}
+.connection-dot.connected { color: #8fe3c0; }
+@keyframes auth-rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
 /* ============ 4. 顶栏:玻璃 ============ */
 .app-ui { min-height: 100vh; }
@@ -1295,8 +1464,6 @@ dialog[open] .modal-card { animation: modal-in .26s var(--ease-out) both; }
 @keyframes pulse-ring { from { opacity: .8; transform: scale(.6); } to { opacity: 0; transform: scale(2.1); } }
 @keyframes ants { to { stroke-dashoffset: -360; } }
 @keyframes shake { 0%, 100% { transform: none; } 35% { transform: translateX(-4px); } 70% { transform: translateX(4px); } }
-@keyframes aurora-a { from { transform: translate(0, 0) scale(1); } to { transform: translate(70px, 50px) scale(1.12); } }
-@keyframes aurora-b { from { transform: translate(0, 0) scale(1); } to { transform: translate(-80px, -46px) scale(1.08); } }
 .list-body > .list-row, .list-body > .card { animation: none; }
 .list-body.is-animating > .list-row { animation: row-in .28s var(--ease-out) both; animation-delay: calc(min(var(--i, 0), 7) * 16ms); }
 .list-body.is-animating > .card { animation: card-in .28s var(--ease-out) both; animation-delay: calc(min(var(--i, 0), 7) * 16ms); }
@@ -1325,11 +1492,11 @@ dialog[open] .modal-card { animation: modal-in .26s var(--ease-out) both; }
 
 /* ============ 18. 手机 ============ */
 @media (max-width: 767px) {
-  .auth-screen { justify-content: flex-start; padding: 20px 14px; }
-  .auth-screen::before { height: 320px; width: 340px; }
-  .auth-screen::after { height: 340px; width: 350px; }
-  .auth-card { padding: 26px 20px 22px; }
-  .auth-heading h1 { font-size: 27px; line-height: 34px; }
+  .auth-shell { align-items: flex-start; padding-left: 26px; padding-right: 26px; padding-top: 44px; }
+  .auth-card { max-width: none; }
+  .auth-heading h1 { font-size: 18px; line-height: 1.9; }
+  #auth-subtitle { font-size: 14px; }
+  .auth-security { padding-left: 26px; padding-right: 26px; text-align: left; }
   .app-header { height: 56px; }
   .header-inner { gap: 8px; padding-left: 12px; padding-right: 12px; }
   .brand-mark { flex-basis: 34px; border-radius: 11px; font-size: 16px; height: 34px; }
@@ -1396,5 +1563,6 @@ dialog[open] .modal-card { animation: modal-in .26s var(--ease-out) both; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .list-body.is-animating > .list-row, .list-body.is-animating > .card { animation: none !important; }
   .auth-method-slider { transition: none; }
-  body::before, body::after, .auth-screen::before, .auth-screen::after { animation: none !important; }
+  body::before, body::after, .auth-glow { animation: none !important; }
+  .auth-veil, .auth-screen { transition: none !important; }
 }

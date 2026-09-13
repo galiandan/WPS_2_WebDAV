@@ -21,7 +21,7 @@ import (
 	"sync"
 )
 
-//go:embed index.html style.css app.js
+//go:embed index.html style.css app.js bg-internal.jpg
 var files embed.FS
 
 // CacheControl is the fixed cache policy for every web asset: store freely,
@@ -30,8 +30,9 @@ const CacheControl = "no-cache"
 
 // assetContentTypes is the whitelist; anything outside it is never served.
 var assetContentTypes = map[string]string{
-	"app.js":    "text/javascript; charset=utf-8",
-	"style.css": "text/css; charset=utf-8",
+	"app.js":         "text/javascript; charset=utf-8",
+	"style.css":      "text/css; charset=utf-8",
+	"bg-internal.jpg": "image/jpeg",
 }
 
 // Page returns the index.html bytes. With //go:embed the file exists at

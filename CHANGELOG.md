@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 登录页整体换装为雾蓝夜色开屏（视觉复刻自 Sui 的 [InternalBeyond](https://github.com/Sui-IB/InternalBeyond) 开屏页，其界面设计为 CC BY-NC-SA 4.0，本项目为非商业使用并保留署名）：雾中花照片底图随二进制内嵌，整屏轻毛玻璃幕帘、左对齐衬线文字列（Cormorant Garamond 眉题 + Great Vibes 手写签名 + 宋体主句）、发光细线、玻璃质感分段控件与表单、错落淡入入场；登录成功后幕帘溶解露出底图再进入工作台。字体经 Google Fonts 加载，离线时按系统衬线/手写体回退；不支持 backdrop-filter 的浏览器以加重罩色兜底。登录页为固定夜色外观，不随亮暗主题切换；工作台视觉不受影响。
+
 ## [1.0.15] - 2026-09-13
 
 ### Fixed

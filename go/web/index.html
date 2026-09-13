@@ -66,13 +66,17 @@
   <noscript><div class="noscript">此页面需要启用 JavaScript 才能管理文件。</div></noscript>
 
   <section id="auth-screen" class="auth-screen" aria-labelledby="auth-title">
+    <div class="auth-bg" aria-hidden="true"></div>
+    <div class="auth-veil" aria-hidden="true"></div>
+    <div class="auth-glow" aria-hidden="true"></div>
     <div class="auth-shell">
       <div class="auth-card">
-      <div class="auth-card-brand"><span class="brand-mark" aria-hidden="true">W</span><span>WPS Drive</span></div>
+      <p class="auth-sign">Design by <span class="auth-sign-name">Galiandan</span></p>
+      <div class="auth-left-rule" aria-hidden="true"></div>
       <div class="auth-heading">
-        <div class="auth-heading-row"><p class="auth-kicker">文件工作台</p><span class="auth-local-badge"><span class="auth-badge-dot" aria-hidden="true"></span>本地验证</span></div>
-        <h1 id="auth-title">欢迎回来</h1>
-        <p id="auth-subtitle">登录后管理你的 WPS 文件</p>
+        <div class="auth-heading-row"><p class="auth-kicker">Welcome to <span class="auth-hl">W</span>PS <span class="auth-hl">D</span>rive</p><span class="auth-local-badge"><span class="auth-badge-dot" aria-hidden="true"></span>本地验证</span></div>
+        <h1 id="auth-title">这是一个<span class="auth-white">只属于你</span>的 WPS 云盘<span class="auth-white">工作台</span>。</h1>
+        <p id="auth-subtitle" class="auth-desc2">登录后浏览、上传和管理你在 WPS 里的全部文件，<br>同一个账号同时服务 WebDAV 客户端。</p>
       </div>
       <div id="auth-methods" class="auth-methods" data-method="password" role="tablist" aria-label="登录方式">
         <span class="auth-method-slider" aria-hidden="true"></span>
@@ -95,7 +99,7 @@
       <p class="auth-footnote">使用安装时设置的适配器账号登录；该账号同时用于 WebDAV。</p>
       </div>
     </div>
-    <p class="auth-security"><span class="connection-dot connected" aria-hidden="true"></span>凭据只在当前服务验证，不会显示在页面上</p>
+    <p class="auth-security"><span class="connection-dot connected" aria-hidden="true"></span>凭据只在当前服务验证，不会显示在页面上 · 开屏界面改编自 InternalBeyond (CC BY-NC-SA 4.0)</p>
   </section>
 
   <div id="app-ui" class="app-ui hidden">

@@ -477,7 +477,19 @@
 
   function showAppForUser(user) {
     webUser = user || null;
-    $("auth-screen").classList.add("hidden");
+    const authScreen = $("auth-screen");
+    if (authScreen.classList.contains("hidden")) {
+      authScreen.classList.add("hidden");
+    } else {
+      // 雾蓝开屏的溶解收束:幕帘散开(2.4s)后才摘除登录层,
+      // 期间工作台已在底层就绪,雾散即见。
+      authScreen.classList.add("leaving");
+      setTimeout(() => {
+        if (!authScreen.classList.contains("leaving")) return;
+        authScreen.classList.add("hidden");
+        authScreen.classList.remove("leaving");
+      }, 2400);
+    }
     $("app-ui").classList.remove("hidden");
     const name = webUser && webUser.username ? webUser.username : "退出登录";
     $("logout-button").title = `退出登录（${name}）`;
@@ -485,7 +497,9 @@
   }
 
   function showLoginScreen() {
-    $("auth-screen").classList.remove("hidden");
+    const authScreen = $("auth-screen");
+    authScreen.classList.remove("leaving");
+    authScreen.classList.remove("hidden");
     $("app-ui").classList.add("hidden");
   }
 
