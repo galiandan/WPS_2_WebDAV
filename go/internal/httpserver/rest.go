@@ -694,15 +694,20 @@ func contentLength(w http.ResponseWriter, r *http.Request, required bool) (*int6
 }
 
 // discardBody mirrors _discard_body: consume up to the declared length in
-// 64 KiB chunks, refusing oversized bodies before the first read.
+// 64 KiB chunks, refusing oversized bodies before the first read. Chunked
+// requests (already decoded by Go's transport — the Cloudflare Tunnel sends
+// bodyless control requests this way) drain through the same bounded reader
+// for every method, so handlers behind the boundary never see leftover
+// framing.
 func discardBody(w http.ResponseWriter, r *http.Request, limits ControlLimits) error {
-	if len(r.TransferEncoding) > 0 && r.Method == "MKCOL" {
+	if len(r.TransferEncoding) > 0 {
 		if limits.MaxControlBody <= 0 {
 			limits = DefaultControlLimits()
 		}
-		// MKCOL has no meaningful request body, but accepting and draining
-		// a bounded chunked body keeps clients that use chunked framing for
-		// an empty request interoperable. Never drain an unbounded stream.
+		// Control routes have no meaningful request body beyond what
+		// handlers parse themselves; draining the bounded decoded stream
+		// keeps clients that use chunked framing interoperable. Never drain
+		// an unbounded stream.
 		limited := io.LimitReader(r.Body, limits.MaxControlBody+1)
 		read, err := io.Copy(io.Discard, limited)
 		if err != nil {

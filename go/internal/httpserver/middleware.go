@@ -120,15 +120,15 @@ func recoverPanics(panicLog func(recovered any, stack []byte)) Middleware {
 func requestBoundary() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Go decodes chunked transfer coding before the handler runs. A
-			// few WebDAV clients send an empty MKCOL as chunked rather than
-			// Content-Length: 0; that method consumes its bounded body in
-			// discardBody. Uploads and REST control requests still require
-			// an explicit length.
-			if len(r.TransferEncoding) > 0 && r.Method != "MKCOL" {
-				sendError(w, r, http.StatusBadRequest, "Transfer-Encoding is not supported", false, nil, true)
-				return
-			}
+			// Go decodes chunked transfer coding before the handler runs, so
+			// a chunked request is safe to route: every control handler
+			// drains the decoded body through the bounded discardBody, and
+			// payload-carrying routes keep their explicit Content-Length
+			// requirement inside contentLength. The Cloudflare Tunnel
+			// re-frames bodyless requests as chunked on its HTTP/2-to-
+			// HTTP/1.1 hop, which made this a deployment reality rather than
+			// a client quirk: the web UI's own folder creation (bodyless
+			// POST) arrived chunked and was refused here with 400.
 			contentLengths := r.Header.Values("Content-Length")
 			if len(contentLengths) > 1 {
 				// Unreachable behind Go's transport (it rejects duplicates

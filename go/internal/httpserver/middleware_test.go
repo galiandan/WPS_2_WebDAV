@@ -234,13 +234,26 @@ func TestBoundaryFramingOnLiveServer(t *testing.T) {
 		return string(data)
 	}
 
-	// Mirrors tests/test_server.py::test_invalid_request_framing_closes_the_connection.
+	// Documented deviation from the Python baseline (which rejected every
+	// chunked request): the Cloudflare Tunnel re-frames bodyless requests as
+	// chunked on its HTTP/2-to-HTTP/1.1 hop, so chunked must route for every
+	// method. A chunked GET still passes authentication first.
 	response := exchange("GET /dav/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
-	if !strings.Contains(response, "400") || !strings.Contains(response, "Connection: close") {
-		t.Errorf("chunked framing response: %s", response)
+	if !strings.Contains(response, "401") {
+		t.Errorf("chunked GET without credentials must reach authentication: %s", response)
 	}
-	if !strings.Contains(response, "Transfer-Encoding is not supported") {
-		t.Errorf("chunked framing body missing: %s", response)
+	if strings.Contains(response, "Transfer-Encoding is not supported") {
+		t.Errorf("chunked framing must not be refused at the boundary: %s", response)
+	}
+
+	// The web UI's folder creation is exactly this shape: a bodyless POST
+	// that the tunnel delivers as chunked.
+	response = exchange("POST /api/v1/folders?path=/new-dir HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAuthorization: " + basicCredentials("user", "pass") + "\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
+	if !strings.Contains(response, "200") {
+		t.Errorf("chunked bodyless POST must route: %s", response)
+	}
+	if harness.router.callCount() != 1 {
+		t.Errorf("router calls = %d, want 1", harness.router.callCount())
 	}
 
 	response = exchange("GET /dav/x HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello")
@@ -252,8 +265,8 @@ func TestBoundaryFramingOnLiveServer(t *testing.T) {
 	if !strings.Contains(response, "200") {
 		t.Errorf("GET with empty body must route: %s", response)
 	}
-	if harness.router.callCount() != 1 {
-		t.Errorf("router calls = %d, want 1", harness.router.callCount())
+	if harness.router.callCount() != 2 {
+		t.Errorf("router calls = %d, want 2", harness.router.callCount())
 	}
 
 	// Some WebDAV clients encode an empty MKCOL with chunked framing. It
@@ -262,16 +275,93 @@ func TestBoundaryFramingOnLiveServer(t *testing.T) {
 	if !strings.Contains(response, "200") {
 		t.Errorf("chunked empty MKCOL must route: %s", response)
 	}
-	if harness.router.callCount() != 2 {
-		t.Errorf("router calls after MKCOL = %d, want 2", harness.router.callCount())
+	if harness.router.callCount() != 3 {
+		t.Errorf("router calls after MKCOL = %d, want 3", harness.router.callCount())
+	}
+
+	// Uploads keep the explicit-length requirement: a chunked PUT is refused
+	// by the upload length gate with guidance, not by the boundary.
+}
+
+func TestContentLengthRefusesChunkedWithGuidance(t *testing.T) {
+	request := httptest.NewRequest("PUT", "/dav/file.bin", nil)
+	request.TransferEncoding = []string{"chunked"}
+	recorder := httptest.NewRecorder()
+	length, err := contentLength(recorder, request, true)
+	if length != nil || err == nil {
+		t.Fatalf("chunked upload length = %v, err = %v, want refusal", length, err)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Errorf("status = %d, want no direct response (the caller maps the error)", recorder.Code)
+	}
+	var control *controlRequestError
+	if !errors.As(err, &control) || !strings.Contains(err.Error(), "send Content-Length") {
+		t.Errorf("err = %v, want a control request error with Content-Length guidance", err)
+	}
+
+	// A missing length on a required-length route answers 411 directly.
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest("PUT", "/dav/file.bin", nil)
+	length, err = contentLength(recorder, request, true)
+	if length != nil || err != nil {
+		t.Fatalf("missing length = %v, err = %v, want completed 411 response", length, err)
+	}
+	if recorder.Code != http.StatusLengthRequired {
+		t.Errorf("status = %d, want 411", recorder.Code)
+	}
+}
+
+func TestBoundaryFramingDuplicateContentLength(t *testing.T) {
+	harness := newChainHarness(t, nil)
+	server := httptest.NewServer(harness.handler)
+	defer server.Close()
+	address := strings.TrimPrefix(server.URL, "http://")
+	exchange := func(request string) string {
+		conn, err := net.Dial("tcp", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.Write([]byte(request)); err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(conn)
+		if err != nil {
+			t.Fatalf("reading response: %v", err)
+		}
+		return string(data)
 	}
 
 	// Documented transport deviation: Go rejects duplicate Content-Length
 	// before any handler runs; Python's boundary produced the same status
 	// with its own message.
-	response = exchange("GET /dav/x HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n")
+	response := exchange("GET /dav/x HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n")
 	if !strings.Contains(response, "400") {
 		t.Errorf("duplicate Content-Length response: %s", response)
+	}
+}
+
+func TestDiscardBodyDrainsChunkedForEveryMethod(t *testing.T) {
+	limits := DefaultControlLimits()
+	for _, method := range []string{"POST", "DELETE", "PROPFIND", "MOVE", "COPY", "MKCOL"} {
+		request := httptest.NewRequest(method, "/dav/x", strings.NewReader("decoded payload"))
+		request.TransferEncoding = []string{"chunked"}
+		recorder := httptest.NewRecorder()
+		if err := discardBody(recorder, request, limits); err != nil {
+			t.Errorf("%s chunked discard: %v", method, err)
+		}
+		if remaining, err := io.ReadAll(request.Body); err != nil || len(remaining) != 0 {
+			t.Errorf("%s chunked body was not drained (left %d bytes)", method, len(remaining))
+		}
+	}
+
+	// An oversized decoded body is refused, never drained unbounded.
+	oversized := strings.Repeat("x", int(limits.MaxControlBody)+16)
+	request := httptest.NewRequest("POST", "/api/v1/folders", strings.NewReader(oversized))
+	request.TransferEncoding = []string{"chunked"}
+	recorder := httptest.NewRecorder()
+	if err := discardBody(recorder, request, limits); err == nil {
+		t.Error("oversized chunked body must be refused")
 	}
 }
 
