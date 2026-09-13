@@ -693,6 +693,13 @@ func contentLength(w http.ResponseWriter, r *http.Request, required bool) (*int6
 	return &length, nil
 }
 
+// discardPool recycles the drain buffers: bodyless control requests arrive
+// on every PROPFIND, DELETE, and folder POST, and a fresh 64 KiB buffer per
+// request is pure garbage-collector churn.
+var discardPool = sync.Pool{
+	New: func() any { return make([]byte, 64*1024) },
+}
+
 // discardBody mirrors _discard_body: consume up to the declared length in
 // 64 KiB chunks, refusing oversized bodies before the first read. Chunked
 // requests (already decoded by Go's transport — the Cloudflare Tunnel sends
@@ -725,7 +732,8 @@ func discardBody(w http.ResponseWriter, r *http.Request, limits ControlLimits) e
 	if *length > limits.MaxControlBody {
 		return errRequestBodyTooLarge()
 	}
-	buf := make([]byte, 64*1024)
+	buf := discardPool.Get().([]byte)
+	defer discardPool.Put(buf)
 	for remaining := *length; remaining > 0; {
 		chunk := buf
 		if int64(len(chunk)) > remaining {

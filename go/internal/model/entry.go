@@ -20,10 +20,10 @@ func Ptr[T any](v T) *T {
 
 // RemoteEntry is the normalized metadata shared by the WPS and protocol layers.
 //
-// LinkID and Raw are internal WPS details: they drive upload and cache
-// behavior inside the WPS layer and must never reach REST or WebDAV
-// responses. MarshalJSON drops both, so even accidental serialization cannot
-// leak them; protocol layers should use the Public projection explicitly.
+// LinkID is an internal WPS detail: it drives upload behavior inside the
+// WPS layer and must never reach REST or WebDAV responses. MarshalJSON
+// drops it, so even accidental serialization cannot leak it; protocol
+// layers should use the Public projection explicitly.
 type RemoteEntry struct {
 	ID         string
 	Name       string
@@ -34,8 +34,6 @@ type RemoteEntry struct {
 	Etag       *string
 	// LinkID is the internal WPS file link identifier (the upload cid).
 	LinkID *string
-	// Raw is the untouched upstream payload kept for later WPS operations.
-	Raw map[string]any
 }
 
 // PublicEntry is the REST-facing projection of a RemoteEntry: exactly the

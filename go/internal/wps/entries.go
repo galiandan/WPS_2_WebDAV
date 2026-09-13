@@ -112,6 +112,9 @@ func entryFromItem(item map[string]any) (model.RemoteEntry, error) {
 	if rawLink, present := item["link_id"]; present && pyTruthy(rawLink) {
 		linkID = model.Ptr(pyStr(rawLink))
 	}
+	// The untouched upstream map is deliberately not retained: nothing
+	// reads it, and the folder cache holds every entry, so keeping it
+	// would multiply the cache's memory for dead weight.
 	return model.RemoteEntry{
 		ID:         pyStr(rawID),
 		Name:       name,
@@ -121,7 +124,6 @@ func entryFromItem(item map[string]any) (model.RemoteEntry, error) {
 		ModifiedAt: modifiedAt,
 		Etag:       etag,
 		LinkID:     linkID,
-		Raw:        item,
 	}, nil
 }
 

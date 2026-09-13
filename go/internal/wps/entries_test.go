@@ -55,9 +55,8 @@ func TestEntryFromItemFullShape(t *testing.T) {
 	if entry.LinkID == nil || *entry.LinkID != "download-cid" {
 		t.Fatalf("link id = %v", entry.LinkID)
 	}
-	if entry.Raw == nil || entry.Raw["signed_url"] == nil {
-		t.Fatal("raw payload must stay available for later WPS operations")
-	}
+	// The raw upstream payload is no longer part of the entry at all: it
+	// was never read, and the folder cache held every copy of it.
 	public := entry.Public()
 	encoded, err := json.Marshal(public)
 	if err != nil {

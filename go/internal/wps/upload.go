@@ -458,11 +458,12 @@ func (c *Client) spoolUpload(request UploadRequest) (*uploadSpool, error) {
 		file.close()
 		return nil, err
 	}
+	budgetProbe := int64(0)
 	for {
 		read, readErr := request.Source.Read(chunk)
 		if read > 0 {
 			body := chunk[:read]
-			if err := c.checkUploadBudget(total + int64(read)); err != nil {
+			if err := c.checkUploadBudgetThrottled(total+int64(read), &budgetProbe); err != nil {
 				return fail(err)
 			}
 			newReservation, err := c.config.SpoolLimiter.ReserveSpool(total+int64(read), reserved)
@@ -534,6 +535,34 @@ func (c *Client) checkUploadConfig() error {
 		return model.NewStorageError(model.KindBadRequest, "multipart_part_size must be positive")
 	}
 	return nil
+}
+
+// uploadFreeProbeInterval bounds how often the streaming upload probes the
+// spool's free space once the body outgrows the memory threshold: probing
+// per chunk is a statfs per read (a 1 GiB upload would statfs a thousand
+// times at the default chunk size). The interval also bounds how far the
+// disk can sink between probes; the reservation accounting stays exact
+// because ReserveSpool still runs for every chunk.
+const uploadFreeProbeInterval = 64 << 20
+
+// checkUploadBudgetThrottled is the streaming-loop form of checkUploadBudget:
+// nextProbe carries the total at which the next disk probe is due, so the
+// expensive statfs runs on threshold crossings instead of on every read.
+func (c *Client) checkUploadBudgetThrottled(total int64, nextProbe *int64) error {
+	if total < 0 {
+		return model.NewStorageError(model.KindBadRequest, "upload size must not be negative")
+	}
+	if c.config.MaxUploadBytes > 0 && total > c.config.MaxUploadBytes {
+		return model.NewStorageError(model.KindInsufficientStorage, "upload exceeds the configured size limit")
+	}
+	if total <= c.config.UploadSpoolMemory {
+		return nil
+	}
+	if *nextProbe != 0 && total < *nextProbe {
+		return nil
+	}
+	*nextProbe = ((total / uploadFreeProbeInterval) + 1) * uploadFreeProbeInterval
+	return c.checkUploadBudget(total)
 }
 
 // checkUploadBudget mirrors client._check_upload_budget: reject an upload

@@ -16,10 +16,6 @@ func TestRemoteEntryMarshalJSONExposesOnlyPublicFields(t *testing.T) {
 		ModifiedAt: Ptr("2026-09-01T10:00:00Z"),
 		Etag:       Ptr("etag-1"),
 		LinkID:     Ptr("link-77"),
-		Raw: map[string]any{
-			"signed_url": "https://internal.example/download?token=secret",
-			"link_id":    "link-77",
-		},
 	}
 	got, err := json.Marshal(entry)
 	if err != nil {
@@ -30,7 +26,7 @@ func TestRemoteEntryMarshalJSONExposesOnlyPublicFields(t *testing.T) {
 	if string(got) != want {
 		t.Errorf("Marshal() = %s, want %s", got, want)
 	}
-	for _, secret := range []string{"link-77", "signed_url", "internal.example", "raw"} {
+	for _, secret := range []string{"link-77", "internal.example", "raw"} {
 		if strings.Contains(string(got), secret) {
 			t.Errorf("Marshal() leaked internal value %q: %s", secret, got)
 		}
@@ -56,7 +52,6 @@ func TestRemoteEntryPublicProjectionExcludesInternals(t *testing.T) {
 		Name:   "docs",
 		Kind:   KindFolder,
 		LinkID: Ptr("link-88"),
-		Raw:    map[string]any{"x": "y"},
 	}
 	public := entry.Public()
 	if public.ID != "id-2" || public.Name != "docs" || public.Kind != KindFolder {
