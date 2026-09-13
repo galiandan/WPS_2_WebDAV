@@ -32,3 +32,6 @@ secrets/
 # Go build artifacts (the service targets Linux and is built at deploy time)
 go/wps-adapter
 go/wps-adapter.exe
+
+# UI preview scratch (screenshots from the mock preview server)
+test/ui-preview/shots/

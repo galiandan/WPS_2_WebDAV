@@ -59,9 +59,9 @@
   /* ============ 主题 ============ */
   const THEME_ORDER = ["auto", "light", "dark"];
   const THEME_META = {
-    auto: { icon: "monitor", color: "#f5f7f8" },
-    light: { icon: "sun", color: "#f5f7f8" },
-    dark: { icon: "moon", color: "#121517" },
+    auto: { icon: "monitor", color: "#f3f4fb" },
+    light: { icon: "sun", color: "#f3f4fb" },
+    dark: { icon: "moon", color: "#0b0d15" },
   };
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
   let theme = PREF.get("theme", "auto");
