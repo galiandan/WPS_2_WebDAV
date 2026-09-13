@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/securefile"
 )
@@ -159,6 +160,7 @@ type WorkspaceState struct {
 	mode     string
 	spaces   []Mount
 	mtimeNs  *int64
+	lastStat time.Time
 }
 
 // NewWorkspaceState mirrors WorkspaceState.__post_init__: validate the file
@@ -404,12 +406,25 @@ func (s *WorkspaceState) persistLocked(groupID string, rootID string, rootPath s
 	return nil
 }
 
+// stateStatInterval bounds how often the state file is stat'd for hot
+// reload. Every upstream request resolves the workspace (mode, group, root)
+// several times; without a floor each of those pays a serialized Lstat on
+// the shared mutex, and a file change unblocks them all behind a full read
+// plus parse. External writers (the login helper) are still noticed within
+// the interval; the adapter's own persists update the cached mtime directly.
+// Tests set it to 0 to restore the every-access check.
+var stateStatInterval = 500 * time.Millisecond
+
 // refreshLocked reloads the file when its mtime changed; parse failures
 // leave the previously applied state and cached mtime untouched.
 func (s *WorkspaceState) refreshLocked(force bool) error {
 	if s.filePath == "" {
 		return nil
 	}
+	if !force && !s.lastStat.IsZero() && time.Since(s.lastStat) < stateStatInterval {
+		return nil
+	}
+	s.lastStat = time.Now()
 	var statMtime *int64
 	info, err := os.Lstat(s.filePath)
 	switch {

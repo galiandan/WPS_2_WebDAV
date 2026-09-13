@@ -213,6 +213,9 @@ func TestPendingLoginWhenFileMissing(t *testing.T) {
 }
 
 func TestHotReloadAppliesFileChangesAtomically(t *testing.T) {
+	originalInterval := stateStatInterval
+	stateStatInterval = 0
+	t.Cleanup(func() { stateStatInterval = originalInterval })
 	dir := mkPrivateDir(t)
 	file := filepath.Join(dir, "workspace.json")
 	writeWorkspaceFile(t, file, `{"group_id": "g1", "root_id": "r1"}`)
@@ -506,5 +509,37 @@ func TestPyEscapeMatchesEnsureASCII(t *testing.T) {
 		if got := pyEscape(tc.input); got != tc.want {
 			t.Errorf("pyEscape(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+
+// TestStateStatThrottle pins the reload latency bound: external writes are
+// noticed on the first access after the stat interval, not on every access.
+func TestStateStatThrottle(t *testing.T) {
+	originalInterval := stateStatInterval
+	stateStatInterval = 60 * time.Millisecond
+	t.Cleanup(func() { stateStatInterval = originalInterval })
+	dir := mkPrivateDir(t)
+	file := filepath.Join(dir, "workspace.json")
+	writeWorkspaceFile(t, file, `{"group_id": "g1", "root_id": "r1"}`)
+	state, err := NewWorkspaceState(file, "", AutoValue)
+	if err != nil {
+		t.Fatalf("NewWorkspaceState: %v", err)
+	}
+	if groupID, err := state.GroupID(); err != nil || groupID != "g1" {
+		t.Fatalf("GroupID = (%q, %v), want g1", groupID, err)
+	}
+
+	// A rewrite inside the stat window is not observed yet.
+	writeWorkspaceFile(t, file, `{"group_id": "g2", "root_id": "r2"}`)
+	bumpMtime(t, file)
+	if groupID, err := state.GroupID(); err != nil || groupID != "g1" {
+		t.Fatalf("GroupID inside the stat window = (%q, %v), want g1", groupID, err)
+	}
+
+	// After the window the next access adopts the rewrite.
+	time.Sleep(90 * time.Millisecond)
+	if groupID, err := state.GroupID(); err != nil || groupID != "g2" {
+		t.Fatalf("GroupID after the stat window = (%q, %v), want g2", groupID, err)
 	}
 }
