@@ -58,12 +58,14 @@ func NewSignedObjectClient(config Config) *SignedObjectClient {
 
 // NewSignedTransport builds the direct signed-object transport (TLS
 // verified, no proxy environment). App wiring builds one shared instance
-// so every mounted space reuses the same connection pool, mirroring
-// Python's single shared opener. Dialed connections carry the configured
-// timeout as a per-operation deadline, mirroring the socket timeout of
-// Python's raw HTTPS connections: response-header waits, body reads, and
-// body writes to a stalled object host fail instead of blocking a transfer
-// slot forever, while flowing transfers are unaffected.
+// so every mounted space reuses the same connection pool, mirroring Python's
+// single shared opener. Dialed connections carry the configured timeout as a
+// per-operation deadline, mirroring the socket timeout of Python's raw HTTPS
+// connections: response-header waits, body reads, and body writes to a
+// stalled object host fail instead of blocking a transfer slot forever,
+// while flowing transfers are unaffected. The idle pool shares the
+// control-plane sizing so repeated part uploads and downloads reuse warm
+// TLS connections.
 func NewSignedTransport(timeout float64) http.RoundTripper {
 	duration := seconds(timeout)
 	return &http.Transport{
@@ -77,6 +79,9 @@ func NewSignedTransport(timeout float64) http.RoundTripper {
 		TLSHandshakeTimeout:   duration,
 		ResponseHeaderTimeout: duration,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		MaxIdleConns:          upstreamMaxIdleConns,
+		MaxIdleConnsPerHost:   upstreamMaxIdleConnsPerHost,
+		IdleConnTimeout:       upstreamIdleConnTimeout,
 	}
 }
 

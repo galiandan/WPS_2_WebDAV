@@ -324,12 +324,24 @@ func hasControlChars(value string) bool {
 	return false
 }
 
+// Upstream pool sizing: the default transport keeps only 2 idle connections
+// per host, so the web UI's parallel status probe and directory refresh (and
+// any concurrent spaces) keep paying TLS handshakes on every request beyond
+// the second. A warm pool changes no observable response — it only removes
+// the churn — while the request timeout still bounds every dial and
+// response-header wait.
+const (
+	upstreamMaxIdleConns        = 64
+	upstreamMaxIdleConnsPerHost = 16
+	upstreamIdleConnTimeout     = 90 * time.Second
+)
+
 // NewControlHTTPClient builds the real control-plane transport: TLS is
 // verified, redirects are never followed (the 3xx response surfaces so the
 // request layer maps its status), no cookie jar exists, and the configured
 // timeout bounds connection phases and the whole bounded control response.
-// App wiring builds one shared instance so every mounted space reuses the
-// same connection pool, mirroring Python's single shared opener.
+// App wiring builds one shared instance so every mounted space reuses
+// the same connection pool, mirroring Python's single shared opener.
 func NewControlHTTPClient(timeout float64) *http.Client {
 	duration := seconds(timeout)
 	return &http.Client{
@@ -339,6 +351,9 @@ func NewControlHTTPClient(timeout float64) *http.Client {
 			TLSHandshakeTimeout:   duration,
 			ResponseHeaderTimeout: duration,
 			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+			MaxIdleConns:          upstreamMaxIdleConns,
+			MaxIdleConnsPerHost:   upstreamMaxIdleConnsPerHost,
+			IdleConnTimeout:       upstreamIdleConnTimeout,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse

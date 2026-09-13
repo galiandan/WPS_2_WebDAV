@@ -179,6 +179,14 @@ func (b *Budget) TryAcquireConnection() (func(), bool) {
 	}
 }
 
+// SpoolDir exposes the directory large uploads spool into: the configured
+// value, the resume-directory fallback applied by app assembly, or empty for
+// the OS temp default. Diagnostics and tests verify the resolution without
+// staging a large upload.
+func (b *Budget) SpoolDir() string {
+	return b.uploadSpoolDir
+}
+
 // ReserveSpool reserves spool bytes for one upload and returns the upload's
 // total reservation, mirroring client.py's _reserve_spool_bytes: uploads at
 // or below the in-memory threshold never reserve, and larger uploads must

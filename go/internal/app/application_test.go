@@ -329,6 +329,11 @@ func newTestServer(t *testing.T, cfg config.Config) (*httptest.Server, *Applicat
 	return server, application
 }
 
+// testClient neither adds Accept-Encoding nor transparently decompresses:
+// each request states its own encoding preference and each test asserts the
+// exact bytes and headers the server put on the wire.
+var testClient = &http.Client{Transport: &http.Transport{DisableCompression: true}}
+
 func get(t *testing.T, url string, headers map[string]string) *http.Response {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodGet, url, nil)
@@ -338,7 +343,7 @@ func get(t *testing.T, url string, headers map[string]string) *http.Response {
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := testClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

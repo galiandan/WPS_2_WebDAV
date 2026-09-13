@@ -8,6 +8,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -163,6 +164,18 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	// The budget precedes the clients: the client's spool reservations
 	// coordinate through it (D-03), so uploads can never bypass the
 	// process-wide limits.
+	// Large uploads spool to disk above the memory threshold, and the OS
+	// temp default is a real failure mode in container images that carry no
+	// /tmp: the reservation probe then fails every such upload with 507.
+	// Without a configured spool directory, fall back to the resume
+	// directory — the same bind-mounted data path deployments always
+	// provide — and make an unusable spool visible in the startup log
+	// before any client sees the failure. Mutating the local config copy
+	// puts the client assembly below on the same resolved directory.
+	cfg.UploadSpoolDir = resolveSpoolDir(cfg.UploadSpoolDir, cfg.UploadResumeDir)
+	if warning := probeSpoolDir(cfg.UploadSpoolDir, cfg.UploadSpoolMemory); warning != "" {
+		log.Printf("%s", warning)
+	}
 	maxConnections := cfg.MaxConnections
 	if maxConnections <= 0 {
 		maxConnections = config.DefaultMaxConnections
@@ -902,6 +915,37 @@ func ifNoneMatchMatches(header, etag string) bool {
 	return false
 }
 
+// resolveSpoolDir picks where large uploads spool: a configured directory
+// wins; without one the resume directory reuses the data path that
+// deployments always mount; an empty result keeps budget's OS-temp default.
+func resolveSpoolDir(spoolDir, resumeDir string) string {
+	if spoolDir != "" {
+		return spoolDir
+	}
+	return resumeDir
+}
+
+// probeSpoolDir self-heals a missing spool directory — mode 0o700 matches
+// the directories the multipart resume writer creates beside it — and
+// returns a warning when large uploads would still fail their disk
+// reservation. It never blocks startup: uploads within the memory threshold
+// never touch the spool, and budget re-reports the exact failure per
+// request.
+func probeSpoolDir(spoolDir string, spoolMemory int64) string {
+	if spoolDir == "" {
+		return ""
+	}
+	if err := os.MkdirAll(spoolDir, 0o700); err != nil {
+		threshold := spoolMemory >> 20
+		if threshold < 1 {
+			threshold = 1
+		}
+		return fmt.Sprintf("warning: upload spool directory %q is unavailable (%v); uploads larger than %d MiB will fail with 507 until it is restored",
+			spoolDir, err, threshold)
+	}
+	return ""
+}
+
 // serveWebApp mirrors _handle_web_app: the fixed page bytes with the CSP
 // that F4 froze. The root name arrives via the settings API, never through
 // template substitution. The page revalidates: a matching If-None-Match
@@ -925,7 +969,12 @@ func (a *Application) serveWebApp(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
+	body, encoding := web.NegotiateGzip(r, body, web.PageGzip())
 	header := w.Header()
+	if encoding != "" {
+		header.Set("Content-Encoding", encoding)
+		header.Add("Vary", "Accept-Encoding")
+	}
 	header.Set("Content-Type", "text/html; charset=utf-8")
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	header.Set("Cache-Control", web.CacheControl)
@@ -956,7 +1005,15 @@ func (a *Application) serveWebAsset(w http.ResponseWriter, r *http.Request, name
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
+	var encoding string
+	if gzipped, ok := web.AssetGzip(name); ok {
+		body, encoding = web.NegotiateGzip(r, body, gzipped)
+	}
 	header := w.Header()
+	if encoding != "" {
+		header.Set("Content-Encoding", encoding)
+		header.Add("Vary", "Accept-Encoding")
+	}
 	header.Set("Content-Type", contentType)
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	header.Set("Cache-Control", web.CacheControl)
