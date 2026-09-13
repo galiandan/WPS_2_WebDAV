@@ -455,6 +455,33 @@ func (s *Storage) invalidate() {
 	s.folders.Invalidate()
 }
 
+// invalidateFolders drops the given parent folders' listings and leaves
+// every other cached folder intact: a mutation only changes the parents'
+// listings, so renaming one file no longer forces a full cold re-list of
+// the whole tree. The caller resolves parents through the cached walk, so
+// the group id read here is already synchronized.
+func (s *Storage) invalidateFolders(parentIDs ...string) {
+	if len(parentIDs) == 0 {
+		return
+	}
+	s.mu.Lock()
+	groupID := s.groupID
+	s.mu.Unlock()
+	for _, parentID := range parentIDs {
+		s.folders.InvalidateFolder(groupID, parentID)
+	}
+}
+
+// invalidateParentOf targets the entry's recorded parent and falls back to
+// the full invalidation only when the upstream page carried no parent id.
+func (s *Storage) invalidateParentOf(entry model.RemoteEntry) {
+	if entry.ParentID != nil && *entry.ParentID != "" {
+		s.invalidateFolders(*entry.ParentID)
+		return
+	}
+	s.invalidate()
+}
+
 // RootID returns the current virtual root id (hot-updated for auto roots).
 func (s *Storage) RootID() string {
 	s.mu.Lock()
@@ -530,7 +557,7 @@ func (s *Storage) UploadPath(ctx context.Context, path string, source io.Reader,
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
-	s.invalidate()
+	s.invalidateFolders(parent.ID)
 	return result, nil
 }
 
@@ -575,7 +602,7 @@ func (s *Storage) CreateFolder(parentID *string, name string) (model.RemoteEntry
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
-	s.invalidate()
+	s.invalidateFolders(parent)
 	return result, nil
 }
 
@@ -601,7 +628,7 @@ func (s *Storage) CreateFolderPath(path string) (model.RemoteEntry, error) {
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
-	s.invalidate()
+	s.invalidateFolders(parent.ID)
 	return result, nil
 }
 
@@ -709,7 +736,7 @@ func (s *Storage) DeletePath(path string) error {
 	if err := s.writer.Delete(entry.ID); err != nil {
 		return err
 	}
-	s.invalidate()
+	s.invalidateParentOf(entry)
 	return nil
 }
 
@@ -735,7 +762,7 @@ func (s *Storage) Rename(entryID string, name string) (model.RemoteEntry, error)
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
-	s.invalidate()
+	s.invalidateParentOf(result)
 	return result, nil
 }
 
@@ -779,7 +806,7 @@ func (s *Storage) RenamePath(path string, name string) (model.RemoteEntry, error
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
-	s.invalidate()
+	s.invalidateFolders(parent.ID)
 	return result, nil
 }
 
@@ -835,7 +862,7 @@ func (s *Storage) MoveToParentPath(path string, parentPath string) (model.Remote
 	if err := s.writer.Move(entry.ID, sourceParent.ID, destinationParent.ID); err != nil {
 		return model.RemoteEntry{}, err
 	}
-	s.invalidate()
+	s.invalidateFolders(sourceParent.ID, destinationParent.ID)
 	return model.RemoteEntry{
 		ID:         entry.ID,
 		Name:       entry.Name,

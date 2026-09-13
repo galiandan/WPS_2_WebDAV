@@ -3,11 +3,12 @@
 // parent ID, with same-key request merging so a cold directory is fetched
 // from WPS exactly once no matter how many requests race on it.
 //
-// The root generation partitions entries across workspace remappings and
-// successful mutations: invalidation bumps the generation, so a listing
-// that was in flight before the change can only land under the old
-// generation's key and never repopulates the new one ("迟到请求不得污染
-// 新 workspace").
+// The root generation partitions entries across workspace remappings: a
+// full invalidation bumps the generation, so a listing that was in flight
+// before the change can only land under the old generation's key and never
+// repopulates the new one ("迟到请求不得污染新 workspace"). Single-folder
+// invalidations after a mutation follow the same rule through a per-key
+// epoch, keeping every untouched folder's cache entry valid.
 package cache
 
 import (
@@ -64,6 +65,7 @@ func New(options Options) (*Cache, error) {
 	return &Cache{
 		entries:    make(map[Key]*folderEntry),
 		inflights:  make(map[Key]*inflightLoad),
+		epochs:     make(map[Key]uint64),
 		ttl:        options.TTL,
 		maxFolders: options.MaxFolders,
 		now:        now,
@@ -77,9 +79,10 @@ type folderEntry struct {
 }
 
 type inflightLoad struct {
-	done    chan struct{}
-	entries []model.RemoteEntry
-	err     error
+	done       chan struct{}
+	startEpoch uint64
+	entries    []model.RemoteEntry
+	err        error
 }
 
 // Cache is safe for concurrent use.
@@ -87,6 +90,7 @@ type Cache struct {
 	mu         sync.Mutex
 	entries    map[Key]*folderEntry
 	inflights  map[Key]*inflightLoad
+	epochs     map[Key]uint64
 	generation uint64
 	ttl        time.Duration
 	maxFolders int
@@ -120,7 +124,9 @@ func (c *Cache) Get(key Key) ([]model.RemoteEntry, bool) {
 // when absent: concurrent cold callers with the same key join one load,
 // while different keys load in parallel. Only complete successful results
 // are cached — an error is returned to every caller of that attempt and
-// never stored.
+// never stored. A load that races Invalidate or InvalidateFolder is
+// discarded: its generation or per-key epoch went stale, so it can neither
+// repopulate the key nor absorb callers that arrived after the invalidation.
 func (c *Cache) GetOrLoad(key Key, load func() ([]model.RemoteEntry, error)) ([]model.RemoteEntry, error) {
 	c.mu.Lock()
 	if cached, ok := c.entries[key]; ok && !c.now().After(cached.expireAt) {
@@ -128,13 +134,14 @@ func (c *Cache) GetOrLoad(key Key, load func() ([]model.RemoteEntry, error)) ([]
 		c.mu.Unlock()
 		return entries, nil
 	}
-	if existing, ok := c.inflights[key]; ok {
+	epoch := c.epochs[key]
+	if existing, ok := c.inflights[key]; ok && existing.startEpoch == epoch {
 		c.mu.Unlock()
 		<-existing.done
 		return existing.entries, existing.err
 	}
 
-	current := &inflightLoad{done: make(chan struct{})}
+	current := &inflightLoad{done: make(chan struct{}), startEpoch: epoch}
 	c.inflights[key] = current
 	generation := c.generation
 	c.mu.Unlock()
@@ -142,12 +149,16 @@ func (c *Cache) GetOrLoad(key Key, load func() ([]model.RemoteEntry, error)) ([]
 	entries, err := load()
 
 	c.mu.Lock()
-	delete(c.inflights, key)
-	if err == nil && generation == c.generation {
-		// A complete, successful result for the current generation is the
-		// only thing that may enter the cache. Partial pages and failures
-		// are never cached, and a result that raced with Invalidate lands
-		// under a dead generation and is dropped.
+	// Only our own inflight record may be removed: a targeted invalidation
+	// during the load bumped the epoch and registered the next loader.
+	if c.inflights[key] == current {
+		delete(c.inflights, key)
+	}
+	if err == nil && generation == c.generation && current.startEpoch == c.epochs[key] {
+		// A complete, successful result for the current generation and
+		// epoch is the only thing that may enter the cache. Partial pages
+		// and failures are never cached, and a result that raced with an
+		// invalidation lands under a dead epoch and is dropped.
 		c.storeLocked(key, entries)
 	}
 	c.mu.Unlock()
@@ -182,10 +193,25 @@ func (c *Cache) storeLocked(key Key, entries []model.RemoteEntry) {
 
 // Invalidate drops every cached folder and bumps the root generation, so
 // loads that were in flight before this call can no longer enter the cache.
-// Called after successful mutations and on workspace remapping.
+// Called on workspace remapping, where every cached folder may change.
 func (c *Cache) Invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[Key]*folderEntry)
+	c.epochs = make(map[Key]uint64)
 	c.generation++
+}
+
+// InvalidateFolder drops one cached folder and bumps its per-key epoch, so
+// a listing that was in flight before the mutation can neither repopulate
+// the key nor be joined by callers that arrived after it. A mutation only
+// changes the affected parent's listing, so every other cached folder keeps
+// serving instead of forcing a full cold re-list; the full Invalidate stays
+// for workspace remaps, where every folder may change.
+func (c *Cache) InvalidateFolder(groupID string, parentID string) {
+	key := Key{GroupID: groupID, Generation: c.generation, ParentID: parentID}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+	c.epochs[key]++
 }

@@ -455,3 +455,111 @@ func TestConcurrentLoadAndInvalidateRace(t *testing.T) {
 		t.Fatal("no invalidation observed")
 	}
 }
+
+// TestInvalidateFolderKeepsOtherFolders pins the targeted-eviction contract:
+// a mutation drops exactly the affected parent's listing while every other
+// cached folder keeps serving.
+func TestInvalidateFolderKeepsOtherFolders(t *testing.T) {
+	cache, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyA := Key{GroupID: "g", ParentID: "a"}
+	keyB := Key{GroupID: "g", ParentID: "b"}
+	loads := 0
+	load := func() ([]model.RemoteEntry, error) {
+		loads++
+		return []model.RemoteEntry{{ID: "x", Name: "x"}}, nil
+	}
+	if _, err := cache.GetOrLoad(keyA, load); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.GetOrLoad(keyB, load); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 2 {
+		t.Fatalf("loads = %d, want 2", loads)
+	}
+
+	cache.InvalidateFolder(keyA.GroupID, keyA.ParentID)
+
+	if _, ok := cache.Get(keyA); ok {
+		t.Fatal("invalidated folder must miss")
+	}
+	if _, err := cache.GetOrLoad(keyA, load); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.GetOrLoad(keyB, load); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 3 {
+		t.Fatalf("loads = %d, want 3: folder B must keep serving from cache", loads)
+	}
+}
+
+// TestInvalidateFolderBlocksLateLoads pins the epoch contract: a load that
+// raced a targeted invalidation can neither repopulate the key nor absorb
+// callers that arrived after the invalidation.
+func TestInvalidateFolderBlocksLateLoads(t *testing.T) {
+	cache, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := Key{GroupID: "g", ParentID: "a"}
+	release := make(chan struct{})
+	stale := []model.RemoteEntry{{ID: "stale", Name: "stale"}}
+	fresh := []model.RemoteEntry{{ID: "fresh", Name: "fresh"}}
+	loadStarted := make(chan struct{})
+	loads := 0
+	var mu sync.Mutex
+	load := func() ([]model.RemoteEntry, error) {
+		mu.Lock()
+		loads++
+		attempt := loads
+		mu.Unlock()
+		if attempt == 1 {
+			close(loadStarted)
+			<-release
+			return stale, nil
+		}
+		return fresh, nil
+	}
+
+	resultCh := make(chan []model.RemoteEntry, 1)
+	go func() {
+		entries, err := cache.GetOrLoad(key, load)
+		if err != nil {
+			t.Errorf("load failed: %v", err)
+		}
+		resultCh <- entries
+	}()
+	<-loadStarted
+
+	// The invalidation races the in-flight load. A caller arriving now must
+	// start a fresh load instead of joining the stale one.
+	cache.InvalidateFolder(key.GroupID, key.ParentID)
+	entries, err := cache.GetOrLoad(key, load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID != "fresh" {
+		t.Fatalf("post-invalidation caller got %v, want the fresh listing", entries)
+	}
+
+	close(release)
+	if late := <-resultCh; len(late) != 1 || late[0].ID != "stale" {
+		t.Fatalf("racing load returned %v", late)
+	}
+	// The stale late result was discarded; the fresh listing from the
+	// post-invalidation load is what the cache holds.
+	if cached, ok := cache.Get(key); !ok || cached[0].ID != "fresh" {
+		t.Fatalf("cache holds %v (present=%v), want the fresh listing", cached, ok)
+	}
+	entries, err = cache.GetOrLoad(key, load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries[0].ID != "fresh" {
+		t.Fatalf("cache holds %v, want the fresh listing", entries)
+	}
+}

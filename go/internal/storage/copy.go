@@ -98,7 +98,7 @@ func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPa
 			if err != nil {
 				return model.RemoteEntry{}, err
 			}
-			s.invalidate()
+			s.invalidateFolders(destinationParent.ID)
 			return model.RemoteEntry{
 				ID:         copiedID,
 				Name:       destinationName,
@@ -154,7 +154,7 @@ func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPa
 			if err != nil {
 				return model.RemoteEntry{}, err
 			}
-			s.invalidate()
+			s.invalidateFolders(destinationParentEntry.ID)
 			return result, nil
 		}
 
@@ -168,7 +168,7 @@ func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPa
 		if err != nil {
 			return model.RemoteEntry{}, err
 		}
-		s.invalidate()
+		s.invalidateFolders(destinationParentEntry.ID)
 		if depth == "0" || (depth == "1" && level >= 1) {
 			return result, nil
 		}
