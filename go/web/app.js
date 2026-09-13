@@ -1853,9 +1853,57 @@
   // failure — the poll loop rides them out until the new service answers.
   let updateInProgress = false;
   let updatePollFailures = 0;
+  let updateRecoveryTimer = null;
+  let updateStartVersion = "";
 
   function updateIsActive() {
     return updateStatus && ["checking", "downloading", "restarting"].includes(updateStatus.state);
+  }
+
+  // watchServiceRecovery probes the unauthenticated health endpoint while
+  // the adapter is restarting, and reloads the page once the new process is
+  // serving. Proof of recovery beats a timed guess: the "restarting" state
+  // is written just before the process replaces itself, so a timed reload
+  // lands inside the listener gap and through a tunnel the browser keeps
+  // whatever error page it was handed — ending the watch and stranding the
+  // user on a manual refresh.
+  function watchServiceRecovery() {
+    if (updateRecoveryTimer) return;
+    const probe = async () => {
+      updateRecoveryTimer = null;
+      try {
+        const response = await fetch("/healthz", { cache: "no-store", credentials: "same-origin" });
+        if (response.ok) {
+          const payload = await response.json().catch(() => null);
+          const version = payload && typeof payload.version === "string" ? payload.version : "";
+          // A different version is the new binary answering: reload into it.
+          if (version && updateStartVersion && version !== updateStartVersion) {
+            window.location.reload();
+            return;
+          }
+          // Same or unknown version: let the API say whether it settled.
+          const data = await checkForUpdate();
+          if (data && data.state === "error") {
+            updateInProgress = false;
+            updatePollFailures = 0;
+            setStatus(data.message || "更新失败，当前版本未改变", "error");
+            return;
+          }
+          if (data && updateIsActive()) {
+            scheduleUpdatePoll();
+            return;
+          }
+          window.location.reload();
+          return;
+        }
+      } catch (_) {}
+      updatePollFailures += 1;
+      if (updatePollFailures === 20) {
+        setStatus("服务重启时间较长，恢复后会自动刷新；如需立即确认可手动刷新页面", "pending");
+      }
+      updateRecoveryTimer = setTimeout(probe, 1500);
+    };
+    updateRecoveryTimer = setTimeout(probe, 1500);
   }
 
   function knownCurrentVersion() {
@@ -1997,8 +2045,11 @@
       updatePollTimer = null;
       const data = await checkForUpdate();
       if (data && data.state === "restarting") {
-        setStatus("更新完成，正在重启服务...", "pending");
-        window.setTimeout(() => window.location.reload(), 2200);
+        // Never reload on a timer from here: the process is about to
+        // replace itself, and only the recovery watch reloads on proof
+        // that the new one is serving.
+        setStatus("更新完成，正在等待服务恢复后自动刷新...", "pending");
+        watchServiceRecovery();
       } else if (data && data.state === "error") {
         updateInProgress = false;
         updatePollFailures = 0;
@@ -2011,12 +2062,9 @@
         updatePollFailures = 0;
         scheduleUpdatePoll();
       } else if (!data && updateInProgress) {
-        updatePollFailures += 1;
-        if (updatePollFailures <= 15) {
-          scheduleUpdatePoll();
-        } else {
-          setStatus("服务重启时间较长，请稍后刷新页面确认版本", "pending");
-        }
+        // The restart gap: keep watching until the service answers again,
+        // then reload — the page never strands on a manual refresh note.
+        watchServiceRecovery();
       }
     }, 1800);
   }
@@ -2029,6 +2077,7 @@
     }
     const button = $("update-modal-action");
     button.disabled = true;
+    updateStartVersion = knownCurrentVersion();
     try {
       const data = await apiRequest("update", {
         method: "POST",
