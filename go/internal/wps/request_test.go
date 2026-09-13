@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/credentials"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
@@ -625,5 +626,130 @@ func TestAccountBaseURLDerivationAndValidation(t *testing.T) {
 	}
 	if _, err := client.accountBaseURL(); err == nil {
 		t.Fatal("non-kdocs account URL must be rejected")
+	}
+}
+
+func TestRequestJSONRetriesTransientGetTwice(t *testing.T) {
+	config := DefaultConfig("group-1")
+	config.CredentialSource = staticSource()
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: http.StatusBadGateway},
+		{status: http.StatusTooManyRequests},
+		{status: http.StatusOK, body: []byte(`{"result":"ok"}`)},
+	}}
+	client.opener = opener
+
+	result, err := client.RequestJSON(JSONRequest{Path: "/api/v3/islogin"})
+	if err != nil {
+		t.Fatalf("RequestJSON failed after two transient retries: %v", err)
+	}
+	if result["result"] != "ok" {
+		t.Fatalf("result = %v", result)
+	}
+	if len(opener.requests) != 3 {
+		t.Fatalf("requests = %d, want two retries", len(opener.requests))
+	}
+}
+
+func TestRequestJSONStopsAfterRetryBudget(t *testing.T) {
+	config := DefaultConfig("group-1")
+	config.CredentialSource = staticSource()
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: http.StatusServiceUnavailable},
+		{status: http.StatusBadGateway},
+		{status: http.StatusGatewayTimeout},
+		{status: http.StatusOK, body: []byte(`{"result":"ok"}`)},
+	}}
+	client.opener = opener
+
+	_, err = client.RequestJSON(JSONRequest{Path: "/api/v3/islogin"})
+	if err == nil {
+		t.Fatal("three consecutive transient failures must surface as an error")
+	}
+	if len(opener.requests) != 3 {
+		t.Fatalf("requests = %d, want the initial attempt plus two retries", len(opener.requests))
+	}
+	apiErr, ok := model.AsWpsAPIError(err)
+	if !ok || apiErr.Status != http.StatusGatewayTimeout {
+		t.Fatalf("error = %v, want the last HTTP status", err)
+	}
+}
+
+func TestRequestJSONHonorsRetryAfterOn429(t *testing.T) {
+	config := DefaultConfig("group-1")
+	config.CredentialSource = staticSource()
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	opener := &fakeControlOpener{script: []scriptedResponse{
+		{status: http.StatusTooManyRequests, header: http.Header{"Retry-After": []string{"1"}}},
+		{status: http.StatusOK, body: []byte(`{"result":"ok"}`)},
+	}}
+	client.opener = opener
+
+	started := time.Now()
+	result, err := client.RequestJSON(JSONRequest{Path: "/api/v3/islogin"})
+	if err != nil {
+		t.Fatalf("RequestJSON failed after the 429 retry: %v", err)
+	}
+	if result["result"] != "ok" {
+		t.Fatalf("result = %v", result)
+	}
+	if elapsed := time.Since(started); elapsed < 900*time.Millisecond {
+		t.Fatalf("retry after Retry-After: 1 returned in %v; the server delay was not honored", elapsed)
+	}
+}
+
+func TestRetryDelayExponentialWithCap(t *testing.T) {
+	cases := []struct {
+		attempt    int
+		retryAfter time.Duration
+		want       time.Duration
+	}{
+		{attempt: 0, retryAfter: 0, want: 250 * time.Millisecond},
+		{attempt: 1, retryAfter: 0, want: 500 * time.Millisecond},
+		{attempt: 2, retryAfter: 0, want: 1 * time.Second},
+		{attempt: 5, retryAfter: 0, want: 5 * time.Second},
+		{attempt: 0, retryAfter: 2 * time.Second, want: 2 * time.Second},
+		{attempt: 1, retryAfter: 10 * time.Second, want: 5 * time.Second},
+		{attempt: 0, retryAfter: 100 * time.Millisecond, want: 250 * time.Millisecond},
+	}
+	for _, tc := range cases {
+		if got := retryDelay(tc.attempt, tc.retryAfter); got != tc.want {
+			t.Errorf("retryDelay(%d, %v) = %v, want %v", tc.attempt, tc.retryAfter, got, tc.want)
+		}
+	}
+}
+
+func TestRetryAfterSecondsParsing(t *testing.T) {
+	cases := []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 0},
+		{"3", 3 * time.Second},
+		{" 2 ", 2 * time.Second},
+		{"0", 0},
+		{"-5", 0},
+		{"Wed, 21 Oct 2015 07:28:00 GMT", 0},
+		{"soon", 0},
+	}
+	for _, tc := range cases {
+		header := http.Header{}
+		if tc.value != "" {
+			header.Set("Retry-After", tc.value)
+		}
+		if got := retryAfterSeconds(header); got != tc.want {
+			t.Errorf("retryAfterSeconds(%q) = %v, want %v", tc.value, got, tc.want)
+		}
 	}
 }

@@ -1,8 +1,9 @@
 // The request layer ports client.py's _request_json: one ordered URL and
 // query builder, the exact control-plane header set, Set-Cookie persistence
-// before any body read, a bounded JSON object response, a single safe retry
-// for transient GET failures, and a single 401 retry that re-reads
-// credentials and rewrites the CSRF field in the body.
+// before any body read, a bounded JSON object response, bounded exponential
+// backoff for transient GET failures (429 included, Retry-After honored), and
+// a single 401 retry that re-reads credentials and rewrites the CSRF field in
+// the body.
 
 package wps
 
@@ -14,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,7 +24,15 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
 
-const controlTransientRetryDelay = 250 * time.Millisecond
+// Transient GET failures replay with exponential backoff: 250ms after the
+// first failure, 500ms after the second. A Retry-After header from the
+// upstream overrides the computed delay when it asks for longer, capped so
+// a confused or hostile upstream cannot stall a request for minutes.
+const (
+	controlTransientRetryDelay = 250 * time.Millisecond
+	maxTransientRetryDelay     = 5 * time.Second
+	maxTransientRetries        = 2
+)
 
 // QueryPair is one ordered query parameter; the wire order matches the
 // Python urlencode(list-of-tuples) order.
@@ -72,7 +82,7 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 	currentBody := request.Body
 	var response *http.Response
 	authRetried := false
-	transientRetried := false
+	transientAttempts := 0
 	for {
 		httpRequest, err := newJSONRequest(request.method(), target, currentBody)
 		if err != nil {
@@ -98,11 +108,11 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
-			if retryableJSONRequest(request) && !transientRetried {
-				transientRetried = true
-				if err := waitForControlRetry(ctx); err != nil {
-					return nil, err
+			if retryableJSONRequest(request) && transientAttempts < maxTransientRetries {
+				if waitErr := waitForControlRetry(ctx, retryDelay(transientAttempts, 0)); waitErr != nil {
+					return nil, waitErr
 				}
+				transientAttempts++
 				continue
 			}
 			return nil, model.NewWpsAPIError(request.Path, 0, model.WpsCategoryUnavailable)
@@ -114,6 +124,7 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 		}
 		rotated := c.persistSetCookieHeaders(opened.Header)
 		status := opened.StatusCode
+		retryAfter := retryAfterSeconds(opened.Header)
 		opened.Body.Close()
 		if status == 401 && request.RetryOn401 && !authRetried {
 			authRetried = true
@@ -135,11 +146,11 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 				continue
 			}
 		}
-		if retryableJSONRequest(request) && retryableControlStatus(status) && !transientRetried {
-			transientRetried = true
-			if err := waitForControlRetry(ctx); err != nil {
-				return nil, err
+		if retryableJSONRequest(request) && retryableControlStatus(status) && transientAttempts < maxTransientRetries {
+			if waitErr := waitForControlRetry(ctx, retryDelay(transientAttempts, retryAfter)); waitErr != nil {
+				return nil, waitErr
 			}
+			transientAttempts++
 			continue
 		}
 		return nil, model.NewWpsAPIError(request.Path, status, model.WpsCategoryHTTP)
@@ -175,12 +186,41 @@ func retryableJSONRequest(request JSONRequest) bool {
 }
 
 func retryableControlStatus(status int) bool {
-	return status == http.StatusRequestTimeout || status == http.StatusBadGateway ||
-		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests ||
+		status == http.StatusBadGateway || status == http.StatusServiceUnavailable ||
+		status == http.StatusGatewayTimeout
 }
 
-func waitForControlRetry(ctx context.Context) error {
-	timer := time.NewTimer(controlTransientRetryDelay)
+// retryDelay doubles the base delay per attempt. A Retry-After header wins
+// when it asks for more patience than the computed backoff, with the cap
+// keeping a broken upstream from parking a listing for minutes.
+func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	delay := controlTransientRetryDelay << attempt
+	if retryAfter > delay {
+		delay = retryAfter
+	}
+	if delay > maxTransientRetryDelay {
+		return maxTransientRetryDelay
+	}
+	return delay
+}
+
+// retryAfterSeconds parses the delta-seconds form of Retry-After. HTTP-date
+// values and anything malformed return zero so the computed backoff applies.
+func retryAfterSeconds(header http.Header) time.Duration {
+	value := strings.TrimSpace(header.Get("Retry-After"))
+	if value == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func waitForControlRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
