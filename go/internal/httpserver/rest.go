@@ -46,7 +46,7 @@ type StorageLocationController interface {
 // UpdateController is deliberately narrow: the HTTP layer can inspect and
 // start an update, but it never receives a command, path, or Docker handle.
 type UpdateController interface {
-	Check(context.Context) (update.Status, error)
+	Check(context.Context, bool) (update.Status, error)
 	Status() update.Status
 	Start() error
 }
@@ -398,7 +398,10 @@ func (d *RESTDispatcher) doUpdateStatus(w http.ResponseWriter, r *http.Request) 
 	if err := discardBody(w, r, d.limits); err != nil {
 		return err
 	}
-	status, err := d.updater.Check(r.Context())
+	// The web page's "re-check" button sends force=1 so a user-initiated
+	// refresh always reaches the release endpoint instead of the 10-minute
+	// TTL cache; the startup probe and the in-update poll stay cached.
+	status, err := d.updater.Check(r.Context(), r.URL.Query().Get("force") == "1")
 	if err != nil {
 		// Keep update outages separate from file operations. Returning the
 		// cached state lets the page remain usable when the mirror is down.

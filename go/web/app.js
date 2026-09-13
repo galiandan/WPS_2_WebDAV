@@ -1994,7 +1994,7 @@
       $("update-modal-action").disabled = true;
       $("update-current-mark").classList.add("hidden");
     }
-    checkForUpdate();
+    checkForUpdate(true);
   }
 
   function closeUpdateModal() {
@@ -2003,14 +2003,16 @@
     $("version-button").setAttribute("aria-expanded", "false");
   }
 
-  async function checkForUpdate() {
+  async function checkForUpdate(force = false) {
     if (updateCheckInFlight) return updateCheckInFlight;
     const refresh = $("update-modal-refresh");
     updateCheckInFlight = (async () => {
       refresh.disabled = true;
       refresh.classList.add("busy");
       try {
-        const data = await apiRequest("update");
+        // force=1 marks an explicit user refresh; the server skips its
+        // result cache so a freshly published release shows up at once.
+        const data = await apiRequest(force ? "update?force=1" : "update");
         updateStatus = data;
         updateInProgress = updateIsActive();
         renderUpdateStatus(data);
@@ -2725,7 +2727,7 @@
   $("passkey-login-button").addEventListener("click", passkeyLogin);
   $("logout-button").addEventListener("click", logout);
   $("version-button").addEventListener("click", openUpdateModal);
-  $("update-modal-refresh").addEventListener("click", checkForUpdate);
+  $("update-modal-refresh").addEventListener("click", () => checkForUpdate(true));
   $("update-modal-action").addEventListener("click", startUpdate);
   $("update-modal-close").addEventListener("click", closeUpdateModal);
   $("update-modal").addEventListener("close", () => {

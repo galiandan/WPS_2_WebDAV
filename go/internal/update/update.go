@@ -104,17 +104,20 @@ func (u *Updater) Status() Status {
 	return u.status
 }
 
-// Check asks the latest-release endpoint at most once per checkTTL. A failed
-// check is returned as a normal status so a temporary GitHub mirror outage
-// cannot make the file manager appear broken.
-func (u *Updater) Check(ctx context.Context) (Status, error) {
+// Check asks the latest-release endpoint at most once per checkTTL. The
+// force flag — set by the web page's explicit "re-check" button — skips that
+// cache so a user-initiated refresh always hits the release endpoint; the
+// startup probe and the in-update poll keep the TTL. A failed check is
+// returned as a normal status so a temporary GitHub mirror outage cannot
+// make the file manager appear broken.
+func (u *Updater) Check(ctx context.Context, force bool) (Status, error) {
 	u.mu.Lock()
 	if u.updateBusy {
 		status := u.status
 		u.mu.Unlock()
 		return status, nil
 	}
-	if !u.checkedAt.IsZero() && time.Since(u.checkedAt) < checkTTL {
+	if !force && !u.checkedAt.IsZero() && time.Since(u.checkedAt) < checkTTL {
 		status := u.status
 		u.mu.Unlock()
 		return status, nil
