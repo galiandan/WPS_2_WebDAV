@@ -116,7 +116,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RootName != DefaultRootName {
 		t.Errorf("RootName = %q", cfg.RootName)
 	}
-	if cfg.ListCount != 20 || cfg.MaxListEntries != 10000 || cfg.CacheTTL != 2 {
+	if cfg.ListCount != 200 || cfg.MaxListEntries != 10000 || cfg.CacheTTL != 2 {
 		t.Error("storage defaults drifted")
 	}
 	if cfg.MaxCachedFolders != 1024 || cfg.MaxUploads != 2 || cfg.MaxDownloads != 4 {

@@ -91,12 +91,15 @@ type StorageConfig struct {
 	WorkspaceSelection func() (groupID string, rootID string, autoRoot bool, err error)
 }
 
-// DefaultStorageConfig mirrors the Python keyword defaults for one root.
+// DefaultStorageConfig mirrors the Python keyword defaults for one root,
+// except ListCount: the adapter asks for 200 entries per page (the v5 list
+// endpoint accepts large counts) so a cold listing of a large folder costs
+// pages, not dozens of round trips.
 func DefaultStorageConfig(rootID string) StorageConfig {
 	return StorageConfig{
 		RootID:              rootID,
 		RootName:            "WPS Drive",
-		ListCount:           20,
+		ListCount:           200,
 		MaxListEntries:      10000,
 		CacheTTLSeconds:     2.0,
 		MaxCachedFolders:    1024,
@@ -120,7 +123,7 @@ func NewStorage(lister Lister, transferBudget *budget.Budget, config StorageConf
 		return nil, errors.New("root_id is required")
 	}
 	if config.ListCount == 0 {
-		config.ListCount = 20
+		config.ListCount = 200
 	}
 	if config.MaxListEntries == 0 {
 		config.MaxListEntries = 10000

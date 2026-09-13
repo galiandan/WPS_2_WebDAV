@@ -282,7 +282,13 @@ func Load() (Config, error) {
 	}
 
 	// --- storage options (__main__ storage_options) ---
-	listCount, err := envInt("WPS_LIST_COUNT", 20)
+	// The page size deliberately deviates from storage.py's 20: the v5 list
+	// endpoint accepts large counts (verified upstream), and every cold
+	// folder listing pays one HTTPS round trip per page, so 20 entries per
+	// page made opening a large directory cost dozens of sequential
+	// requests. next_offset pagination keeps the behavior correct if the
+	// upstream ever caps the page.
+	listCount, err := envInt("WPS_LIST_COUNT", 200)
 	if err != nil {
 		return Config{}, err
 	}
