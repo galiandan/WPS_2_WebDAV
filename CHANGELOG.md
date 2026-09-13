@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-09-13
+
 ### Fixed
 
 - Docker 安装器把上传 spool 目录指向 bind 挂载的 `data/uploads`：容器镜像不保证存在 `/tmp`，此前超过 8 MiB 的上传在预留 spool 时会返回 `507`。
