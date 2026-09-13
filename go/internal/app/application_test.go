@@ -51,7 +51,7 @@ func fixtureConfig(t *testing.T) config.Config {
 		MaxJSONResponse:    8 << 20,
 
 		RootName:         config.DefaultRootName,
-		ListCount:        20,
+		ListCount:        200,
 		MaxListEntries:   10000,
 		CacheTTL:         2.0,
 		MaxCachedFolders: 1024,
