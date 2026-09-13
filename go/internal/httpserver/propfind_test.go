@@ -93,6 +93,13 @@ func (f *propfindStorage) ListChildren(scopePath string, entry model.RemoteEntry
 			return children, nil
 		}
 	}
+	// Level 0 lists through ListChildren as well now; fixtures keyed by the
+	// request path keep serving the root and subfolder listings.
+	if f.listByPath != nil {
+		if children, ok := f.listByPath[scopePath]; ok {
+			return children, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -213,7 +220,7 @@ func TestPropfindDepthOneRoot(t *testing.T) {
 	if recorder.Code != http.StatusMultiStatus || recorder.Body.String() != want {
 		t.Fatalf("status = %d body =\n%q", recorder.Code, recorder.Body.String())
 	}
-	if len(storage.listCalls) != 1 || storage.listCalls[0] != "/" {
+	if len(storage.listCalls) != 1 || storage.listCalls[0] != "children:0" {
 		t.Errorf("Depth 1 lists only the root: %v", storage.listCalls)
 	}
 }
@@ -258,7 +265,7 @@ func TestPropfindDepthOneSubfolder(t *testing.T) {
 	if recorder.Code != http.StatusMultiStatus || recorder.Body.String() != want {
 		t.Fatalf("status = %d body =\n%q", recorder.Code, recorder.Body.String())
 	}
-	if len(storage.listCalls) != 1 || storage.listCalls[0] != "/bench-folder/" {
+	if len(storage.listCalls) != 1 || storage.listCalls[0] != "children:bench-dir-1" {
 		t.Errorf("list calls = %v", storage.listCalls)
 	}
 }

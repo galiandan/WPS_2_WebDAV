@@ -39,6 +39,14 @@ func (f *fakeReadStorage) ListPath(path string) ([]model.RemoteEntry, error) {
 	return f.entries, nil
 }
 
+func (f *fakeReadStorage) ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error) {
+	f.calls = append(f.calls, "children:"+scopePath+":"+entry.ID)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.entries, nil
+}
+
 type fakeStatusRoots struct {
 	rootID string
 	err    error

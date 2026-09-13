@@ -122,13 +122,12 @@ func (d *DAVDispatcher) webdavEntries(ctx context.Context, path string, depth st
 			return nil, clientDisconnectedError{}
 		}
 		var children []model.RemoteEntry
-		if current.level == 0 {
-			// The root listing routes through the request path so the
-			// multi-space view can answer virtually.
-			children, err = d.storage.ListPath(current.scopePath)
-		} else {
-			children, err = d.storage.ListChildren(current.scopePath, current.entry)
-		}
+		// Every level lists by the already-resolved entry: the DAV root is
+		// never the multi-space virtual root (the view maps "/" onto the
+		// pinned subtree), and MultiSpace.ListChildren descends virtual
+		// space entries by their mount and real entries by parent ID, so no
+		// level re-resolves its path from the root a second time.
+		children, err = d.storage.ListChildren(current.scopePath, current.entry)
 		if err != nil {
 			return nil, err
 		}

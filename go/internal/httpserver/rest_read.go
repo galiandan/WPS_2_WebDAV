@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
 )
 
 // RESTReadStorage is the read-only storage surface the REST GET routes use.
@@ -13,6 +14,7 @@ import (
 type RESTReadStorage interface {
 	Metadata(path string) (model.RemoteEntry, error)
 	ListPath(path string) ([]model.RemoteEntry, error)
+	ListChildren(scopePath string, entry model.RemoteEntry) ([]model.RemoteEntry, error)
 }
 
 // StatusRootIDSource supplies the root id the status preflight reports for.
@@ -116,7 +118,10 @@ type metadataPayload struct {
 }
 
 // doEntries mirrors the entries/list GET routes: metadata first (a file
-// answers 409 "the requested path is not a folder"), then the listing.
+// answers 409 "the requested path is not a folder"), then the listing. The
+// resolved entry feeds the listing, so a non-root path never walks from the
+// root a second time; the multi-space virtual root keeps routing through the
+// request path because with mounts its children are the mount entries.
 func (d *RESTDispatcher) doEntries(w http.ResponseWriter, r *http.Request, path string) error {
 	entry, err := d.read.Metadata(path)
 	if err != nil {
@@ -125,7 +130,14 @@ func (d *RESTDispatcher) doEntries(w http.ResponseWriter, r *http.Request, path 
 	if entry.Kind != model.KindFolder {
 		return model.NewStorageError(model.KindNotFolder, "the requested path is not a folder")
 	}
-	children, err := d.read.ListPath(path)
+	var children []model.RemoteEntry
+	if parts, splitErr := storage.SplitRemotePath(path); splitErr != nil {
+		return splitErr
+	} else if len(parts) == 0 {
+		children, err = d.read.ListPath(path)
+	} else {
+		children, err = d.read.ListChildren(path, entry)
+	}
 	if err != nil {
 		return err
 	}
