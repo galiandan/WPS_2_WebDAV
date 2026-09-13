@@ -167,12 +167,21 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	// Large uploads spool to disk above the memory threshold, and the OS
 	// temp default is a real failure mode in container images that carry no
 	// /tmp: the reservation probe then fails every such upload with 507.
-	// Without a configured spool directory, fall back to the resume
-	// directory — the same bind-mounted data path deployments always
-	// provide — and make an unusable spool visible in the startup log
-	// before any client sees the failure. Mutating the local config copy
-	// puts the client assembly below on the same resolved directory.
-	cfg.UploadSpoolDir = resolveSpoolDir(cfg.UploadSpoolDir, cfg.UploadResumeDir)
+	// The first usable candidate wins — configured spool directory, resume
+	// directory, OS temp, then a directory beside the executable — so a
+	// deployment whose environment predates the spool env vars (or whose
+	// configured path is broken) still finds a writable volume. Failures
+	// stay visible: the chosen fallback and any residual unusability are
+	// logged at startup, before any client sees them. Mutating the local
+	// config copy puts the client assembly below on the same resolved
+	// directory.
+	configuredSpool := cfg.UploadSpoolDir
+	resolvedSpool, spoolSource := resolveSpoolDir(cfg.UploadSpoolDir, cfg.UploadResumeDir)
+	if spoolSource == "resume" || spoolSource == "executable" ||
+		(configuredSpool != "" && configuredSpool != resolvedSpool) {
+		log.Printf("upload spool directory: using %s fallback %q", spoolSource, resolvedSpool)
+	}
+	cfg.UploadSpoolDir = resolvedSpool
 	if warning := probeSpoolDir(cfg.UploadSpoolDir, cfg.UploadSpoolMemory); warning != "" {
 		log.Printf("%s", warning)
 	}
@@ -918,11 +927,67 @@ func ifNoneMatchMatches(header, etag string) bool {
 // resolveSpoolDir picks where large uploads spool: a configured directory
 // wins; without one the resume directory reuses the data path that
 // deployments always mount; an empty result keeps budget's OS-temp default.
-func resolveSpoolDir(spoolDir, resumeDir string) string {
-	if spoolDir != "" {
-		return spoolDir
+// probeSpoolUsable decides whether a spool candidate really works: the
+// directory must exist (or be creatable) and accept a file. MkdirAll alone
+// cannot prove writability — a bind mount can expose an existing directory
+// the process cannot write.
+var probeSpoolUsable = func(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
 	}
-	return resumeDir
+	probe, err := os.CreateTemp(dir, ".wps-spool-probe-*")
+	if err != nil {
+		return err
+	}
+	name := probe.Name()
+	if err := probe.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return os.Remove(name)
+}
+
+// spoolDirBesideExecutable is the last-resort candidate for deployments
+// whose environment predates the spool env vars: containers created before
+// WPS_UPLOAD_SPOOL_DIR existed carry neither variable in their environment
+// snapshot, so the configured and resume candidates are both empty and the
+// image may lack /tmp entirely. The executable's own directory is the one
+// path every self-updating deployment must be able to write (the update
+// replaces the binary in place), so a spool directory beside it always
+// lands on a mounted, writable volume.
+func spoolDirBesideExecutable() string {
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(executable), "spool")
+}
+
+// resolveSpoolDir picks the first usable spool candidate and reports which
+// one won: the configured spool directory, the resume directory, the OS
+// temp default, then the directory beside the executable. An unusable
+// configured directory now falls forward to a working one instead of
+// failing every large upload with 507; the empty result keeps the old
+// behavior (budget's OS temp default plus the startup warning) only when
+// nothing is usable.
+func resolveSpoolDir(spoolDir, resumeDir string) (string, string) {
+	candidates := []struct{ name, dir string }{
+		{"configured", spoolDir},
+		{"resume", resumeDir},
+		{"temp", os.TempDir()},
+	}
+	if beside := spoolDirBesideExecutable(); beside != "" {
+		candidates = append(candidates, struct{ name, dir string }{"executable", beside})
+	}
+	for _, candidate := range candidates {
+		if candidate.dir == "" {
+			continue
+		}
+		if err := probeSpoolUsable(candidate.dir); err == nil {
+			return candidate.dir, candidate.name
+		}
+	}
+	return "", ""
 }
 
 // probeSpoolDir self-heals a missing spool directory — mode 0o700 matches
