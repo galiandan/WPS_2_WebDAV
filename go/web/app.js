@@ -723,6 +723,23 @@
     prefetchGeneration += 1;
   }
 
+  // Mutations only change the affected directory's listing, so clear just
+  // that entry and its queued prefetch work instead of dropping every
+  // cached directory: uploading ten files no longer re-lists the whole
+  // browsed tree ten times.
+  function clearDirectoryCacheFor(path) {
+    const key = canonicalPath(path);
+    directoryCache.delete(key);
+    prefetchQueue = prefetchQueue.filter((queued) => canonicalPath(queued) !== key);
+  }
+
+  function dirnameOf(path) {
+    const normalized = canonicalPath(path);
+    const index = normalized.lastIndexOf("/");
+    if (index <= 0) return "/";
+    return normalized.slice(0, index);
+  }
+
   function directoryEntries(path, force = false) {
     const key = canonicalPath(path);
     const now = Date.now();
@@ -736,7 +753,8 @@
     const epoch = directoryCacheEpoch;
     const pending = api("entries", key).then((data) => {
       const entries = Array.isArray(data.entries) ? data.entries : [];
-      if (epoch === directoryCacheEpoch) {
+      const registered = directoryCache.get(key);
+      if (epoch === directoryCacheEpoch && registered && registered.pending === pending) {
         directoryCache.set(key, {
           entries,
           expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
@@ -2210,7 +2228,7 @@
     setBusy(true);
     try {
       await api("folders", joinPath(state.path, name), { method: "POST" });
-      clearDirectoryCache();
+      clearDirectoryCacheFor(state.path);
       setStatus("文件夹已创建", "success");
       toast(`文件夹 “${name}” 已创建`, "success");
       await load(state.path, true, true);
@@ -2224,7 +2242,7 @@
     setBusy(true);
     try {
       await api("entries", path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-      clearDirectoryCache();
+      clearDirectoryCacheFor(dirnameOf(path));
       setStatus("名称已更新", "success");
       toast(`已重命名为 “${name}”`, "success");
       await load(state.path, true, true);
@@ -2244,7 +2262,8 @@
     setBusy(true);
     try {
       await api("entries", path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parent_path: canonicalPath(destination) }) });
-      clearDirectoryCache();
+      clearDirectoryCacheFor(dirnameOf(path));
+      clearDirectoryCacheFor(destination);
       setStatus("项目已移动", "success");
       toast(`“${entry.name}” 已移动到 ${canonicalPath(destination)}`, "success");
       await load(state.path, true, true);
@@ -2263,7 +2282,7 @@
     try {
       await api("entries", path, { method: "DELETE" });
       setStatus("删除已确认，正在刷新目录...", "pending");
-      clearDirectoryCache();
+      clearDirectoryCacheFor(dirnameOf(path));
       state.pendingDeletes.delete(path);
       if (state.path === sourcePath) await load(sourcePath, true, true);
       setStatus("项目已删除", "success");
@@ -2549,7 +2568,7 @@
       tray.done += 1;
       tray.states[index] = "done";
       traySetItem(index);
-      clearDirectoryCache();
+      clearDirectoryCacheFor(tray.targets[index]);
       return true;
     } catch (error) {
       if (error.cancelled || tray.cancelledItems.has(index) || tray.cancelled) {
@@ -2773,10 +2792,15 @@
     event.target.value = "";
   });
 
+  let searchRenderTimer = null;
   $("search-input").addEventListener("input", (event) => {
     state.search = event.target.value;
     updateSearchControls();
-    renderEntries({ animate: false });
+    if (searchRenderTimer) clearTimeout(searchRenderTimer);
+    searchRenderTimer = setTimeout(() => {
+      searchRenderTimer = null;
+      renderEntries({ animate: false });
+    }, 150);
   });
   $("search-clear").addEventListener("click", clearSearch);
   $("search-input").addEventListener("keydown", (event) => {
@@ -2885,7 +2909,10 @@
     } else if (previous !== "connected") {
       await load(state.path, true, true);
     }
-  }, 30000);
+    // 25s sits safely inside the server's 30s status TTL: polling exactly at
+    // the TTL raced the expiry, turning every poll into a fresh upstream
+    // probe (two upstream requests per open tab).
+  }, 25000);
 
   /* ============ 启动 ============ */
   async function startDrive() {
