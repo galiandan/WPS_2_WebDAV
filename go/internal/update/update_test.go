@@ -117,3 +117,47 @@ func TestInstallReplacesTargetAfterVersionCheck(t *testing.T) {
 		t.Fatalf("target was not replaced: %q", content)
 	}
 }
+
+func TestCheckForceBypassesTTL(t *testing.T) {
+	requests := 0
+	assetName := "wps-adapter-linux-" + runtime.GOARCH
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{
+            "tag_name":"v1.0.5",
+            "html_url":"https://github.com/galiandan/WPS_2_WebDAV/releases/tag/v1.0.5",
+            "assets":[{"name":"%s","size":1}]
+        }`, assetName)))
+	}))
+	defer server.Close()
+
+	u := New("1.0.4")
+	u.apiURL = server.URL + "/latest"
+	u.client = server.Client()
+
+	if _, err := u.Check(context.Background(), false); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after first check = %d, want 1", requests)
+	}
+	// A cached check inside the TTL window must not hit the endpoint again.
+	if _, err := u.Check(context.Background(), false); err != nil {
+		t.Fatalf("cached check: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after cached check = %d, want 1", requests)
+	}
+	// A forced check represents an explicit user refresh and must re-fetch.
+	status, err := u.Check(context.Background(), true)
+	if err != nil {
+		t.Fatalf("forced check: %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests after forced check = %d, want 2", requests)
+	}
+	if !status.UpdateAvailable || status.LatestVersion != "1.0.5" {
+		t.Fatalf("forced status = %+v", status)
+	}
+}
