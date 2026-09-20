@@ -354,6 +354,7 @@ html[data-theme="dark"] .auth-screen { --auth-bg: #062b74; }
   color: var(--accent);
   font-weight: 650;
 }
+.space-item.is-loading .space-item-icon .icon { animation: spin .8s linear infinite; }
 .space-item.active:hover { background: var(--accent-soft); color: var(--accent); }
 .space-item-icon { align-items: center; display: inline-flex; flex: 0 0 20px; justify-content: center; }
 .space-item-icon .icon { height: 17px; width: 17px; }

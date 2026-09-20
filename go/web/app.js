@@ -1268,12 +1268,13 @@
   }
 
   function closeMobileNav() {
+    const wasOpen = document.body.classList.contains("nav-open");
     document.body.classList.remove("nav-open");
     const button = $("nav-menu-button");
     if (button) button.setAttribute("aria-expanded", "false");
     const scrim = $("mobile-scrim");
     if (scrim) scrim.hidden = true;
-    if (button && document.contains(button)) button.focus();
+    if (wasOpen && button && document.contains(button)) button.focus();
   }
 
   function openMobileNav() {
@@ -1285,6 +1286,23 @@
     setTimeout(() => { if ($("sidebar-close") && document.body.classList.contains("nav-open")) $("sidebar-close").focus(); }, 0);
   }
 
+  function syncSpaceNavState() {
+    const root = $("space-root");
+    const buttons = [root, ...$("space-list").children];
+    buttons.forEach((button) => {
+      const path = button === root ? "/" : button.dataset.spacePath;
+      const active = path === "/" ? state.path === "/"
+        : state.path === path || state.path.startsWith(path + "/");
+      const loading = active && state.loading;
+      button.classList.toggle("active", active);
+      button.classList.toggle("is-loading", loading);
+      if (active) button.setAttribute("aria-current", "location");
+      else button.removeAttribute("aria-current");
+      button.setAttribute("aria-busy", String(loading));
+      button.querySelector("use").setAttribute("href", loading ? "#i-refresh" : button === root ? "#i-home" : "#i-cloud");
+    });
+  }
+
   function renderSpaceNav(rootEntries = null) {
     if (Array.isArray(rootEntries)) {
       state.spaces = rootEntries.filter(isVirtualSpaceEntry).map((entry) => ({
@@ -1292,26 +1310,31 @@
         path: joinPath("/", entry.name),
       }));
     }
-    const root = $("space-root");
     const list = $("space-list");
-    if (!root || !list) return;
-    root.classList.toggle("active", state.path === "/");
-    list.replaceChildren();
-    state.spaces.forEach((space) => {
-      const active = state.path === space.path || state.path.startsWith(space.path + "/");
-      const button = el("button", "space-item" + (active ? " active" : ""));
-      button.type = "button";
-      button.title = space.name;
-      button.setAttribute("aria-label", `进入空间 ${space.name}`);
-      const iconWrap = el("span", "space-item-icon");
-      iconWrap.append(icon("cloud"));
-      button.append(iconWrap, el("span", "space-item-name", space.name));
-      button.addEventListener("click", () => {
-        closeMobileNav();
-        load(space.path);
-      });
-      list.append(button);
+    // Keep button identity, focus and horizontal scroll while navigating.
+    const changed = list.children.length !== state.spaces.length || state.spaces.some((space, index) => {
+      const button = list.children[index];
+      return button.dataset.spacePath !== space.path || button.title !== space.name;
     });
+    if (changed) {
+      list.replaceChildren();
+      state.spaces.forEach((space) => {
+        const button = el("button", "space-item");
+        button.type = "button";
+        button.title = space.name;
+        button.dataset.spacePath = space.path;
+        button.setAttribute("aria-label", `进入空间 ${space.name}`);
+        const iconWrap = el("span", "space-item-icon");
+        iconWrap.append(icon("cloud"));
+        button.append(iconWrap, el("span", "space-item-name", space.name));
+        button.addEventListener("click", () => {
+          closeMobileNav();
+          load(space.path);
+        });
+        list.append(button);
+      });
+    }
+    syncSpaceNavState();
     updateControls();
   }
 
@@ -1539,12 +1562,15 @@
   }
 
   function renderEntries({ animate = false } = {}) {
-    if (state.loading && !state.refreshing) {
+    const holder = $("entries");
+    holder.hidden = state.loading && !state.refreshing;
+    if (holder.hidden) {
+      $("empty").classList.add("hidden");
+      $("panel-summary").textContent = "正在读取...";
       // 目录加载中：只展示骨架屏，避免把上一次的数据闪出来。
       renderSkeleton();
       return;
     }
-    const holder = $("entries");
     hideSkeleton();
     const entries = sortedEntries(filteredEntries());
     const isGrid = state.view === "grid";
@@ -1704,32 +1730,35 @@
     closeActionMenu();
     if (targetPath !== previousPath) state.selectedPath = "";
     state.path = targetPath;
+    state.loading = true;
+    state.refreshing = showCachedImmediately;
+    syncSpaceNavState();
     state.search = "";
     $("search-input").value = "";
     updateSearchControls();
     state.directoryError = null;
     syncHash(targetPath);
     renderBreadcrumbs();
-    state.loading = true;
-    state.refreshing = showCachedImmediately;
     if (showCachedImmediately) state.entries = cachedEntries;
     $("refresh-button").classList.add("busy");
     if (!quiet) setStatus(state.refreshing ? "正在刷新..." : "正在读取...");
-    if (!state.refreshing) renderSkeleton();
     renderEntries({ animate: false });
     try {
       // The directory response is the authoritative result for navigation.
       // Status is sampled in the background, so a slow or stale preflight can
       // never hide a directory that WPS has already returned successfully.
-      const entries = await directoryEntries(targetPath, force || showCachedImmediately);
+      const entries = await directoryEntries(targetPath, force);
       if (requestGeneration !== navigationGeneration) return;
       state.loading = false;
       state.refreshing = false;
       state.entries = entries;
       state.directoryError = null;
-      transientConnectionFailures = 0;
-      lastDirectorySuccessAt = Date.now();
-      setConnection("connected");
+      // Reusing a cached listing is not new evidence about upstream health.
+      if (entries !== cachedEntries) {
+        transientConnectionFailures = 0;
+        lastDirectorySuccessAt = Date.now();
+        setConnection("connected");
+      }
       if (targetPath === "/") {
         renderSpaceNav(entries);
       } else if (state.spaces.length === 0) {
@@ -1737,7 +1766,9 @@
       } else {
         renderSpaceNav();
       }
-      renderEntries({ animate: !showCachedImmediately });
+      if (!showCachedImmediately || entries !== cachedEntries) {
+        renderEntries({ animate: !showCachedImmediately });
+      }
       prefetchChildDirectories(targetPath, state.entries);
       setStatus(`${state.entries.length} 个项目`, "success");
     } catch (error) {
@@ -1753,6 +1784,7 @@
         state.loading = false;
         state.refreshing = false;
         $("refresh-button").classList.remove("busy");
+        syncSpaceNavState();
       }
     }
   }
