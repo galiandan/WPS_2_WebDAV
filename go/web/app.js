@@ -84,6 +84,8 @@
     const button = $("theme-button");
     button.title = "打开主题设置";
     button.setAttribute("aria-label", "打开主题设置");
+    $("auth-theme-icon").setAttribute("href", "#i-" + meta.icon);
+    $("auth-theme-button").setAttribute("aria-label", "切换主题（当前：" + ({ auto: "跟随系统", light: "浅色", dark: "深色" })[theme] + "）");
     const use = $("theme-icon");
     use.setAttribute("href", "#i-" + meta.icon);
     button.classList.remove("spin-icon");
@@ -2748,6 +2750,23 @@
 
   /* ============ 事件绑定 ============ */
   $("login-form").addEventListener("submit", submitAuth);
+  $("login-clear").addEventListener("click", () => {
+    if (authInFlight) return;
+    if (pendingTwoFactorChallenge) {
+      $("login-code").value = "";
+      $("login-code").focus();
+    } else {
+      $("login-username").value = "";
+      $("login-password").value = "";
+      $("login-username").focus();
+    }
+    setAuthMessage("");
+  });
+  $("auth-theme-button").addEventListener("click", () => {
+    theme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
+    PREF.set("theme", theme);
+    applyTheme(true);
+  });
   $("auth-method-password").addEventListener("click", () => setLoginMethod("password"));
   $("auth-method-passkey").addEventListener("click", () => setLoginMethod("passkey"));
   $("password-toggle").addEventListener("click", togglePassword);
@@ -3023,6 +3042,7 @@
   }
 
   async function boot() {
+    applyTheme(false);
     if (await initWebAuth()) await startDrive();
   }
   boot();

@@ -66,24 +66,52 @@
   <noscript><div class="noscript">此页面需要启用 JavaScript 才能管理文件。</div></noscript>
 
   <section id="auth-screen" class="auth-screen" aria-labelledby="auth-title">
+    <!-- Login background adapted from OpenList-Frontend src/pages/login (MIT).
+MIT License
+
+Copyright (c) 2025 The OpenList Projects Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+    -->
+    <div class="auth-background" aria-hidden="true">
+      <svg class="auth-corner-top" width="1337" height="1337" viewBox="0 0 1337 1337">
+        <defs><linearGradient id="auth-top-gradient" x1="79%" y1="62%" x2="21%" y2="86%"><stop stop-color="#28aff0"/><stop offset="1" stop-color="#120fc4"/></linearGradient></defs>
+        <path fill="url(#auth-top-gradient)" d="M1337,668.5 C1337,1037.455193874239 1037.455193874239,1337 668.5,1337 C523.6725684305388,1337 337,1236 370.50000000000006,1094 C434.03835568300906,824.6732385973953 6.906089672974592e-14,892.6277623047779 0,668.5000000000001 C0,299.5448061257611 299.5448061257609,1.1368683772161603e-13 668.4999999999999,0 C1037.455193874239,0 1337,299.544806125761 1337,668.5Z"/>
+      </svg>
+      <svg class="auth-corner-bottom" width="968" height="896" viewBox="0 0 968 896">
+        <defs><linearGradient id="auth-bottom-gradient" x1="50%" y1="0%" x2="50%" y2="100%"><stop stop-color="#28aff0"/><stop offset="1" stop-color="#120fc4"/></linearGradient></defs>
+        <path fill="url(#auth-bottom-gradient)" d="M896,448 C1142.6325445712241,465.5747656464056 695.2579309733121,896 448,896 C200.74206902668806,896 5.684341886080802e-14,695.2579309733121 0,448.0000000000001 C0,200.74206902668806 200.74206902668791,5.684341886080802e-14 447.99999999999994,0 C695.2579309733121,0 475,418 896,448Z"/>
+      </svg>
+    </div>
     <div class="auth-shell">
       <div class="auth-card">
       <div class="auth-heading">
-        <p class="auth-kicker">WPS DRIVE</p>
-        <h1 id="auth-title">登录你的云盘</h1>
-        <p id="auth-subtitle">文件随手可得，管理简单有序。</p>
-      </div>
-      <div id="auth-methods" class="auth-methods" data-method="password" role="tablist" aria-label="登录方式">
-        <span class="auth-method-slider" aria-hidden="true"></span>
-        <button id="auth-method-password" class="auth-method active" type="button" role="tab" aria-selected="true" aria-controls="password-login-panel">密码登录</button>
-        <button id="auth-method-passkey" class="auth-method" type="button" role="tab" aria-selected="false" aria-controls="passkey-login-panel">Passkey 登录</button>
+        <span class="auth-logo" aria-hidden="true">W</span>
+        <h1 id="auth-title">登录 WPS Drive</h1>
       </div>
       <form id="login-form" class="auth-form" novalidate>
         <div id="password-login-panel" class="auth-method-panel" role="tabpanel" aria-labelledby="auth-method-password">
-          <label class="auth-field"><span>用户名</span><span class="auth-input-control"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg><input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none" required></span></label>
-          <label class="auth-field"><span>密码</span><span class="password-control auth-input-control"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><input id="login-password" name="password" type="password" autocomplete="current-password" required><button id="password-toggle" class="password-toggle" type="button" title="显示密码" aria-label="显示密码"><svg class="icon"><use id="password-toggle-icon" href="#i-eye"/></svg></button></span></label>
+          <label class="auth-field"><span class="sr-only">用户名</span><span class="auth-input-control"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg><input id="login-username" placeholder="用户名" name="username" type="text" autocomplete="username" autocapitalize="none" required></span></label>
+          <label class="auth-field"><span class="sr-only">密码</span><span class="password-control auth-input-control"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><input id="login-password" placeholder="密码" name="password" type="password" autocomplete="current-password" required><button id="password-toggle" class="password-toggle" type="button" title="显示密码" aria-label="显示密码"><svg class="icon"><use id="password-toggle-icon" href="#i-eye"/></svg></button></span></label>
           <label id="login-code-field" class="auth-field hidden"><span>两步验证码</span><span class="auth-input-control"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><input id="login-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="16" placeholder="输入验证器或恢复码"></span></label>
-          <button id="login-submit" class="primary auth-submit" type="submit"><span class="auth-submit-label">登录</span><span class="auth-button-spinner" aria-hidden="true"></span></button>
+          <div class="auth-actions"><button id="login-clear" type="button">清空</button>
+          <button id="login-submit" class="primary auth-submit" type="submit"><span class="auth-submit-label">登录</span><span class="auth-button-spinner" aria-hidden="true"></span></button></div>
         </div>
         <div id="passkey-login-panel" class="auth-method-panel hidden" role="tabpanel" aria-labelledby="auth-method-passkey" aria-hidden="true">
           <div class="passkey-prompt"><span class="passkey-prompt-icon"><svg class="icon lg" aria-hidden="true"><use href="#i-key"/></svg></span><div><strong>使用你的 Passkey</strong><p>通过设备锁屏、生物识别或安全密钥快速登录。</p></div></div>
@@ -91,10 +119,15 @@
         </div>
       </form>
       <p id="auth-message" class="auth-message" role="alert" aria-live="polite"></p>
-      <p class="auth-footnote">使用安装时设置的适配器账号登录；该账号同时用于 WebDAV。</p>
+      <div class="auth-options">
+        <div id="auth-methods" class="auth-methods" data-method="password" role="tablist" aria-label="登录方式">
+          <button id="auth-method-password" class="auth-method active" type="button" role="tab" aria-selected="true" aria-controls="password-login-panel"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span>密码</span></button>
+          <button id="auth-method-passkey" class="auth-method" type="button" role="tab" aria-selected="false" aria-controls="passkey-login-panel"><svg class="icon" aria-hidden="true"><use href="#i-key"/></svg><span>Passkey</span></button>
+        </div>
+        <button id="auth-theme-button" class="icon-button" type="button" title="切换主题" aria-label="切换主题"><svg class="icon" aria-hidden="true"><use id="auth-theme-icon" href="#i-monitor"/></svg></button>
+      </div>
       </div>
     </div>
-    <p class="auth-security">WPS Drive · 你的私人文件空间</p>
   </section>
 
   <div id="app-ui" class="app-ui hidden">
