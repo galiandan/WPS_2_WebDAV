@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WPS Drive</title>
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f3f4fb" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0b0d15" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -66,17 +66,12 @@
   <noscript><div class="noscript">此页面需要启用 JavaScript 才能管理文件。</div></noscript>
 
   <section id="auth-screen" class="auth-screen" aria-labelledby="auth-title">
-    <div class="auth-bg" aria-hidden="true"></div>
-    <div class="auth-veil" aria-hidden="true"></div>
-    <div class="auth-glow" aria-hidden="true"></div>
     <div class="auth-shell">
       <div class="auth-card">
-      <p class="auth-sign">Design by <span class="auth-sign-name">Galiandan</span></p>
-      <div class="auth-left-rule" aria-hidden="true"></div>
       <div class="auth-heading">
-        <div class="auth-heading-row"><p class="auth-kicker">Welcome to <span class="auth-hl">W</span>PS <span class="auth-hl">D</span>rive</p><span class="auth-local-badge"><span class="auth-badge-dot" aria-hidden="true"></span>本地验证</span></div>
-        <h1 id="auth-title">这是一个<span class="auth-white">只属于你</span>的 WPS 云盘<span class="auth-white">工作台</span>。</h1>
-        <p id="auth-subtitle" class="auth-desc2">登录后浏览、上传和管理你在 WPS 里的全部文件，<br>同一个账号同时服务 WebDAV 客户端。</p>
+        <p class="auth-kicker">WPS DRIVE</p>
+        <h1 id="auth-title">登录你的云盘</h1>
+        <p id="auth-subtitle">文件随手可得，管理简单有序。</p>
       </div>
       <div id="auth-methods" class="auth-methods" data-method="password" role="tablist" aria-label="登录方式">
         <span class="auth-method-slider" aria-hidden="true"></span>
@@ -99,7 +94,7 @@
       <p class="auth-footnote">使用安装时设置的适配器账号登录；该账号同时用于 WebDAV。</p>
       </div>
     </div>
-    <p class="auth-security"><span class="connection-dot connected" aria-hidden="true"></span>凭据只在当前服务验证，不会显示在页面上 · 开屏界面改编自 InternalBeyond (CC BY-NC-SA 4.0)</p>
+    <p class="auth-security">WPS Drive · 你的私人文件空间</p>
   </section>
 
   <div id="app-ui" class="app-ui hidden">
@@ -120,7 +115,7 @@
         <span class="brand-mark" aria-hidden="true">W</span>
         <div class="brand-copy">
           <div class="brand-title" id="brand-title">WPS Drive</div>
-          <button id="version-button" class="version-badge" type="button" aria-haspopup="dialog" aria-expanded="false" title="查看版本信息"><span id="version-label">版本</span><span id="version-update-dot" class="version-update-dot" aria-hidden="true"></span></button>
+          <button id="version-button" class="version-badge" type="button" aria-haspopup="dialog" aria-controls="update-modal" aria-expanded="false" title="检查更新"><span id="version-label">版本</span><span id="version-update-dot" class="version-update-dot" aria-hidden="true"></span></button>
         </div>
       </div>
       <div class="header-actions">
@@ -144,27 +139,19 @@
     <button id="status-refresh-button" class="status-refresh" type="button"><svg class="icon"><use href="#i-refresh"/></svg><span>刷新连接状态</span></button>
   </div>
 
-  <dialog id="update-modal" class="update-dialog" aria-labelledby="update-modal-title">
-    <section class="modal-card update-card">
-      <div class="update-modal-head">
-        <div>
-          <h2 id="update-modal-title" class="modal-title">当前版本</h2>
-          <p class="modal-message">查看版本信息和更新状态</p>
-        </div>
-        <button id="update-modal-refresh" class="icon-button" type="button" title="重新检查" aria-label="重新检查更新"><svg class="icon"><use href="#i-refresh"/></svg></button>
-      </div>
-      <div class="update-current">
-        <strong id="update-current-version">版本</strong>
-        <span id="update-current-mark" class="update-current-mark" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span>
-      </div>
-      <p id="update-modal-state" class="update-modal-state" role="status" aria-live="polite">正在检查更新...</p>
-      <a id="update-release-link" class="update-release-link" href="#" target="_blank" rel="noopener" hidden><svg class="icon"><use href="#i-code"/></svg><span>查看发布</span></a>
-      <div class="update-modal-actions">
-        <button id="update-modal-close" type="button">关闭</button>
-        <button id="update-modal-action" class="primary" type="button">重新检查</button>
-      </div>
-    </section>
-  </dialog>
+  <section id="update-modal" class="update-popover" role="dialog" aria-labelledby="update-modal-title" hidden>
+    <div class="update-modal-head">
+      <h2 id="update-modal-title" class="modal-title">版本更新</h2>
+      <button id="update-modal-close" class="icon-button small" type="button" aria-label="关闭版本更新"><svg class="icon"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="update-current"><span>当前版本</span><strong id="update-current-version">版本</strong><span id="update-current-mark" class="update-current-mark hidden" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span></div>
+    <p id="update-modal-state" class="update-modal-state" role="status" aria-live="polite">正在检查更新...</p>
+    <div class="update-modal-actions">
+      <a id="update-release-link" class="update-release-link" href="#" target="_blank" rel="noopener" hidden>更新日志 ↗</a>
+      <button id="update-modal-refresh" class="icon-button small" type="button" title="重新检查" aria-label="重新检查更新"><svg class="icon"><use href="#i-refresh"/></svg></button>
+      <button id="update-modal-action" class="primary" type="button" disabled>检查中…</button>
+    </div>
+  </section>
 
   <div id="mobile-scrim" class="mobile-scrim" hidden></div>
   <div class="workspace-shell">

@@ -59,9 +59,9 @@
   /* ============ 主题 ============ */
   const THEME_ORDER = ["auto", "light", "dark"];
   const THEME_META = {
-    auto: { icon: "monitor", color: "#f3f4fb" },
-    light: { icon: "sun", color: "#f3f4fb" },
-    dark: { icon: "moon", color: "#0b0d15" },
+    auto: { icon: "monitor", color: "#f7f8fa" },
+    light: { icon: "sun", color: "#f7f8fa" },
+    dark: { icon: "moon", color: "#14171c" },
   };
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
   let theme = PREF.get("theme", "auto");
@@ -481,14 +481,13 @@
     if (authScreen.classList.contains("hidden")) {
       authScreen.classList.add("hidden");
     } else {
-      // 雾蓝开屏的溶解收束:幕帘散开(2.4s)后才摘除登录层,
-      // 期间工作台已在底层就绪,雾散即见。
+      // Keep a short transition while the authenticated workspace appears.
       authScreen.classList.add("leaving");
       setTimeout(() => {
         if (!authScreen.classList.contains("leaving")) return;
         authScreen.classList.add("hidden");
         authScreen.classList.remove("leaving");
-      }, 2400);
+      }, 180);
     }
     $("app-ui").classList.remove("hidden");
     const name = webUser && webUser.username ? webUser.username : "退出登录";
@@ -1932,7 +1931,7 @@
     const versionText = "v" + localVersion;
     $("version-label").textContent = versionText;
     $("update-current-version").textContent = versionText;
-    $("version-button").setAttribute("aria-label", "当前版本 " + versionText + "，点击查看详情");
+    $("version-button").setAttribute("aria-label", "当前版本 " + versionText + "，点击检查更新");
   }
 
   async function initLocalVersion() {
@@ -1965,11 +1964,11 @@
     $("update-current-version").textContent = versionText;
     badge.classList.toggle("has-update", available);
     badge.title = available
-      ? "发现新版本 v" + data.latest_version + "，点击查看详情"
+      ? "发现新版本 v" + data.latest_version + "，点击检查更新"
       : "查看版本信息";
     badge.setAttribute("aria-label", available
-      ? "发现新版本 v" + data.latest_version + "，点击查看详情"
-      : "当前版本 " + versionText + "，点击查看详情");
+      ? "发现新版本 v" + data.latest_version + "，点击检查更新"
+      : "当前版本 " + versionText + "，点击检查更新");
     mark.classList.toggle("hidden", active || available || data.state === "error");
     const state = $("update-modal-state");
     if (active) {
@@ -1997,9 +1996,21 @@
     if (data.release_url) release.href = data.release_url;
   }
 
+  function positionUpdatePopover() {
+    const panel = $("update-modal");
+    if (panel.hidden) return;
+    const anchor = $("version-button").getBoundingClientRect();
+    panel.style.left = Math.max(12, Math.min(anchor.left, window.innerWidth - panel.offsetWidth - 12)) + "px";
+    panel.style.top = ($("app-header").getBoundingClientRect().bottom + 8) + "px";
+  }
+
   function openUpdateModal() {
     const modal = $("update-modal");
-    if (!modal.open) modal.showModal();
+    if (!modal.hidden) { closeUpdateModal(); return; }
+    toggleStatusPanel(false);
+    modal.hidden = false;
+    positionUpdatePopover();
+    $("update-modal-close").focus();
     $("version-button").setAttribute("aria-expanded", "true");
     if (updateStatus) renderUpdateStatus(updateStatus);
     else {
@@ -2011,10 +2022,12 @@
     checkForUpdate(true);
   }
 
-  function closeUpdateModal() {
+  function closeUpdateModal(restoreFocus = true) {
     const modal = $("update-modal");
-    if (modal.open) modal.close();
+    if (modal.hidden) return;
+    modal.hidden = true;
     $("version-button").setAttribute("aria-expanded", "false");
+    if (restoreFocus) $("version-button").focus();
   }
 
   async function checkForUpdate(force = false) {
@@ -2088,7 +2101,7 @@
   async function startUpdate() {
     if (updateIsActive()) return;
     if (!updateStatus || !updateStatus.update_available) {
-      checkForUpdate();
+      checkForUpdate(true);
       return;
     }
     const button = $("update-modal-action");
@@ -2743,9 +2756,13 @@
   $("version-button").addEventListener("click", openUpdateModal);
   $("update-modal-refresh").addEventListener("click", () => checkForUpdate(true));
   $("update-modal-action").addEventListener("click", startUpdate);
-  $("update-modal-close").addEventListener("click", closeUpdateModal);
-  $("update-modal").addEventListener("close", () => {
-    $("version-button").setAttribute("aria-expanded", "false");
+  $("update-modal-close").addEventListener("click", () => closeUpdateModal());
+  window.addEventListener("resize", positionUpdatePopover);
+  document.addEventListener("pointerdown", (event) => {
+    if (!$("update-modal").contains(event.target) && !$("version-button").contains(event.target)) closeUpdateModal(false);
+  });
+  document.addEventListener("focusin", (event) => {
+    if (!$("update-modal").contains(event.target) && !$("version-button").contains(event.target)) closeUpdateModal(false);
   });
   $("connection").addEventListener("click", () => toggleStatusPanel());
   $("status-panel-close").addEventListener("click", () => toggleStatusPanel(false));
@@ -2899,6 +2916,11 @@
   });
 
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("update-modal").hidden) {
+      event.preventDefault();
+      closeUpdateModal();
+      return;
+    }
     if (event.key === "Escape" && openActionMenu) {
       closeActionMenu(true);
       return;
