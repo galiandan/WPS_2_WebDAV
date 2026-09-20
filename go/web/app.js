@@ -875,7 +875,7 @@
     $("up-button").disabled = state.busy || state.path === "/";
     $("refresh-button").disabled = state.busy;
     [$("folder-button"), $("upload-button")].forEach((button) => {
-      button.disabled = state.busy || unavailable || virtualRoot;
+      button.disabled = state.busy || state.loading || unavailable || virtualRoot;
     });
     // Empty-state retry and search actions remain usable while WPS is down;
     // only remote entry operations depend on a connected upstream.
@@ -1060,7 +1060,6 @@
   }
 
   /* ============ hash 路由 ============ */
-  let suppressHash = false;
 
   function hashPath() {
     const raw = location.hash.replace(/^#/, "");
@@ -1070,14 +1069,12 @@
   }
 
   function syncHash(path) {
-    const target = "#" + path;
+    const target = "#" + encodeURIComponent(path);
     if (location.hash === target) return;
-    suppressHash = true;
     location.hash = target;
   }
 
   window.addEventListener("hashchange", () => {
-    if (suppressHash) { suppressHash = false; return; }
     const target = hashPath();
     if (target !== state.path) load(target, false, true);
   });
@@ -1747,6 +1744,7 @@
     state.path = targetPath;
     state.loading = true;
     state.refreshing = showCachedImmediately;
+    updateControls();
     syncSpaceNavState();
     state.search = "";
     $("search-input").value = "";
@@ -1800,6 +1798,7 @@
         state.refreshing = false;
         $("refresh-button").classList.remove("busy");
         syncSpaceNavState();
+        updateControls();
       }
     }
   }
@@ -2483,7 +2482,7 @@
     const canCancel = st === "pending" || st === "active" || st === "confirming";
     const canRetry = st === "error" || st === "skipped";
     cancel.hidden = !canCancel && !canRetry;
-    cancel.disabled = st === "cancelling";
+    cancel.disabled = st === "cancelling" || (canRetry && tray.active);
     cancel.title = canRetry ? "重新上传此文件" : "取消此文件上传";
     cancel.setAttribute("aria-label", cancel.title);
     cancel.replaceChildren(icon(canRetry ? "refresh" : "x"));
@@ -2553,6 +2552,7 @@
   function trayFinishAll(ok, message) {
     tray.active = false;
     tray.xhr = null;
+    tray.files.forEach((_, index) => traySetItem(index));
     $("tray-cancel").classList.add("hidden");
     $("tray-close").classList.remove("hidden");
     $("tray-speed").textContent = message || (ok ? "全部完成" : "队列已停止");
@@ -2573,15 +2573,11 @@
       return;
     }
     if (st === "error" || st === "skipped") {
+      if (tray.active || state.busy || state.loading) return;
       if (state.connection !== "connected") {
         toast("WPS 当前不可用，请恢复连接后重试", "warn", 5200);
         return;
       }
-      tray.states[index] = "pending";
-      tray.errors[index] = "";
-      tray.loaded[index] = 0;
-      tray.speeds[index] = "等待上传";
-      traySetItem(index);
       uploadFiles([tray.files[index]], { targetPath: tray.targets[index], retryIndex: index });
       return;
     }
@@ -2690,6 +2686,11 @@
       }
       overwrite = true;
     }
+    if (tray.cancelled || tray.cancelledItems.has(index)) {
+      tray.states[index] = "cancelled";
+      traySetItem(index);
+      return !tray.cancelled;
+    }
     try {
       await uploadOne(file, overwrite, tray.targets[index], index);
       tray.done += 1;
@@ -2707,6 +2708,8 @@
       tray.errors[index] = error.message || "上传失败";
       traySetItem(index);
       return false;
+    } finally {
+      tray.xhr = null;
     }
   }
 
@@ -2714,6 +2717,7 @@
     const retryIndex = Number.isInteger(options.retryIndex) ? options.retryIndex : null;
     const retry = retryIndex !== null && tray.files[retryIndex] === files[0];
     const targetPath = retry ? tray.targets[retryIndex] : state.path;
+    if (state.loading) return;
     if (!files.length || state.connection !== "connected" || (!retry && state.path === "/" && state.spaces.length > 0)) {
       if (files.length && !retry && state.path === "/" && state.spaces.length > 0) {
         toast("请先进入一个 WPS 空间再上传文件", "warn", 4200);
@@ -2721,7 +2725,7 @@
       return;
     }
     if (state.busy && !retry) return;
-    if (retry && tray.active) return;
+    if (retry && (tray.active || state.busy)) return;
     setBusy(true);
     if (retry) {
       tray.active = true;
@@ -2752,6 +2756,8 @@
           }
         }
       }
+      // Successful items must appear even if another item failed or was cancelled.
+      if (tray.done > 0 && state.path === targetPath) await load(targetPath, true, true);
       if (tray.cancelled) {
         setStatus("上传已取消");
         toast("上传已取消", "info");
@@ -2765,7 +2771,6 @@
         setStatus(message, tray.done ? "success" : "");
         toast(message, tray.done ? "success" : "info");
         trayFinishAll(true, hasSkipped ? "队列已处理" : "全部完成");
-        if (state.path === targetPath) await load(targetPath, true, true);
       }
     } catch (error) {
       showError(error);
@@ -2784,7 +2789,7 @@
   }
 
   function showDropOverlay() {
-    if (state.busy || state.connection !== "connected" || (state.path === "/" && state.spaces.length > 0)) return;
+    if (state.busy || state.loading || state.connection !== "connected" || (state.path === "/" && state.spaces.length > 0)) return;
     $("drop-target").textContent = state.path;
     $("drop-overlay").classList.add("active");
     $("drop-overlay").setAttribute("aria-hidden", "false");
@@ -3081,8 +3086,8 @@
     // placeholder never flips to the real name and back.
     await initRootName();
     const initial = hashPath();
-    if (location.hash !== "#" + initial) {
-      history.replaceState(null, "", "#" + initial);
+    if (location.hash !== "#" + encodeURIComponent(initial)) {
+      history.replaceState(null, "", "#" + encodeURIComponent(initial));
     }
     renderBreadcrumbs();
     load(initial);

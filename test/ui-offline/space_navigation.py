@@ -81,6 +81,8 @@ async def main():
         await expect(personal).to_be_focused()
         await expect(page.locator('#entries')).to_be_hidden()
         await expect(page.locator('#skeleton')).to_be_visible()
+        await expect(page.locator('#upload-button')).to_be_disabled()
+        await expect(page.locator('#folder-button')).to_be_disabled()
         await team.click()
         await expect(team).to_have_attribute('aria-current', 'location')
         await expect(personal).not_to_have_attribute('aria-current', 'location')
@@ -90,6 +92,8 @@ async def main():
         await expect(page.locator('#entries .entry-name')).to_have_text(['团队空间.txt'])
         await expect(team).to_have_attribute('aria-busy', 'false')
         await expect(team).to_be_focused()
+        await expect(page.locator('#upload-button')).to_be_enabled()
+        await expect(page.locator('#folder-button')).to_be_enabled()
         assert await page.evaluate('originalSpaceButtons.every((node, i) => node === document.querySelectorAll("#space-list button")[i])')
 
         # Returning to a fresh directory reuses its response, including root.
