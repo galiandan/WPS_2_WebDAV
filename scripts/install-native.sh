@@ -5,11 +5,11 @@ set -Eeuo pipefail
 # falls back to a portable background process on systems without systemd.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-e2cff982e7fa736db6b82a650525748761f79afb}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-d26c7a7d088bd2873c1f66d99a79eace5207fb74}"
 # Release assets are preferred. The source path below remains the complete
 # fallback for hosts that cannot reach the binary mirror or have an unsupported
 # prebuilt architecture.
-BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.18}"
+BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.19}"
 BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 # The service is built with a fixed toolchain only when the host does not
 # already provide a compatible Go compiler. The toolchain stays in the
@@ -429,7 +429,7 @@ usage() {
   WPS_ADAPTER_DIR                    自定义部署目录；未设置时按当前 pwd 选择
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
-  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.18
+  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.19
   WPS_ADAPTER_GO_URL                   自定义 Go 工具链 HTTPS 地址
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300

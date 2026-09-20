@@ -5,8 +5,8 @@ set -Eeuo pipefail
 # the image contains only the dependency-free application code.
 REPOSITORY="https://github.com/galiandan/WPS_2_WebDAV"
 # This is deliberately an immutable commit, updated by the release process.
-SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-e2cff982e7fa736db6b82a650525748761f79afb}"
-BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.18}"
+SOURCE_REF="${WPS_ADAPTER_SOURCE_REF:-d26c7a7d088bd2873c1f66d99a79eace5207fb74}"
+BINARY_RELEASE_TAG="${WPS_ADAPTER_BINARY_RELEASE_TAG:-v1.0.19}"
 BINARY_BASE_URL="${WPS_ADAPTER_BINARY_BASE_URL:-}"
 DEFAULT_APP_DIR="/opt/wps-adapter"
 LEGACY_CONFIG_DIR="/etc/wps-adapter"
@@ -438,7 +438,7 @@ usage() {
   WPS_ADAPTER_DIR                    自定义部署目录；未设置时按当前 pwd 选择
   WPS_ADAPTER_ARCHIVE_URL              自定义项目归档 HTTPS 地址
   WPS_ADAPTER_BINARY_BASE_URL          预编译二进制目录 HTTPS 地址
-  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.18
+  WPS_ADAPTER_BINARY_RELEASE_TAG       预编译二进制 Release 标签，默认 v1.0.19
   WPS_ADAPTER_DOWNLOAD_CONNECT_TIMEOUT 下载连接超时秒数，默认 10
   WPS_ADAPTER_DOWNLOAD_MAX_TIME        单个地址总超时秒数，默认 300
   WPS_ADAPTER_GO_BUILDER_IMAGE         自定义 Go 1.25 构建镜像地址
