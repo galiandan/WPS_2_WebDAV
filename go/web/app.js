@@ -957,12 +957,27 @@
       : connectionMessage(state.connection);
   }
 
+  function positionStatusPanel() {
+    const panel = $("status-panel");
+    if (panel.hidden) return;
+    const anchor = $("connection").getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth;
+    const left = Math.max(12, Math.min(anchor.right - panel.offsetWidth, viewportWidth - panel.offsetWidth - 12));
+    const top = anchor.bottom + 8;
+    panel.style.left = left + "px";
+    panel.style.top = top + "px";
+    panel.style.maxHeight = Math.max(0, window.innerHeight - top - 12) + "px";
+  }
+
   function toggleStatusPanel(open) {
     const panel = $("status-panel");
     const shouldOpen = open === undefined ? panel.hidden : open;
     panel.hidden = !shouldOpen;
     $("connection").setAttribute("aria-expanded", String(shouldOpen));
-    if (shouldOpen) updateStatusPanel();
+    if (shouldOpen) {
+      updateStatusPanel();
+      positionStatusPanel();
+    }
   }
 
   function connectionMessage(value) {
@@ -2808,7 +2823,10 @@
   $("update-modal-refresh").addEventListener("click", () => checkForUpdate(true));
   $("update-modal-action").addEventListener("click", startUpdate);
   $("update-modal-close").addEventListener("click", () => closeUpdateModal());
-  window.addEventListener("resize", positionUpdatePopover);
+  window.addEventListener("resize", () => {
+    positionUpdatePopover();
+    positionStatusPanel();
+  });
   document.addEventListener("pointerdown", (event) => {
     if (!$("update-modal").contains(event.target) && !$("version-button").contains(event.target)) closeUpdateModal(false);
   });
@@ -3030,6 +3048,7 @@
 
   window.addEventListener("scroll", () => {
     $("app-header").classList.toggle("scrolled", window.scrollY > 4);
+    positionStatusPanel();
   }, { passive: true });
 
   window.setInterval(async () => {

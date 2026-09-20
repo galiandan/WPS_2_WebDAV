@@ -718,9 +718,10 @@ h1 { font-size: 26px; font-weight: 750; letter-spacing: -.02em; line-height: 34p
   color: var(--text);
   padding: 14px;
   position: fixed;
-  right: 24px;
-  top: calc(var(--header-h) + 10px);
-  width: 292px;
+  left: 12px;
+  top: calc(var(--header-h) + 8px);
+  width: min(292px, calc(100vw - 24px));
+  overflow-y: auto;
   z-index: 45;
 }
 @supports not (backdrop-filter: blur(1px)) {
@@ -1204,7 +1205,6 @@ button.primary:hover { background: var(--accent-deep); border-color: var(--accen
   #skeleton[data-view="grid"] { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; }
   .card { padding: 12px; }
   .card-ops { padding-top: 7px; }
-  .status-panel { left: 12px; right: 12px; top: 64px; width: auto; }
   .upload-tray { bottom: 12px; left: 12px; right: 12px; width: auto; }
   .toasts { bottom: 12px; left: 12px; right: 12px; }
   .upload-tray.show ~ .toasts { bottom: 300px; left: 12px; right: 12px; }
