@@ -553,7 +553,7 @@ func TestRESTTextPreviewStreamsWithoutDownloadDisposition(t *testing.T) {
 	if recorder.Body.String() != downloadPayload {
 		t.Errorf("body = %q, want %q", recorder.Body.String(), downloadPayload)
 	}
-	if got := recorder.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+	if got := recorder.Header().Get("Content-Type"); got != "application/octet-stream" {
 		t.Errorf("Content-Type = %q", got)
 	}
 	if got := recorder.Header().Get("Content-Disposition"); got != "" {
@@ -591,7 +591,7 @@ func TestRESTTextPreviewRejectsNonTextFiles(t *testing.T) {
 	if recorder.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d body = %q", recorder.Code, recorder.Body.String())
 	}
-	if recorder.Body.String() != `{"error":"only .txt files can be previewed"}` {
+	if recorder.Body.String() != `{"error":"only supported text files can be previewed"}` {
 		t.Errorf("body = %q", recorder.Body.String())
 	}
 }

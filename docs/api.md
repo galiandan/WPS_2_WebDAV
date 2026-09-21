@@ -4,9 +4,12 @@
 
 ## 浏览器页面
 
-打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页直接使用安装时设置的适配器 Basic Auth 账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、在线浏览 TXT、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以单并发预取最多 8 个直接子文件夹，缓存 30 秒；进入已预取或已经访问过的文件夹时，网页先立即显示缓存内容，再后台刷新，不会先清空列表等待 WPS。状态检查仅用于后台状态徽标，不会阻塞目录导航。刷新目录或执行写操作会清理这批缓存。
+打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页直接使用安装时设置的适配器 Basic Auth 账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、在线浏览纯文本文件、下载文件、新建文件夹、重命名、移动和删除。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以单并发预取最多 8 个直接子文件夹，缓存 30 秒；进入已预取或已经访问过的文件夹时，网页先立即显示缓存内容，再后台刷新，不会先清空列表等待 WPS。状态检查仅用于后台状态徽标，不会阻塞目录导航。刷新目录或执行写操作会清理这批缓存。
 
 网页不提供注册功能，也不创建额外的用户数据库。唯一网页登录账号就是安装时写入 `/opt/wps-adapter/config/secrets/adapter-username` 和 `/opt/wps-adapter/config/secrets/adapter-password` 的适配器账号；浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。替换这两个文件后，网页登录和 WebDAV 会同时使用新凭据。
+
+
+文本阅读交互参考 [OpenList 文本预览](https://github.com/OpenListTeam/OpenList-Frontend/blob/4520f96204408982a563e6a075adc020bac5dccb/src/pages/home/previews/text-editor.tsx)和[编码选择](https://github.com/OpenListTeam/OpenList-Frontend/blob/4520f96204408982a563e6a075adc020bac5dccb/src/components/EncodingSelect.tsx)；本项目使用原生 `TextDecoder` 和 `<pre>` 实现只读预览，无需加载外部编辑器。
 
 ## WebDAV
 
@@ -75,7 +78,7 @@ PATCH /api/v1/storage
 
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
 
-其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 只接受 `.txt` 文件，默认最多返回前 2 MiB，超出时通过 `X-Preview-Truncated: true` 标记，不返回下载附件头。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
 
 ### WPS status
 

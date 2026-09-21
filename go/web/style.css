@@ -1012,6 +1012,16 @@ dialog[open] .modal-card { animation: modal-in .26s var(--ease-out) both; }
   white-space: pre;
   word-break: normal;
 }
+.preview-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.preview-toolbar label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.preview-toolbar select { width: auto; padding: 6px; }
+.preview-toolbar input[type="checkbox"] { width: auto; margin: 0; }
+.preview-toolbar button { margin-left: auto; }
+.preview-content.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.preview-dialog.expanded { width: calc(100vw - 24px); max-width: none; height: calc(100dvh - 24px); max-height: none; }
+.preview-dialog.expanded .preview-card { width: 100%; max-width: none; height: 100%; display: flex; flex-direction: column; }
+.preview-dialog.expanded .preview-content { flex: 1; min-height: 0; max-height: none; }
+.preview-dialog.expanded .preview-head, .preview-dialog.expanded .preview-toolbar, .preview-dialog.expanded .modal-actions { flex-shrink: 0; }
 .preview-note { color: var(--warn); font-size: 12px; line-height: 18px; margin: 10px 0 -6px; }
 .preview-card .modal-actions { margin-top: 18px; }
 .settings-card { max-width: 460px; }

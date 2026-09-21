@@ -1835,26 +1835,86 @@
   }
 
   function isPreviewableText(name) {
-    return typeof name === "string" && /\.txt$/i.test(name);
+    return typeof name === "string" && /\.(txt|log|md|csv|json|xml|ya?ml|ini|conf|toml)$/i.test(name);
   }
 
   let previewGeneration = 0;
   let previewTarget = null;
+  let previewController = null;
+  let previewBytes = null;
+  let previewTruncated = false;
+  let previewLimit = 0;
 
   function closePreview() {
     previewGeneration += 1;
+    if (previewController) previewController.abort();
+    previewController = null;
     previewTarget = null;
+    previewBytes = null;
+    $("preview-content").textContent = "";
     const dialog = $("preview-modal");
     if (dialog.open) dialog.close();
   }
 
+  function detectPreviewEncoding(bytes) {
+    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
+    try {
+      // A bounded preview may end halfway through a character. Streaming
+      // decoding leaves that incomplete suffix buffered instead of rejecting it.
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: previewTruncated });
+      return "utf-8";
+    } catch (_) {
+      return "gb18030";
+    }
+  }
+
+  function renderPreview() {
+    if (!previewBytes) return;
+    const content = $("preview-content");
+    const selected = $("preview-encoding").value;
+    const encoding = selected === "auto" ? detectPreviewEncoding(previewBytes) : selected;
+    content.hidden = true;
+    content.textContent = "";
+    $("preview-error").textContent = "";
+    $("preview-note").hidden = true;
+    try {
+      // Preserve the bytes so an encoding change never needs another request.
+      const text = new TextDecoder(encoding).decode(previewBytes, { stream: previewTruncated });
+      // Inspect decoded text so UTF-16's zero bytes are not mistaken for binary.
+      if (/[\u0000-\u0008\u000e-\u001f\u007f]/.test(text)) {
+        throw new Error("文件包含二进制或控制字符，无法作为纯文本预览；可切换编码或下载查看。");
+      }
+      content.textContent = text;
+      content.hidden = false;
+      content.classList.toggle("wrap", $("preview-wrap").checked);
+      content.style.fontSize = `${$("preview-font").value}px`;
+      $("preview-meta").textContent = `${formatBytes(previewTarget.entry.size)} · ${encoding.toUpperCase()}${selected === "auto" ? "（自动识别，可手动切换）" : ""}`;
+      const notes = [];
+      if (!previewBytes.length) notes.push("这是一个空文件。");
+      if (previewTruncated) notes.push(`文件较大，仅显示前 ${formatBytes(previewLimit)}；下载完整文件可查看剩余内容。`);
+      if (text.includes("\ufffd")) notes.push("部分字符无法解码，请尝试切换编码。");
+      $("preview-note").textContent = notes.join(" ");
+      $("preview-note").hidden = notes.length === 0;
+    } catch (error) {
+      $("preview-error").textContent = error.message || "文本解码失败，请切换编码或下载查看。";
+    }
+  }
+
   async function previewText(entry, path) {
     closeActionMenu();
+    if (previewController) previewController.abort();
+    const controller = new AbortController();
+    previewController = controller;
     const generation = ++previewGeneration;
     previewTarget = { entry, path };
+    previewBytes = null;
+    previewTruncated = false;
     const dialog = $("preview-modal");
     $("preview-title").textContent = entry.name;
     $("preview-meta").textContent = `${formatBytes(entry.size)} · 纯文本文件`;
+    $("preview-encoding").value = "auto";
     $("preview-loading").hidden = false;
     $("preview-content").hidden = true;
     $("preview-content").textContent = "";
@@ -1867,33 +1927,36 @@
       const response = await fetch(pathUrl("preview", path), {
         cache: "no-store",
         credentials: "same-origin",
-        headers: { Accept: "text/plain" },
+        headers: { Accept: "application/octet-stream" },
+        signal: controller.signal,
       });
-      const text = await response.text();
       if (!response.ok) {
         let message = `请求失败（${response.status}）`;
+        let payload;
         try {
-          const payload = JSON.parse(text);
+          payload = await response.json();
           if (payload && payload.error) message = payload.error;
         } catch (_) {}
         const error = new Error(message);
         error.status = response.status;
+        if (payload && payload.code) error.code = payload.code;
         throw error;
       }
+      const bytes = new Uint8Array(await response.arrayBuffer());
       if (generation !== previewGeneration) return;
+      previewBytes = bytes;
+      previewTruncated = response.headers.get("X-Preview-Truncated") === "true";
+      previewLimit = Number(response.headers.get("X-Preview-Limit")) || bytes.length;
       $("preview-loading").hidden = true;
-      $("preview-content").textContent = text;
-      $("preview-content").hidden = false;
-      if (response.headers.get("X-Preview-Truncated") === "true") {
-        $("preview-note").textContent = "文件较大，仅显示前 2 MB；下载完整文件可查看剩余内容。";
-        $("preview-note").hidden = false;
-      }
-      $("preview-content").focus();
+      renderPreview();
+      if (!$("preview-content").hidden) $("preview-content").focus();
     } catch (error) {
-      if (generation !== previewGeneration) return;
+      if (generation !== previewGeneration || error.name === "AbortError") return;
       $("preview-loading").hidden = true;
       $("preview-error").textContent = error.message || "文件预览失败，请重试";
       if (error.status === 401 || isWpsError(error)) showError(error, { notify: false });
+    } finally {
+      if (previewController === controller) previewController = null;
     }
   }
 
@@ -2921,6 +2984,18 @@
 
   $("preview-download").addEventListener("click", () => {
     if (previewTarget) download(previewTarget.entry, previewTarget.path, $("preview-download"));
+  });
+  $("preview-encoding").addEventListener("change", renderPreview);
+  $("preview-wrap").addEventListener("change", () => {
+    $("preview-content").classList.toggle("wrap", $("preview-wrap").checked);
+  });
+  $("preview-font").addEventListener("change", () => {
+    $("preview-content").style.fontSize = `${$("preview-font").value}px`;
+  });
+  $("preview-fullscreen").addEventListener("click", () => {
+    const expanded = $("preview-modal").classList.toggle("expanded");
+    $("preview-fullscreen").setAttribute("aria-pressed", String(expanded));
+    $("preview-fullscreen").textContent = expanded ? "退出全屏" : "全屏阅读";
   });
   $("preview-close").addEventListener("click", closePreview);
   $("preview-close-top").addEventListener("click", closePreview);

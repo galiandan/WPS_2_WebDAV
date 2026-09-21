@@ -331,6 +331,25 @@ SOFTWARE.
         </div>
         <button id="preview-close-top" class="icon-button small" type="button" title="关闭预览" aria-label="关闭预览"><svg class="icon"><use href="#i-x"/></svg></button>
       </div>
+      <div class="preview-toolbar" role="group" aria-label="阅读选项">
+        <label>编码 <select id="preview-encoding">
+          <option value="auto">自动识别</option>
+          <option value="utf-8">UTF-8</option>
+          <option value="gb18030">GB18030 / GBK</option>
+          <option value="big5">Big5</option>
+          <option value="utf-16le">UTF-16 LE</option>
+          <option value="utf-16be">UTF-16 BE</option>
+        </select></label>
+        <label><input id="preview-wrap" type="checkbox" checked> 自动换行</label>
+        <label>字号 <select id="preview-font">
+          <option value="12">12</option>
+          <option value="14" selected>14</option>
+          <option value="16">16</option>
+          <option value="18">18</option>
+          <option value="20">20</option>
+        </select></label>
+        <button id="preview-fullscreen" type="button" aria-pressed="false">全屏阅读</button>
+      </div>
       <div id="preview-loading" class="preview-state" role="status">正在读取文件...</div>
       <pre id="preview-content" class="preview-content" tabindex="0" hidden></pre>
       <p id="preview-note" class="preview-note" hidden></p>

@@ -25,3 +25,11 @@ python test/ui-offline/auth_startup.py
 ```
 
 延迟脚本与会话响应，检查首屏及检查期间不显示登录表单，覆盖已登录、未登录、未启用认证和网络失败。
+
+纯文本预览回归：
+
+```sh
+python test/ui-offline/text_preview.py
+```
+
+覆盖中文编码与手动切换、空文件、多字节截断、安全显示、二进制提示、请求失败与取消、阅读控制及手机布局。截图保存到 `/tmp/wps-text-preview-desktop.png` 和 `/tmp/wps-text-preview-mobile.png`。
