@@ -69,7 +69,7 @@ async def main():
 
         await context.route('**/*', route)
         await page.goto('https://wps-offline.invalid/')
-        await page.locator('#space-list button').click()
+        await page.locator('#space-list > .directory-node > .directory-row > .tree-link').click()
         await expect(page.locator('#skeleton')).to_be_hidden()
         assert await page.evaluate('decodeURIComponent(location.hash.slice(1))') == '/' + special
         await page.reload()

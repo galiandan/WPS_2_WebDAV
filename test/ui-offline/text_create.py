@@ -85,7 +85,7 @@ async def main():
         await context.route('**/*', route)
         await page.goto('https://wps-offline.invalid/')
         await expect(page.locator('#text-file-button')).to_be_disabled()
-        await page.locator('#space-list button').click()
+        await page.locator('#space-list > .directory-node > .directory-row > .tree-link').click()
         await asyncio.wait_for(listing_started.wait(), 5)
         await expect(page.locator('#text-file-button')).to_be_disabled()
         hold_listing = False

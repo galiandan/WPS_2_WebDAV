@@ -1397,3 +1397,30 @@ button.primary:hover { background: var(--accent-deep); border-color: var(--accen
 @media (prefers-reduced-motion: reduce) {
   .openlist-ui .list-body > .list-row:hover, .openlist-ui .card:hover { transform: none; }
 }
+
+/* Lazy directory disclosures share the file browser's listings. */
+.directory-tree, .directory-children { list-style: none; padding: 0; margin: 0; }
+.openlist-ui .directory-tree { margin: 8px 0 0; padding: 8px 0 0; }
+.directory-node { min-width: 0; }
+.directory-row { display: flex; align-items: center; min-width: 0; gap: 2px; }
+.openlist-ui .directory-row .tree-link { flex: 1; min-width: 0; width: auto; padding: 6px 4px; gap: 6px; }
+.openlist-ui .tree-link.is-ancestor { color: var(--accent); }
+.openlist-ui .tree-toggle { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 26px; width: 26px; min-height: 36px; padding: 0; border: 0; background: transparent; color: var(--text-3); border-radius: 6px; }
+.openlist-ui .tree-toggle:hover { background: var(--ol-hover); color: var(--accent); }
+.tree-toggle .icon { width: 14px; height: 14px; }
+.directory-branch { margin-left: 12px; padding-left: 8px; border-left: 1px solid var(--line); }
+.directory-status { font-size: 12px; color: var(--text-3); padding: 6px 4px 6px 10px; overflow-wrap: anywhere; }
+.tree-retry { font-size: 12px; padding: 2px 6px; min-height: 28px; }
+.openlist-ui .space-nav { overflow: auto; flex: 1; }
+.openlist-ui .sidebar { display: flex; flex-direction: column; }
+.openlist-ui .sidebar-head { flex-shrink: 0; padding: 8px 8px 12px; }
+@media (min-width: 1200px) {
+  .openlist-ui .workspace-shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; width: calc(100% - 96px); max-width: 1280px; align-items: start; }
+  .openlist-ui .sidebar { position: sticky; top: 76px; left: auto; width: 100%; max-width: none; height: calc(100dvh - 100px); max-height: none; overflow: hidden; }
+  .openlist-ui .content { padding: 8px 0; }
+}
+@media (max-width: 1199px) {
+  .openlist-ui .sidebar { width: min(300px, calc(100vw - 40px)); height: 100dvh; overflow: auto; }
+  .openlist-ui .tree-toggle { flex-basis: 32px; width: 32px; min-height: 44px; }
+  .openlist-ui .directory-row .tree-link { min-height: 44px; }
+}

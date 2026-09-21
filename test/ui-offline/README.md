@@ -37,3 +37,7 @@ python test/ui-offline/text_preview.py
 新建文本文件回归：运行 python test/ui-offline/text_create.py。
 
 覆盖 UTF-8 编写保存及随后预览、空文件、特殊字符路径、文件名校验、同名保护、失败/关闭保留草稿及目标目录、加载和保存状态、手机布局；截图保存到 /tmp/wps-text-create-desktop.png 和 /tmp/wps-text-create-mobile.png。
+
+目录树回归：运行 python test/ui-offline/directory_tree.py。
+
+覆盖按需展开、缓存复用、精确高亮、键盘导航、新建同步、失败重试、删除后的迟到响应、重命名刷新、深层直达链接和手机抽屉。截图保存到 /tmp/wps-directory-tree-desktop.png 和 /tmp/wps-directory-tree-mobile.png。

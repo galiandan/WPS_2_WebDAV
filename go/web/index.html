@@ -200,11 +200,11 @@ SOFTWARE.
 
   <div id="mobile-scrim" class="mobile-scrim" hidden></div>
   <div class="workspace-shell">
-    <aside id="sidebar" class="sidebar" aria-label="云盘导航">
-      <div class="sidebar-head"><span>空间</span><button id="sidebar-close" class="icon-button small mobile-only" type="button" title="关闭导航" aria-label="关闭导航"><svg class="icon"><use href="#i-x"/></svg></button></div>
-      <nav class="space-nav" aria-label="WPS 空间">
+    <aside id="sidebar" class="sidebar" aria-label="目录导航">
+      <div class="sidebar-head"><span>目录</span><button id="sidebar-close" class="icon-button small mobile-only" type="button" title="关闭导航" aria-label="关闭导航"><svg class="icon"><use href="#i-x"/></svg></button></div>
+      <nav class="space-nav" aria-label="WPS 目录">
         <button id="space-root" class="space-item active" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-home"/></svg></span><span class="space-item-name">全部空间</span></button>
-        <div id="space-list" class="space-list"></div>
+        <ul id="space-list" class="space-list directory-tree" aria-label="空间目录"></ul>
       </nav>
       <div class="mobile-sidebar-actions" aria-label="全局操作">
         <button id="sidebar-refresh-button" class="space-item" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-refresh"/></svg></span><span class="space-item-name">刷新目录</span></button>

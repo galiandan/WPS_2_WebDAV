@@ -735,7 +735,9 @@
 
   function clearDirectoryCache() {
     directoryCacheEpoch += 1;
+    treeRevealGeneration += 1;
     directoryCache.clear();
+    for (const path of directoryNodes.keys()) invalidateDirectoryBranch(path, false);
     prefetchQueue = [];
     prefetchGeneration += 1;
   }
@@ -747,6 +749,7 @@
   function clearDirectoryCacheFor(path) {
     const key = canonicalPath(path);
     directoryCache.delete(key);
+    invalidateDirectoryBranch(key);
     prefetchQueue = prefetchQueue.filter((queued) => canonicalPath(queued) !== key);
   }
 
@@ -776,6 +779,7 @@
           entries,
           expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
         });
+        receiveDirectoryListing(key, entries);
       }
       return entries;
     }).catch((error) => {
@@ -1300,21 +1304,187 @@
     setTimeout(() => { if ($("sidebar-close") && document.body.classList.contains("nav-open")) $("sidebar-close").focus(); }, 0);
   }
 
+  // Disclosure navigation: native buttons and nested lists keep keyboard and
+  // touch navigation available without emulating a desktop tree widget.
+  const directoryNodes = new Map();
+  let treeNodeID = 0;
+  let treeRevealGeneration = 0;
+
   function syncSpaceNavState() {
     const root = $("space-root");
-    const buttons = [root, ...$("space-list").children];
+    const buttons = [root, ...$("space-list").querySelectorAll(".tree-link")];
     buttons.forEach((button) => {
       const path = button === root ? "/" : button.dataset.spacePath;
-      const active = path === "/" ? state.path === "/"
-        : state.path === path || state.path.startsWith(path + "/");
+      const active = state.path === path;
+      const ancestor = path !== "/" && state.path.startsWith(path + "/");
       const loading = active && state.loading;
       button.classList.toggle("active", active);
+      button.classList.toggle("is-ancestor", ancestor);
       button.classList.toggle("is-loading", loading);
       if (active) button.setAttribute("aria-current", "location");
       else button.removeAttribute("aria-current");
       button.setAttribute("aria-busy", String(loading));
-      button.querySelector("use").setAttribute("href", loading ? "#i-refresh" : button === root ? "#i-home" : "#i-cloud");
+      button.querySelector("use").setAttribute("href", loading ? "#i-refresh" : button === root ? "#i-home" : "#i-" + button.dataset.treeIcon);
     });
+  }
+
+  function removeDirectoryNode(node) {
+    for (const child of [...node.children.children]) {
+      const record = directoryNodes.get(child.dataset.treePath);
+      if (record) removeDirectoryNode(record);
+    }
+    if (node.element.contains(document.activeElement)) {
+      const parent = directoryNodes.get(dirnameOf(node.path));
+      (parent ? parent.button : $("space-root")).focus();
+    }
+    node.request = null;
+    directoryNodes.delete(node.path);
+    directoryCache.delete(node.path);
+    node.element.remove();
+  }
+
+  function reconcileDirectoryNodes(container, parent, entries, spaces = false) {
+    const folders = entries.filter((entry) => entry && entry.kind === "folder" && typeof entry.name === "string")
+      .slice().sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true }));
+    const paths = new Set(folders.map((entry) => joinPath(parent, entry.name)));
+    for (const element of [...container.children]) {
+      const node = directoryNodes.get(element.dataset.treePath);
+      if (node && !paths.has(node.path)) removeDirectoryNode(node);
+    }
+    folders.forEach((entry, index) => {
+      const path = joinPath(parent, entry.name);
+      let node = directoryNodes.get(path);
+      if (!node) {
+        const element = el("li", "directory-node");
+        element.dataset.treePath = path;
+        const row = el("div", "directory-row");
+        const toggle = el("button", "tree-toggle");
+        toggle.type = "button";
+        toggle.append(icon("chev-right"));
+        const button = el("button", "space-item tree-link");
+        button.type = "button";
+        button.title = entry.name;
+        button.dataset.spacePath = path;
+        button.dataset.treeIcon = spaces && isVirtualSpaceEntry(entry) ? "cloud" : "folder";
+        button.setAttribute("aria-label", (spaces && isVirtualSpaceEntry(entry) ? "进入空间 " : "进入目录 ") + entry.name);
+        const iconWrap = el("span", "space-item-icon");
+        iconWrap.append(icon(button.dataset.treeIcon));
+        button.append(iconWrap, el("span", "space-item-name", entry.name));
+        const branch = el("div", "directory-branch");
+        branch.id = "directory-branch-" + (++treeNodeID);
+        branch.hidden = true;
+        const status = el("div", "directory-status");
+        status.setAttribute("role", "status");
+        const children = el("ul", "directory-children");
+        branch.append(status, children);
+        toggle.setAttribute("aria-controls", branch.id);
+        row.append(toggle, button);
+        element.append(row, branch);
+        node = { path, name: entry.name, element, button, toggle, branch, children, status, expanded: false, entries: null, request: null };
+        directoryNodes.set(path, node);
+        toggle.addEventListener("click", () => setDirectoryExpanded(node, !node.expanded));
+        button.addEventListener("click", () => { closeMobileNav(); load(path); });
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "ArrowRight") {
+            event.preventDefault();
+            if (!node.expanded) setDirectoryExpanded(node, true);
+            else node.children.querySelector(".tree-link")?.focus();
+          } else if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            if (node.expanded) setDirectoryExpanded(node, false);
+            else directoryNodes.get(dirnameOf(path))?.button.focus();
+          }
+        });
+        updateDirectoryToggle(node);
+      }
+      // Do not replace/move an unchanged row: preserve focus and scroll.
+      if (container.children[index] !== node.element) container.insertBefore(node.element, container.children[index] || null);
+    });
+    syncSpaceNavState();
+  }
+
+  function updateDirectoryToggle(node) {
+    node.toggle.setAttribute("aria-expanded", String(node.expanded));
+    node.toggle.setAttribute("aria-label", (node.expanded ? "收起目录 " : "展开目录 ") + node.name);
+    node.toggle.title = (node.expanded ? "收起" : "展开") + node.name;
+    node.toggle.querySelector("use").setAttribute("href", node.expanded ? "#i-chev-down" : "#i-chev-right");
+    node.branch.hidden = !node.expanded;
+  }
+
+  function receiveDirectoryListing(path, entries) {
+    const node = directoryNodes.get(path);
+    if (!node) return;
+    node.entries = entries;
+    if (!node.expanded) return;
+    reconcileDirectoryNodes(node.children, path, entries);
+    node.status.textContent = node.children.children.length ? "" : "无子文件夹";
+    node.status.hidden = Boolean(node.children.children.length);
+  }
+
+  async function loadDirectoryBranch(node, force = false) {
+    if (node.request) return node.request;
+    if (node.status.contains(document.activeElement)) node.toggle.focus();
+    node.status.hidden = false;
+    node.status.textContent = "正在加载…";
+    node.toggle.setAttribute("aria-busy", "true");
+    const request = directoryEntries(node.path, force);
+    node.request = request;
+    try {
+      const entries = await request;
+      if (directoryNodes.get(node.path) !== node || node.request !== request) return;
+      receiveDirectoryListing(node.path, entries);
+    } catch (_) {
+      if (directoryNodes.get(node.path) !== node || node.request !== request) return;
+      node.status.textContent = "读取失败 ";
+      const retry = el("button", "tree-retry", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => loadDirectoryBranch(node, true));
+      node.status.append(retry);
+    } finally {
+      if (node.request === request) {
+        node.request = null;
+        node.toggle.setAttribute("aria-busy", "false");
+      }
+    }
+  }
+
+  function setDirectoryExpanded(node, expanded) {
+    node.expanded = expanded;
+    updateDirectoryToggle(node);
+    if (expanded) {
+      if (node.entries) receiveDirectoryListing(node.path, node.entries);
+      return loadDirectoryBranch(node);
+    }
+    // A user collapse takes precedence over an in-flight path reveal.
+    treeRevealGeneration += 1;
+    // Keep already loaded children and focus when the branch is reopened.
+    if (node.branch.contains(document.activeElement)) node.toggle.focus();
+    return Promise.resolve();
+  }
+
+  function invalidateDirectoryBranch(path, refresh = true) {
+    const node = directoryNodes.get(path);
+    if (!node) return;
+    node.entries = null;
+    node.request = null;
+    node.toggle.setAttribute("aria-busy", "false");
+    if (refresh && node.expanded) queueMicrotask(() => {
+      if (directoryNodes.get(path) === node && node.expanded) loadDirectoryBranch(node);
+    });
+  }
+
+  async function revealDirectoryPath() {
+    const generation = ++treeRevealGeneration;
+    const target = state.path;
+    let path = "";
+    for (const name of target.split("/").filter(Boolean)) {
+      if (generation !== treeRevealGeneration || state.path !== target) return;
+      path += "/" + name;
+      const node = directoryNodes.get(path);
+      if (!node) return;
+      await setDirectoryExpanded(node, true);
+    }
+    if (generation === treeRevealGeneration && state.path === target) syncSpaceNavState();
   }
 
   function renderSpaceNav(rootEntries = null) {
@@ -1323,32 +1493,10 @@
         name: entry.name,
         path: joinPath("/", entry.name),
       }));
-    }
-    const list = $("space-list");
-    // Keep button identity, focus and horizontal scroll while navigating.
-    const changed = list.children.length !== state.spaces.length || state.spaces.some((space, index) => {
-      const button = list.children[index];
-      return button.dataset.spacePath !== space.path || button.title !== space.name;
-    });
-    if (changed) {
-      list.replaceChildren();
-      state.spaces.forEach((space) => {
-        const button = el("button", "space-item");
-        button.type = "button";
-        button.title = space.name;
-        button.dataset.spacePath = space.path;
-        button.setAttribute("aria-label", `进入空间 ${space.name}`);
-        const iconWrap = el("span", "space-item-icon");
-        iconWrap.append(icon("cloud"));
-        button.append(iconWrap, el("span", "space-item-name", space.name));
-        button.addEventListener("click", () => {
-          closeMobileNav();
-          load(space.path);
-        });
-        list.append(button);
-      });
+      reconcileDirectoryNodes($("space-list"), "/", rootEntries, true);
     }
     syncSpaceNavState();
+    revealDirectoryPath();
     updateControls();
   }
 
@@ -1759,6 +1907,7 @@
     const cachedEntries = preserveCurrentList ? state.entries : cachedDirectoryEntries(targetPath);
     const showCachedImmediately = preserveCurrentList || Array.isArray(cachedEntries);
     const requestGeneration = ++navigationGeneration;
+    treeRevealGeneration += 1;
     closeActionMenu();
     if (targetPath !== previousPath) state.selectedPath = "";
     state.path = targetPath;

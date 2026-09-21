@@ -69,8 +69,8 @@ async def main():
         await context.route('**/*', route)
         await page.goto('https://wps-offline.invalid/')
         await expect(page.locator('#auth-screen')).to_be_hidden()
-        await expect(page.locator('#space-list button')).to_have_count(2)
-        await page.evaluate('window.originalSpaceButtons = [...document.querySelectorAll("#space-list button")]')
+        await expect(page.locator('#space-list > .directory-node > .directory-row > .tree-link')).to_have_count(2)
+        await page.evaluate('window.originalSpaceButtons = [...document.querySelectorAll("#space-list > .directory-node > .directory-row > .tree-link")]')
         personal = page.get_by_role('button', name='进入空间 个人空间', exact=True)
         team = page.get_by_role('button', name='进入空间 团队空间', exact=True)
 
@@ -94,7 +94,7 @@ async def main():
         await expect(team).to_be_focused()
         await expect(page.locator('#upload-button')).to_be_enabled()
         await expect(page.locator('#folder-button')).to_be_enabled()
-        assert await page.evaluate('originalSpaceButtons.every((node, i) => node === document.querySelectorAll("#space-list button")[i])')
+        assert await page.evaluate('originalSpaceButtons.every((node, i) => node === document.querySelectorAll("#space-list > .directory-node > .directory-row > .tree-link")[i])')
 
         # Returning to a fresh directory reuses its response, including root.
         await page.locator('#space-root').click()
