@@ -1253,3 +1253,129 @@ button.primary:hover { background: var(--accent-deep); border-color: var(--accen
   .view-toggle button { width: 32px; min-height: 38px; }
   .toolbar-action { padding: 0; width: 40px; }
 }
+
+/* OpenList-Frontend home component port (MIT).
+ * The unmodified TSX and license are in upstream/openlist/.
+ * Hope spacing: $1=4px, $2=8px, $4=16px; rounded $lg=8px, $xl=12px.
+ * Container, Body, Obj, ListItem, GridItem and Right retain upstream geometry.
+ * WPS-only controls use the same surfaces; API bindings remain in app.js.
+ */
+.openlist-ui {
+  --accent: #1890ff;
+  --accent-soft: rgba(24,144,255,.15);
+  --ol-hover: rgba(132,133,141,.18);
+  --header-h: 60px;
+  font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+  font-size: 16px;
+}
+.openlist-ui .app-header { background: var(--bg); border: 0; position: relative; height: auto; }
+.openlist-ui .app-header.scrolled { box-shadow: none; }
+.openlist-ui .header-inner { width: min(99%,980px); max-width: none; padding: 8px calc(2% + .5rem); min-height: 60px; }
+.openlist-ui .brand { gap: 8px; }
+.openlist-ui .brand-mark { background: none; color: var(--accent); border-radius: 0; width: 36px; height: 44px; font-size: 34px; font-weight: 750; }
+.openlist-ui .brand-copy { gap: 2px; align-items: flex-start; flex-direction: column; }
+.openlist-ui .brand-title { font-size: 20px; font-weight: 600; }
+.openlist-ui .version-badge { font-size: 11px; padding: 0 5px; min-height: 16px; }
+.openlist-ui .header-actions { gap: 8px; }
+.openlist-ui .header-divider { display: none; }
+.openlist-ui .search { width: 164px; flex: none; min-height: 32px; height: 32px; padding: 4px 8px; border: 2px solid transparent; background: var(--accent-soft); color: var(--accent); border-radius: 6px; }
+.openlist-ui .search:focus-within { border-color: var(--accent); box-shadow: none; }
+.openlist-ui .search input { width: 100%; min-width: 0; height: auto; font-size: 13px; color: var(--text); }
+.openlist-ui .search input::placeholder { color: var(--accent); }
+.openlist-ui .view-toggle { background: transparent; border: 0; }
+.openlist-ui .view-thumb { background: var(--accent-soft); box-shadow: none; }
+.openlist-ui .view-toggle button { color: var(--accent); }
+.openlist-ui .connection { width: 32px; min-height: 32px; padding: 6px; }
+.openlist-ui #connection-label { display: none; }
+.openlist-ui .workspace-shell { width: min(99%,980px); max-width: none; margin: auto; }
+.openlist-ui .content { padding: 8px 2%; margin-top: 4px; min-height: 80vh; width: 100%; }
+.openlist-ui .workspace-head { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); }
+.openlist-ui .navigation-row { margin: 0 0 16px; min-height: 32px; flex-direction: row; }
+.openlist-ui .path-row { width: 100%; gap: 4px; }
+.openlist-ui .breadcrumbs { min-height: 32px; padding: 0; gap: 4px; flex-wrap: wrap; }
+.openlist-ui .crumb { font-size: 16px; padding: 4px; border-radius: 8px; color: var(--text); }
+.openlist-ui .crumb:hover { background: var(--ol-hover); }
+.openlist-ui .panel { padding: 8px; border: 0; border-radius: 12px; overflow: visible; box-shadow: 0 10px 15px -3px rgb(0 0 0 / .1),0 4px 6px -4px rgb(0 0 0 / .1); display: flex; flex-direction: column; }
+.openlist-ui .panel-toolbar { order: 5; min-height: 32px; padding: 8px 8px 0; border: 0; gap: 8px; flex-wrap: wrap; }
+.openlist-ui .panel-summary { color: var(--text-2); font-size: 14px; }
+.openlist-ui .panel-summary strong { font-weight: 400; color: inherit; font-size: inherit; }
+.openlist-ui .toolbar-right { flex: 0 1 auto; gap: 4px; }
+.openlist-ui .toolbar-divider { display: none; }
+.openlist-ui .sort-group, .openlist-ui .sort-group select { background: transparent; font-size: 12px; color: var(--text-2); }
+.openlist-ui .list-head, .openlist-ui .list-body > .list-row { grid-template-columns: minmax(0,50fr) minmax(0,17fr) minmax(0,33fr); gap: 0; padding: 8px; }
+.openlist-ui .list-head { position: static; background: transparent; min-height: 36px; border: 0; color: var(--text-2); font-size: 14px; }
+.openlist-ui .list-head > div { padding: 0; }
+.openlist-ui .list-head .sort-button { font-weight: 700; color: var(--text-2); }
+.openlist-ui .list-head .cell.size, .openlist-ui .list-head .cell.time { display: flex; justify-content: flex-end; text-align: right; }
+.openlist-ui .list-head .cell.size .sort-button, .openlist-ui .list-head .cell.time .sort-button { margin-left: auto; }
+.openlist-ui .list-head .cell.type, .openlist-ui .list-head .cell.ops, .openlist-ui .list-row > .cell.type { display: none; }
+.openlist-ui .list-body[role="table"] { display: flex; flex-direction: column; gap: 4px; }
+.openlist-ui .list-body > .list-row { border: 0; min-height: 40px; border-radius: 8px; transition: transform .3s, background-color .3s; cursor: pointer; }
+.openlist-ui .list-body > .list-row:hover { transform: scale(1.01); background: var(--ol-hover); }
+.openlist-ui .list-row.is-selected, .openlist-ui .list-row.is-selected:hover { background: var(--ol-hover); box-shadow: none; }
+.openlist-ui .name-cell { gap: 8px; align-items: center; min-width: 0; }
+.openlist-ui .entry-glyph { height: 24px; width: 24px; flex: 0 0 24px; border-radius: 0; background: transparent; color: var(--accent); margin: 0; }
+.openlist-ui .entry-glyph .icon { width: 24px; height: 24px; }
+.openlist-ui .entry-glyph:has(use[href="#i-folder"]) .icon { fill: currentColor; stroke-width: 1; }
+.openlist-ui .entry-name { font-size: 16px; line-height: 24px; min-height: 24px; font-weight: 400; color: var(--text); padding: 0; }
+.openlist-ui .entry-mobile-meta { display: none; }
+.openlist-ui .list-row > .cell.size, .openlist-ui .list-row > .cell.time { display: block; text-align: right; font-size: 16px; color: var(--text); font-variant-numeric: normal; }
+.openlist-ui .list-row > .cell.ops { position: absolute; z-index: 2; right: 4px; top: 2px; height: calc(100% - 4px); background: var(--surface); border-radius: 8px; opacity: 0; pointer-events: none; }
+.openlist-ui .list-row:hover > .cell.ops, .openlist-ui .list-row:focus-within > .cell.ops, .openlist-ui .list-row.has-open-menu > .cell.ops { opacity: 1; pointer-events: auto; }
+.openlist-ui .action-button, .openlist-ui .action-menu-trigger { color: var(--accent); border: 0; background: transparent; }
+.openlist-ui .list-body[role="list"] { gap: 4px; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); padding: 0; }
+.openlist-ui .card { padding: 4px; gap: 4px; border: 0; border-radius: 8px; box-shadow: none; background: transparent; cursor: pointer; transition: transform .3s,background-color .3s; }
+.openlist-ui .card:hover { transform: scale(1.06); background: var(--ol-hover); box-shadow: none; }
+.openlist-ui .card.is-selected { box-shadow: none; background: var(--ol-hover); }
+.openlist-ui .card-top { height: 100px; align-items: center; justify-content: center; }
+.openlist-ui .card .entry-glyph.lg { height: 70px; width: 70px; flex-basis: 70px; color: var(--accent); }
+.openlist-ui .card .entry-glyph.lg .icon { height: 70px; width: 70px; }
+.openlist-ui .card-name { display: block; font-size: 14px; font-weight: 400; text-align: center; white-space: nowrap; text-overflow: ellipsis; min-height: 24px; line-height: 24px; }
+.openlist-ui .card-meta, .openlist-ui .card-chev { display: none; }
+.openlist-ui .card-ops { position: absolute; top: 4px; right: 4px; border: 0; padding: 0; opacity: 0; pointer-events: none; background: var(--surface); border-radius: 8px; }
+.openlist-ui .card:hover .card-ops, .openlist-ui .card:focus-within .card-ops { opacity: 1; pointer-events: auto; }
+.openlist-ui .status-row { justify-content: center; margin-top: 16px; }
+.openlist-tools { position: fixed; right: 16px; bottom: 16px; z-index: 35; padding: 4px; border-radius: 8px; background: var(--surface); }
+.openlist-tools-panel { display: flex; flex-direction: column; gap: 4px; }
+.openlist-tools-panel[hidden] { display: none; }
+.openlist-ui .openlist-tools button { display: flex; padding: 4px; width: 32px; height: 32px; min-height: 32px; border: 0; border-radius: 8px; color: var(--accent); background: transparent; box-shadow: none; }
+.openlist-ui .openlist-tools button:hover { color: white; background: var(--accent); }
+.openlist-tools button .icon { height: 24px; width: 24px; }
+.openlist-tools .toolbar-action > span { display: none; }
+.openlist-footer { display: flex; gap: 4px; justify-content: center; align-items: center; padding: 16px 56px; font-size: 16px; }
+.openlist-footer a, .openlist-footer button { color: var(--accent); background: transparent; border: 0; text-decoration: none; padding: 4px 6px; min-height: 0; border-radius: 8px; }
+.openlist-footer a:hover, .openlist-footer button:hover { background: var(--ol-hover); }
+.openlist-ui .sidebar { background: var(--surface); position: fixed; top: 76px; left: 16px; width: max(104px,calc((100vw - 980px)/2 - 32px)); max-width: 230px; height: auto; max-height: calc(100vh - 100px); overflow: auto; border: 0; border-radius: 8px; padding: 8px; margin: 0; box-shadow: var(--shadow-1); }
+.openlist-ui .sidebar-head { display: flex; }
+.openlist-ui .sidebar-note { display: none; }
+.openlist-ui .space-nav, .openlist-ui .space-list { display: flex; flex-direction: column; align-items: stretch; gap: 4px; overflow: visible; }
+.openlist-ui .space-item { width: 100%; border-radius: 8px; min-height: 36px; padding: 6px 8px; font-size: 14px; }
+.openlist-ui .space-item.active { background: var(--ol-hover); color: var(--accent); box-shadow: none; }
+@media (max-width: 1199px) {
+  .openlist-ui #nav-menu-button, .openlist-ui #sidebar-close { display: inline-flex; }
+  .openlist-ui .sidebar { left: 0; top: 0; height: 100vh; max-height: none; width: 240px; max-width: none; z-index: 80; transform: translateX(-105%); transition: transform .28s; border-radius: 0 8px 8px 0; }
+  .openlist-ui.nav-open .sidebar { transform: translateX(0); }
+  .openlist-ui .mobile-scrim:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 70; background: #0006; }
+}
+@media (min-width: 1200px) {
+  .openlist-ui #nav-menu-button, .openlist-ui #sidebar-close { display: none; }
+}
+@media (max-width: 767px) {
+  .openlist-ui .header-inner { padding: 8px 3%; flex-wrap: wrap; gap: 8px; }
+  .openlist-ui .header-actions { margin-left: auto; }
+  .openlist-ui .brand-title { font-size: 17px; }
+  .openlist-ui .search { width: 132px; }
+  .openlist-ui .list-head, .openlist-ui .list-body > .list-row { grid-template-columns: minmax(0,76fr) minmax(0,24fr); }
+  .openlist-ui .list-head > .cell.time, .openlist-ui .list-row > .cell.time { display: none; }
+  .openlist-ui .list-row > .cell.size, .openlist-ui .entry-name { font-size: 14px; }
+  .openlist-ui .list-body > .list-row { min-height: 44px; }
+  .openlist-ui .openlist-tools button { width: 40px; height: 40px; }
+  .openlist-ui .status-row { padding: 0 36px; }
+}
+@media (max-width: 767px), (pointer: coarse) {
+  .openlist-ui .list-row > .cell.ops { position: static; height: auto; grid-column: 1 / -1; justify-self: end; opacity: 1; pointer-events: auto; }
+  .openlist-ui .card-ops { position: static; opacity: 1; pointer-events: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .openlist-ui .list-body > .list-row:hover, .openlist-ui .card:hover { transform: none; }
+}

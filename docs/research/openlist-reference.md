@@ -74,4 +74,4 @@ OpenList 的 WPS 驱动提供个人接口路径、字段形状、分页模型和
 - WPS 驱动：https://github.com/OpenListTeam/OpenList/tree/main/drivers/wps
 - WPS 驱动文档：https://doc.oplist.org/guide/drivers/wps
 
-本项目只借鉴公开资料中的思路和请求形状，不复制外部项目代码，也不把外部项目的兼容性声明扩展到本项目。真实个人账号上线前仍需在本人账号的测试目录完成一次读写验收。
+本页讨论的 WPS 驱动适配只借鉴公开资料中的思路和请求形状，不把外部项目的兼容性声明扩展到本项目。网页 UI 另按 MIT 许可证移植 OpenList-Frontend 的布局，来源和改动范围见 [移植说明](../../go/web/upstream/openlist/README.md)。真实个人账号上线前仍需在本人账号的测试目录完成一次读写验收。

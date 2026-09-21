@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/OpenListTeam/OpenList-Frontend",
+  "version": "4.2.6",
+  "retrieved": "2026-09-21",
+  "archive_sha256": "3bdf857fc861353d08b7ce183c297305f7ace2ee1bfd57dd08f3c394e98a9a00",
+  "files": {
+    "src/pages/home/Container.tsx": "61da9a3e33ffd62eec3b2b79473f067f58da4dbd5d21c51ea1b8826fb9450032",
+    "src/pages/home/Body.tsx": "7060d17eef1f81ca85efc1a09fd7af6e73a02fa0f9d9f720580aa225f09c4e8f",
+    "src/pages/home/Nav.tsx": "310807ce62d93890a4670b5f8535db9eb1095804220821f379b6bfe6e64b5698",
+    "src/pages/home/Obj.tsx": "d9ffec49398fce2c52700cc0d79438f315f3c140827b97b879d11be5120e8b8b",
+    "src/pages/home/header/Header.tsx": "12abeb01e6707a5276e0431105d21a91fd49b11ffdc23c1d44d0390e697d9346",
+    "src/pages/home/folder/List.tsx": "ccfffdbefe7ce9788d34ae788c81ce970e3349e43aa8cfe10792d359185b5daf",
+    "src/pages/home/folder/ListItem.tsx": "26a084716d091b0f0b8460ba2fe7cea686afacf623f24f58b08a164f3ceff05b",
+    "src/pages/home/folder/Grid.tsx": "8bcd2a3000d068da57ca9d6b5547daba5bc45e055aa13879cbb1dc8443fce9d3",
+    "src/pages/home/folder/GridItem.tsx": "16066e4239669e6d6e627272ae1b04ffebef6aef0629e0a0d54ffc992274c53a",
+    "src/pages/home/toolbar/Right.tsx": "0f2d0e4f0deebb760fc9dc0b4e7cfcbc746d8f84528e5a2362504156a0353570",
+    "src/pages/home/toolbar/Icon.tsx": "7c2d15a43d35898d86bc26a9576565034ab997ec0fbda01c5e60969967d5e5b0",
+    "src/pages/home/Footer.tsx": "d194af63a253021eb35ab15301f2f9c08dcb426a1daf7e4b17dc988e77b0253e",
+    "src/app/theme.ts": "2989d08d0da72720217bc49b7d6437de1923dade6f86fb759ead772e84f92f0e",
+    "src/app/index.css": "49027c8a5faaecc76b09f8340e800b850d47cee17fb7e76f8247e9afadf14b18",
+    "LICENSE": "584ee10e15ea2aea53397728b21378d094204a2880db4558ba8238705fc0d527"
+  }
+}

@@ -1649,6 +1649,17 @@
         opsCell.append(entryActions(entry, entryPath));
         node.append(nameCell, typeCell, sizeCell, timeCell, opsCell);
       }
+      // OpenList ListItem/GridItem: the whole item opens; controls keep their own actions.
+      node.addEventListener("click", (event) => {
+        if (state.loading || event.target.closest("button, a, input, .actions")) return;
+        openTarget(entry, entryPath);
+      });
+      node.addEventListener("contextmenu", (event) => {
+        const trigger = node.querySelector(".action-menu-trigger");
+        if (!trigger || trigger.disabled || event.target.closest(".action-menu-popover")) return;
+        event.preventDefault();
+        if (!trigger.closest(".action-menu").classList.contains("open")) trigger.click();
+      });
       node.dataset.entryPath = entryPath;
       if (state.selectedPath === entryPath) node.classList.add("is-selected");
       if (animate) node.style.setProperty("--i", String(Math.min(index, 14)));
@@ -2821,6 +2832,16 @@
   });
   $("auth-method-password").addEventListener("click", () => setLoginMethod("password"));
   $("auth-method-passkey").addEventListener("click", () => setLoginMethod("passkey"));
+  const toolsOpen = PREF.get("tools-open", matchMedia("(max-width: 767px)").matches ? "false" : "true") === "true";
+  $("openlist-tools-panel").hidden = !toolsOpen;
+  $("openlist-tools-toggle").setAttribute("aria-expanded", String(toolsOpen));
+  $("openlist-tools-toggle").addEventListener("click", () => {
+    const panel = $("openlist-tools-panel");
+    panel.hidden = !panel.hidden;
+    PREF.set("tools-open", String(!panel.hidden));
+    $("openlist-tools-toggle").setAttribute("aria-expanded", String(!panel.hidden));
+  });
+  $("footer-settings-button").addEventListener("click", () => $("settings-button").click());
   $("password-toggle").addEventListener("click", togglePassword);
   $("passkey-login-button").addEventListener("click", passkeyLogin);
   $("logout-button").addEventListener("click", logout);
@@ -3006,7 +3027,9 @@
       toggleStatusPanel(false);
       return;
     }
-    if (event.key === "/" && !dialogOpen && !typing) {
+    const searchShortcut = (event.key === "/" && !typing) ||
+      ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k");
+    if (searchShortcut && !dialogOpen && !$("app-ui").classList.contains("hidden")) {
       event.preventDefault();
       $("search-input").focus();
       return;

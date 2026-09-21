@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.0.22] - 2026-09-21
+
+### Changed
+
+- 文件浏览器移植 OpenList-Frontend 的居中容器、三列列表、图标网格、顶部导航和右下角工具栏布局，继续调用现有 WPS REST 接口；上游原始组件和 MIT 许可证保留在 go/web/upstream/openlist。
+- 支持点击文件行空白处打开、右键文件菜单和 Ctrl/Cmd+K 搜索；手机端默认收起悬浮工具栏，并显示触屏文件操作入口。
+
 ## [1.0.21] - 2026-09-20
 
 ### Fixed
@@ -295,6 +302,11 @@
 - 持久化失败时正确回滚 TOTP、恢复码和 Passkey 状态；2FA 失败次数现在会写回挑战并限制重试，未过期挑战数量也有上限。
 
 ## [Unreleased]
+
+### Changed
+
+- 文件浏览器移植 OpenList-Frontend 的居中容器、三列列表、图标网格、顶部导航和右下角工具栏布局，继续调用现有 WPS REST 接口；上游原始组件和 MIT 许可证保留在 go/web/upstream/openlist。
+- 支持点击文件行空白处打开、右键文件菜单和 Ctrl/Cmd+K 搜索；手机端默认收起悬浮工具栏，并显示触屏文件操作入口。
 
 ### Added
 
