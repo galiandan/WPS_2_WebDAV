@@ -51,3 +51,7 @@ python test/ui-offline/text_preview.py
 全局搜索回归：运行 `python test/ui-offline/global_search.py`。覆盖索引范围、类型/路径筛选、分页、扫描取消、不完整提示、过期响应、结果预览/定位及手机布局。截图保存到 `/tmp/wps-global-search-desktop.png` 和 `/tmp/wps-global-search-mobile.png`。
 
 GitHub CI 会运行此目录的全部离线浏览器脚本，并保留截图供检查。PDF 阅读器测试使用完整 Chromium；本地也可将 `WPS_UI_BROWSER` 指向 Chrome 或 Chromium。
+
+文本编辑回归：运行 `python test/ui-offline/text_edit.py`，覆盖编辑版本、UTF-8 保存、中文编码、空文件、冲突与失败保留草稿、取消读取和保存状态；截图在 `/tmp/wps-text-editor-desktop.png` 和 `/tmp/wps-text-editor-mobile.png`。
+
+后台任务中心回归：运行 `python test/ui-offline/tasks.py`，覆盖服务端排队、页面刷新、部分失败、受控重试、取消期间的旧轮询响应、登录过期和本页上传状态；截图在 `/tmp/wps-tasks-desktop.png` 和 `/tmp/wps-tasks-mobile.png`。

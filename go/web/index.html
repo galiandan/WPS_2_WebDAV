@@ -9,6 +9,8 @@
   <meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="/assets/style.css">
   <link rel="stylesheet" href="/assets/search.css">
+  <link rel="stylesheet" href="/assets/tasks.css">
+  <link rel="stylesheet" href="/assets/text-editor.css">
 </head>
 <body class="openlist-ui">
   <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
@@ -287,6 +289,7 @@ SOFTWARE.
   <!-- Port of OpenList home/toolbar/Right and Footer; see upstream/openlist/LICENSE. -->
   <aside class="openlist-tools" aria-label="文件工具栏">
     <div id="openlist-tools-panel" class="openlist-tools-panel">
+      <button id="tasks-button" class="icon-button" type="button" title="任务中心" aria-label="任务中心"><svg class="icon"><use href="#i-clock"/></svg><span id="tasks-count" hidden></span></button>
       <button id="refresh-button" class="icon-button" type="button" title="刷新目录" aria-label="刷新目录"><svg class="icon"><use href="#i-refresh"/></svg></button>
       <button id="text-file-button" class="toolbar-action" type="button" title="新建文本文件"><svg class="icon"><use href="#i-pencil"/></svg><span>新建文本文件</span></button>
       <button id="folder-button" class="toolbar-action" type="button" title="新建文件夹"><svg class="icon"><use href="#i-plus"/></svg><span>新建文件夹</span></button>
@@ -492,6 +495,8 @@ SOFTWARE.
   </dialog>
 
   <script src="/assets/search.js" defer></script>
+  <script src="/assets/tasks.js" defer></script>
+  <script src="/assets/text-editor.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>
 </html>

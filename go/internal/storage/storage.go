@@ -538,6 +538,9 @@ func (s *Storage) UploadPath(ctx context.Context, path string, source io.Reader,
 			existing = append(existing, entry)
 		}
 	}
+	if options.ExpectedID != "" && (!options.Overwrite || len(existing) != 1 || existing[0].ID != options.ExpectedID || existing[0].Kind != model.KindFile) {
+		return model.RemoteEntry{}, ErrUploadTargetChanged
+	}
 	if len(existing) > 0 {
 		if !options.Overwrite || len(existing) > 1 || existing[0].Kind != model.KindFile {
 			return model.RemoteEntry{}, model.NewStorageError(model.KindAlreadyExists, "overwrite is not enabled for: "+path)
@@ -548,6 +551,23 @@ func (s *Storage) UploadPath(ctx context.Context, path string, source io.Reader,
 		return model.RemoteEntry{}, err
 	}
 	defer release()
+	if options.ExpectedID != "" {
+		// Waiting for an upload slot can outlast the directory-cache TTL.
+		// Check again using fresh path metadata immediately before writing;
+		// a missing target must never fall through to ordinary file creation.
+		s.invalidate()
+		freshParent, _, _, resolveErr := s.parentAndName(path)
+		if resolveErr != nil || freshParent.ID != parent.ID {
+			return model.RemoteEntry{}, ErrUploadTargetChanged
+		}
+		fresh, resolveErr := s.Metadata(path)
+		if resolveErr != nil || fresh.Kind != model.KindFile || fresh.ID != options.ExpectedID {
+			return model.RemoteEntry{}, ErrUploadTargetChanged
+		}
+		if err := ctx.Err(); err != nil {
+			return model.RemoteEntry{}, err
+		}
+	}
 	if s.writer == nil {
 		return model.RemoteEntry{}, errWritesNotWired
 	}
@@ -573,6 +593,9 @@ type UploadOptions struct {
 	ContentType string
 	CSRFToken   string
 	Overwrite   bool
+	// ExpectedID restricts overwrite to an existing file. This is a local
+	// precondition, not an atomic WPS compare-and-swap operation.
+	ExpectedID string
 }
 
 // CreateFolder creates a folder under an explicit parent ID (nil means the
@@ -733,6 +756,10 @@ func (s *Storage) Delete(entryID string) error {
 
 // DeletePath removes the entry at path; the root cannot be deleted.
 func (s *Storage) DeletePath(path string) error {
+	return s.deletePathWithID(path, "")
+}
+
+func (s *Storage) deletePathWithID(path string, expectedID string) error {
 	parts, err := SplitRemotePath(path)
 	if err != nil {
 		return err
@@ -743,6 +770,9 @@ func (s *Storage) DeletePath(path string) error {
 	entry, err := s.Resolve(path)
 	if err != nil {
 		return err
+	}
+	if expectedID != "" && entry.ID != expectedID {
+		return errBoundSourceChanged
 	}
 	if s.writer == nil {
 		return errWritesNotWired
@@ -827,6 +857,10 @@ func (s *Storage) RenamePath(path string, name string) (model.RemoteEntry, error
 // MoveToParentPath moves an entry under a new parent, rejecting a move into
 // itself or onto an existing name.
 func (s *Storage) MoveToParentPath(path string, parentPath string) (model.RemoteEntry, error) {
+	return s.moveToParentWithIDs(path, parentPath, "", "")
+}
+
+func (s *Storage) moveToParentWithIDs(path, parentPath, expectedID, expectedParentID string) (model.RemoteEntry, error) {
 	sourceParts, err := SplitRemotePath(path)
 	if err != nil {
 		return model.RemoteEntry{}, err
@@ -847,6 +881,9 @@ func (s *Storage) MoveToParentPath(path string, parentPath string) (model.Remote
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
+	if expectedID != "" && entry.ID != expectedID {
+		return model.RemoteEntry{}, errBoundSourceChanged
+	}
 	sourceParent, err := s.resolveParts(sourceParts[:len(sourceParts)-1])
 	if err != nil {
 		return model.RemoteEntry{}, err
@@ -854,6 +891,9 @@ func (s *Storage) MoveToParentPath(path string, parentPath string) (model.Remote
 	destinationParent, err := s.Resolve(parentPath)
 	if err != nil {
 		return model.RemoteEntry{}, err
+	}
+	if expectedParentID != "" && destinationParent.ID != expectedParentID {
+		return model.RemoteEntry{}, errBoundDestinationChanged
 	}
 	if destinationParent.Kind != model.KindFolder {
 		return model.RemoteEntry{}, model.NewStorageError(model.KindNotFolder, "not a destination folder: "+parentPath)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/tasks"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/update"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
@@ -174,6 +175,10 @@ type RESTDispatcher struct {
 	updater        UpdateController
 	searchOnce     sync.Once
 	search         *SearchIndex
+	tasks          *tasks.Manager
+	taskIdentity   func() ([32]byte, error)
+	textOnce       sync.Once
+	textEditor     *textEditorState
 }
 
 // SetStorageLocations enables the authenticated storage-location settings
@@ -225,6 +230,9 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 	if strings.HasPrefix(route.Suffix, "auth/") || route.Suffix == "auth" {
 		return d.serveWebAuth(w, r, route)
 	}
+	if route.Suffix == "tasks" || strings.HasPrefix(route.Suffix, "tasks/") {
+		return d.serveTasks(w, r, route)
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead &&
 		route.Suffix != "search" && route.Suffix != "search/refresh" &&
 		route.Suffix != "archive" && route.Suffix != "update" {
@@ -263,6 +271,9 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
 		return nil
 	case "PUT":
+		if route.Suffix == "text" {
+			return d.doTextPut(w, r, route)
+		}
 		// _do_rest_put serves exactly upload and files; every other suffix
 		// discards the body and answers the unknown-route 404.
 		if route.Suffix == "upload" || route.Suffix == "files" {
@@ -362,6 +373,8 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	// Python answers status and settings before reading the path query, so
 	// both tolerate missing or malformed path parameters.
 	switch route.Suffix {
+	case "text":
+		return d.doTextGet(w, r, route)
 	case "search":
 		return d.doSearch(w, r, route)
 	case "archive":

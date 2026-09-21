@@ -80,6 +80,27 @@ PATCH /api/v1/storage
 
 其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。 图片和 PDF 使用同一 `GET /api/v1/preview` 路由，支持 JPG/JPEG、PNG、GIF、WebP、AVIF、BMP、ICO、PDF（不区分大小写），按允许列表设置类型并返回 `Content-Disposition: inline`，复用下载并发、流式读取和单 Range 能力，不套用文本的 2 MiB 截断规则。HTML 和 SVG 不提供在线预览。PDF 由浏览器内置阅读器显示；不支持的浏览器可下载查看。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
 
+### 持久化后台任务
+
+`POST /api/v1/tasks` 接收与 `/batch` 相同的 `operation/paths/destination` JSON，返回 202 和 `{task: ...}`。网页批量复制、移动、删除使用此接口；原同步 `/batch` 继续保留。
+
+- `GET /api/v1/tasks`：返回 `{tasks: [...], persistence_error: false}`。
+- `GET /api/v1/tasks/<id>`：返回 `{task: ...}`。
+- `POST /api/v1/tasks/<id>/cancel`：停止尚未开始的项目，当前项目可能继续完成。
+- `POST /api/v1/tasks/<id>/retry`：为可安全重试的项目建立新任务；成功项目、不确定结果的已开始项目不会自动重放。
+
+任务包含 `id/operation/destination/state/created_at/updated_at/items/total/completed/succeeded/failed/retryable_count`。逐项包含 `path/state/status/error/started/retryable/retried_as`。任务状态为 `queued/running/completed/failed/cancelled/interrupted`，项目成功为 `succeeded`。界面按项目显示进度；一个文件夹仍视作一个所选项目。
+
+每次最多 100 项，工作线程为 1，最多 16 个排队或执行任务，最多保存最近 100 条记录。状态以 0600 JSON 原子落盘，每个项目执行前和得到结果后均记录；启动时将旧排队/执行记录标记中断，不自动恢复。源文件、目标目录 ID 与私有账号/工作区指纹绑定，变化时拒绝旧任务。锁在实际执行时检查。不确定网络失败、超时或进程中断可能已经影响上游，需先核对远端结果。状态写入失败后不再启动新任务；修复文件路径/权限后重启。
+
+### 在线文本编辑
+
+`GET /api/v1/text?path=/空间/文件.txt` 返回完整原始字节（最多 2 MiB）与强 `ETag` 编辑版本。支持的扩展名与纯文本预览一致，旧中文编码可在网页中切换。`PUT` 同一路径上传 UTF-8 原始正文，必须带读取时的 `If-Match`；成功返回 `{path,entry,revision}` 和新的 `ETag`。
+
+缺少版本返回 428；内容、文件身份、账号或工作区变化返回 412；超过编辑大小返回 413；WebDAV 锁冲突返回 423；仍受部署上传预算限制。接口只更新原文件，不主动回退为新建文件。保存前跳过目录缓存重新下载比较完整内容，保存后复读确认，多个编辑请求串行执行以限制内存。版本绑定服务进程，重启后需重新读取。
+
+WPS 没有已验证的原子 compare-and-swap 覆盖接口，检查与上传之间的外部写入仍可能竞争。上传已开始后取消/失败可能已改变远端，服务返回 `text_save_uncertain`（502）或 `text_save_unverified`（409）时应保留草稿并重新读取确认，不自动重试。网页不在保存中关闭编辑窗口，关闭其他阶段会取消读取；刷新页面会丢失未保存草稿。
+
 ### 批量操作与打包下载
 
 `POST /api/v1/batch` 接收 `{"operation":"copy","paths":["/空间/目录/文件.txt"],"destination":"/空间/目标目录"}`。`operation` 支持 `copy`、`move`、`delete`；删除省略 `destination`。最多 100 个不重叠路径，拒绝根目录和目标落在源目录内部，复制/移动不覆盖同名目标。沿用现有空间边界，不增加 WPS 原生目录复制或跨空间操作。响应包含 `results: [{path,ok,status,error?}]`、`succeeded` 和 `failed`；HTTP 200 不代表所有项目成功。取消请求后不启动剩余项目，已经完成的项目不回滚，也不会隐式重试。

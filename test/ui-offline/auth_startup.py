@@ -39,6 +39,8 @@ async def check_case(browser, outcome):
                 await request.fulfill(json={'authenticated': outcome == 'authenticated', 'user': {'username': 'demo'}})
         elif path.endswith('/settings'):
             await request.fulfill(json={'name': 'WPS Drive'})
+        elif path.endswith('/tasks'):
+            await request.fulfill(json={'tasks': []})
         elif path.endswith('/status'):
             await request.fulfill(json={'status': 'connected'})
         elif path.endswith('/entries'):

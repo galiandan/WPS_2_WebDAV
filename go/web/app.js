@@ -467,6 +467,7 @@
   }
 
   /* ============ 网页账号会话 ============ */
+  let taskCenter = null;
   let webUser = null;
   let authInFlight = false;
   let pendingTwoFactorChallenge = "";
@@ -500,6 +501,7 @@
   }
 
   function showLoginScreen() {
+    if (taskCenter) taskCenter.stop();
     $("auth-loading").classList.add("hidden");
     const authScreen = $("auth-screen");
     authScreen.classList.remove("leaving");
@@ -717,6 +719,7 @@
 
   async function logout() {
     if (authInFlight) return;
+    if (taskCenter) taskCenter.stop();
     try {
       await apiRequest("auth/logout", { method: "POST" });
     } catch (_) {
@@ -2900,36 +2903,42 @@
       if (!destination) return;
     }
     setBusy(true);
-    if (operation === "delete") paths.forEach((path) => state.pendingDeletes.add(path));
-    renderEntries();
     try {
-      const response = await apiRequest("batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation, paths, ...(destination ? { destination: canonicalPath(destination) } : {}) }) });
-      const results = response.results || [];
-      showBatchResults(operation, results);
-      for (const result of results) {
-        if (result.ok) {
-          state.selectedPaths.delete(result.path);
-          clearDirectoryCacheFor(parentPath(result.path));
-        }
-      }
-      if (destination) clearDirectoryCacheFor(canonicalPath(destination));
-      paths.forEach((path) => state.pendingDeletes.delete(path));
-      if (state.path === sourcePath) await load(sourcePath, true, true);
-      const failed = results.filter((result) => !result.ok).length;
-      toast($("batch-summary").textContent, failed ? "warn" : "success", 5000);
+      await taskCenter.enqueue({ operation, paths, ...(destination ? { destination: canonicalPath(destination) } : {}) });
+      toast("任务已提交，关闭页面后仍会在服务器继续处理", "info", 5000);
     } catch (error) {
-      // The response can be lost after some mutations succeeded. Refresh and
-      // retain selection for review; never automatically repeat a mutation.
-      paths.forEach((path) => state.pendingDeletes.delete(path));
-      clearDirectoryCacheFor(sourcePath);
-      if (destination) clearDirectoryCacheFor(canonicalPath(destination));
-      if (state.path === sourcePath) await load(sourcePath, true, true);
-      showError(error);
+      // A lost enqueue response is ambiguous: ask the user to inspect server
+      // history instead of automatically submitting the same mutation twice.
+      if (error.name !== "AbortError") {
+        showError(error);
+        toast("未能确认提交结果，请在任务中心刷新查看后再决定是否重新提交", "warn", 6000);
+      }
     } finally {
-      paths.forEach((path) => state.pendingDeletes.delete(path));
       setBusy(false);
       renderEntries();
     }
+  }
+
+  function onTaskQueued(task) {
+    if (task.operation === "delete") {
+      for (const item of task.items || []) if (item.state === "queued" || item.state === "running") state.pendingDeletes.add(item.path);
+    }
+    renderEntries();
+  }
+
+  async function onTaskFinished(task) {
+    const sourceFolders = new Set();
+    const results = (task.items || []).map((item) => ({ path: item.path, ok: item.state === "succeeded", error: item.error || ({ cancelled: "已取消", interrupted: "结果未确认，请检查目录", queued: "尚未执行" }[item.state] || "操作失败") }));
+    for (const result of results) {
+      state.pendingDeletes.delete(result.path);
+      sourceFolders.add(parentPath(result.path));
+      clearDirectoryCacheFor(parentPath(result.path));
+      if (result.ok) state.selectedPaths.delete(result.path);
+    }
+    if (task.destination) clearDirectoryCacheFor(task.destination);
+    showBatchResults(task.operation, results);
+    if (sourceFolders.has(state.path) || task.destination === state.path) await load(state.path, true, true);
+    else updateSelectionControls();
   }
 
   let archiveDownloadID = 0;
@@ -2996,6 +3005,7 @@
   }
 
   function traySetItem(index) {
+    if (taskCenter) taskCenter.updateUploads();
     const item = $("tray-list").children[index];
     if (!item) return;
     const st = tray.states[index];
@@ -3492,6 +3502,45 @@
     $("drop-overlay").setAttribute("aria-hidden", "true");
   }
 
+  if (window.WPSTaskCenter) taskCenter = window.WPSTaskCenter.init({
+    request: apiRequest,
+    confirm: openConfirmModal,
+    dismissConfirm: () => closeModal(false),
+    onQueued: onTaskQueued,
+    onFinished: onTaskFinished,
+    onReset: () => { state.pendingDeletes.clear(); $("batch-results").hidden = true; },
+    onError: (error) => showError(error, { notify: false }),
+    notify: toast,
+    getUploads: () => ({ active: tray.active, total: tray.files.length, done: tray.done }),
+    showUploads: () => {
+      $("upload-tray").classList.add("show");
+      $("upload-tray").setAttribute("aria-hidden", "false");
+      document.body.classList.add("upload-tray-open");
+    },
+  });
+
+  if (window.WPSTextEditor) window.WPSTextEditor.init({
+    getTarget: () => previewTarget,
+    canEdit: (entry) => isPreviewableText(entry.name),
+    onSaved: async (path, entry, text) => {
+      if (previewTarget && previewTarget.path === path) {
+        previewGeneration += 1;
+        if (previewController) previewController.abort();
+        previewController = null;
+        previewBytes = new TextEncoder().encode(text);
+        previewTarget.entry = entry || { ...previewTarget.entry, size: previewBytes.length };
+        previewTruncated = false;
+        previewLimit = previewBytes.length;
+        $("preview-encoding").value = "utf-8";
+        $("preview-loading").hidden = true;
+        renderPreview();
+      }
+      clearDirectoryCacheFor(parentPath(path));
+      await load(state.path, true, true);
+    },
+    onError: (error) => showError(error, { notify: false }),
+  });
+
   if (window.WPSGlobalSearch) window.WPSGlobalSearch.init({
     getPath: () => state.path,
     getSpaces: () => state.spaces,
@@ -3850,6 +3899,7 @@
     // This is intentionally fire-and-forget: the first directory render must
     // not wait for a GitHub mirror or make the app feel blocked on startup.
     checkForUpdate();
+    if (taskCenter) taskCenter.start();
   }
 
   async function boot() {

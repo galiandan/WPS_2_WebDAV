@@ -310,6 +310,13 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	}
 	application.rest = rest
 	application.dav = dav
+	tasksFile := cfg.TasksFile
+	if tasksFile == "" {
+		tasksFile = filepath.Join(filepath.Dir(cfg.WebSettingsDir), "tasks.json")
+	}
+	if err := rest.EnableTasks(tasksFile, application.taskIdentity); err != nil {
+		return fail(err)
+	}
 	return application, nil
 }
 
@@ -845,6 +852,7 @@ func (a *Application) RESTPrefix() string {
 func (a *Application) Close() {
 	if a.rest != nil {
 		a.rest.CancelSearch()
+		a.rest.CloseTasks()
 	}
 	a.closeTransports()
 }

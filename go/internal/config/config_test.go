@@ -12,7 +12,7 @@ import (
 // deterministic blank slate.
 var allEnvNames = []string{
 	"WPS_CREDENTIAL_REFRESH_COMMAND", "WPS_GROUP_ID", "WPS_ROOT_ID",
-	"WPS_WORKSPACE_FILE", "WPS_WEB_SETTINGS_FILE", "WPS_COOKIE_FILE", "WPS_CSRF_TOKEN_FILE",
+	"WPS_WORKSPACE_FILE", "WPS_WEB_SETTINGS_FILE", "WPS_TASKS_FILE", "WPS_COOKIE_FILE", "WPS_CSRF_TOKEN_FILE",
 	"WPS_CREDENTIAL_REFRESH_TIMEOUT", "WPS_BASE_URL", "WPS_ACCOUNT_BASE_URL", "WPS_MODE",
 	"WPS_OBJECT_STORAGE_HOST_SUFFIX", "WPS_AUTO_REFRESH", "WPS_REFERER",
 	"WPS_ORIGIN", "WPS_CID", "WPS_TIMEOUT", "WPS_STATUS_PROBE_TTL",
@@ -662,6 +662,9 @@ func TestBrowserSettingsFollowDeploymentDirectory(t *testing.T) {
 	if cfg.WebSettingsDir != want {
 		t.Fatalf("settings path = %q, want %q", cfg.WebSettingsDir, want)
 	}
+	if cfg.TasksFile != filepath.Join(filepath.Dir(want), "tasks.json") {
+		t.Fatalf("tasks path=%q", cfg.TasksFile)
+	}
 	// Existing installations can explicitly keep settings at their old location.
 	override := filepath.Join(mkPrivateDir(t), "web-settings.json")
 	t.Setenv("WPS_WEB_SETTINGS_FILE", override)
@@ -669,6 +672,20 @@ func TestBrowserSettingsFollowDeploymentDirectory(t *testing.T) {
 	if err != nil || cfg.WebSettingsDir != override {
 		t.Fatalf("override = %q, %v", cfg.WebSettingsDir, err)
 	}
+	if cfg.TasksFile != filepath.Join(filepath.Dir(override), "tasks.json") {
+		t.Fatalf("tasks fallback=%q", cfg.TasksFile)
+	}
+	tasksOverride := filepath.Join(filepath.Dir(override), "custom-tasks.json")
+	t.Setenv("WPS_TASKS_FILE", tasksOverride)
+	cfg, err = Load()
+	if err != nil || cfg.TasksFile != tasksOverride {
+		t.Fatalf("tasks override=%q err=%v", cfg.TasksFile, err)
+	}
+	t.Setenv("WPS_TASKS_FILE", "relative.json")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted relative tasks path")
+	}
+	t.Setenv("WPS_TASKS_FILE", tasksOverride)
 	t.Setenv("WPS_WEB_SETTINGS_FILE", "relative.json")
 	if _, err := Load(); err == nil {
 		t.Fatal("accepted relative settings path")

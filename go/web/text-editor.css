@@ -1,0 +1,10 @@
+.text-editor-dialog { width: min(960px, calc(100vw - 24px)); max-width: none; }
+.text-editor-card { max-width: none; width: 100%; max-height: calc(100dvh - 40px); overflow: auto; }
+.text-editor-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 14px 0; }
+.text-editor-controls label { font-size: 12px; display: flex; gap: 8px; align-items: center; }
+.text-editor-controls select { width: auto; }
+#text-editor-content { width: 100%; min-height: 240px; height: 48dvh; resize: vertical; font-family: ui-monospace, monospace; font-size: 14px; line-height: 1.5; tab-size: 2; padding: 12px; color: var(--text); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 8px; }
+#text-editor-path { overflow-wrap: anywhere; }
+@media (max-width: 640px) { .text-editor-card { padding: 16px; } #text-editor-content { height: 42dvh; min-height: 180px; } .text-editor-card .modal-actions { flex-wrap: wrap; } }
+
+#text-editor-content:focus { outline: 2px solid var(--accent); outline-offset: 1px; }

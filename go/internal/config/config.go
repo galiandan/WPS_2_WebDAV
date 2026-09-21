@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/securefile"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/workspace"
 )
 
@@ -103,6 +104,7 @@ type Config struct {
 	UsernameFile   string
 	PasswordFile   string
 	WebSettingsDir string
+	TasksFile      string
 	DAVPrefix      string
 	RESTPrefix     string
 	Bind           string
@@ -276,6 +278,13 @@ func Load() (Config, error) {
 	}
 	if err := validateWebSettingsPath(cfg.WebSettingsDir); err != nil {
 		return Config{}, err
+	}
+	cfg.TasksFile = os.Getenv("WPS_TASKS_FILE")
+	if cfg.TasksFile == "" {
+		cfg.TasksFile = filepath.Join(filepath.Dir(cfg.WebSettingsDir), "tasks.json")
+	}
+	if err := securefile.ValidateStatePath(cfg.TasksFile); err != nil {
+		return Config{}, fmt.Errorf("invalid tasks file path")
 	}
 	// --- WpsDriveClient.__init__ validation ---
 	if err := cfg.validateClient(); err != nil {

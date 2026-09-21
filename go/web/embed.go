@@ -1,5 +1,4 @@
-// Package web embeds the three fixed frontend assets: index.html,
-// style.css, and app.js. The bytes are compiled into the service binary;
+// Package web embeds the fixed frontend page, scripts, styles and images. The bytes are compiled into the service binary;
 // nothing here reads configuration, touches a disk path, or rewrites the
 // page at runtime — the root name reaches the page through the settings
 // API, never through template substitution.
@@ -21,7 +20,7 @@ import (
 	"sync"
 )
 
-//go:embed index.html style.css app.js search.js search.css bg-internal.jpg
+//go:embed index.html style.css app.js search.js search.css tasks.js tasks.css text-editor.js text-editor.css bg-internal.jpg
 var files embed.FS
 
 // CacheControl is the fixed cache policy for every web asset: store freely,
@@ -30,6 +29,10 @@ const CacheControl = "no-cache"
 
 // assetContentTypes is the whitelist; anything outside it is never served.
 var assetContentTypes = map[string]string{
+	"tasks.js":        "text/javascript; charset=utf-8",
+	"tasks.css":       "text/css; charset=utf-8",
+	"text-editor.js":  "text/javascript; charset=utf-8",
+	"text-editor.css": "text/css; charset=utf-8",
 	"app.js":          "text/javascript; charset=utf-8",
 	"search.js":       "text/javascript; charset=utf-8",
 	"search.css":      "text/css; charset=utf-8",

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -58,7 +59,15 @@ type serverProcess struct {
 func startServer(t *testing.T, env []string, args ...string) *serverProcess {
 	t.Helper()
 	cmd := exec.Command(binaryPath, args...)
-	cmd.Env = append(os.Environ(), env...)
+	private := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(private, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = append(os.Environ(),
+		"WPS_WORKSPACE_FILE="+filepath.Join(private, "workspace.json"),
+		"WPS_WEB_SETTINGS_FILE="+filepath.Join(private, "web-settings.json"),
+		"WPS_TASKS_FILE="+filepath.Join(private, "tasks.json"))
+	cmd.Env = append(cmd.Env, env...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatalf("stdout pipe: %v", err)

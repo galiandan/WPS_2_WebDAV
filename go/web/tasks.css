@@ -1,0 +1,32 @@
+.tasks-dialog { width: min(840px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+.tasks-card { width: 100%; max-width: none; padding: 20px; }
+.tasks-heading, .tasks-toolbar, .task-item-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tasks-heading h2 { margin: 0; }
+.tasks-toolbar { margin: 16px 0 8px; }
+.tasks-toolbar button, .task-actions button, .tasks-uploads button { min-height: 32px; padding: 5px 10px; font-size: 13px; }
+.tasks-list { display: flex; flex-direction: column; gap: 12px; }
+.task-item { padding: 14px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+.task-item-head { align-items: baseline; flex-wrap: wrap; }
+.task-item-head strong { font-size: 14px; }
+.task-item[data-state="failed"] .task-item-head strong, .task-result[data-state="failed"] .task-result-status { color: var(--bad); }
+.task-item[data-state="interrupted"] .task-item-head strong { color: var(--warn); }
+.task-summary { margin: 8px 0; color: var(--text-2); font-size: 13px; }
+.task-progress { display: block; width: 100%; height: 7px; accent-color: var(--accent); }
+.task-destination { margin-bottom: 0; }
+.task-details { margin-top: 12px; font-size: 13px; }
+.task-details summary { cursor: pointer; color: var(--accent); }
+.task-item-results { max-height: 240px; overflow: auto; list-style: none; padding: 0; margin: 8px 0 0; }
+.task-result { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-top: 1px solid var(--line); }
+.task-result-status { color: var(--text-2); }
+.task-actions { display: flex; gap: 8px; margin-top: 10px; }
+.task-actions:empty { display: none; }
+.tasks-uploads { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
+.tasks-uploads h3 { font-size: 14px; margin: 0; }
+#tasks-button { position: relative; }
+#tasks-count { position: absolute; top: -4px; right: -6px; min-width: 16px; height: 16px; line-height: 16px; padding: 0 3px; border-radius: 8px; background: var(--bad); color: white; font-size: 10px; font-weight: 700; }
+#tasks-count[hidden] { display: none; }
+@media (max-width: 767px) {
+  .tasks-card { padding: 16px; }
+  .task-item { padding: 12px; }
+  .task-item-head time { font-size: 11px; }
+}

@@ -35,6 +35,7 @@ async def main():
         folder_gate = asyncio.Event()
         failing_folder = None
         archive_error = False
+        tasks = []
         zip_bytes = io.BytesIO()
         with zipfile.ZipFile(zip_bytes, 'w') as z:
             z.writestr('fixture.txt', 'offline')
@@ -64,7 +65,9 @@ async def main():
                 data = {'state': 'idle', 'current_version': '1.0.21', 'update_available': False}
             elif path.endswith('/entries'):
                 data = {'entries': list(tree.get(query['path'][0], []))}
-            elif path.endswith('/batch'):
+            elif path.endswith('/tasks') and request.request.method == 'GET':
+                data = {'tasks': tasks}
+            elif path.endswith('/tasks'):
                 body = request.request.post_data_json
                 batches.append(body)
                 results = []
@@ -75,7 +78,14 @@ async def main():
                     if ok and body['operation'] != 'copy':
                         parent = source.rsplit('/', 1)[0]
                         tree[parent] = [item for item in tree[parent] if item['name'] != name]
-                data = {'results': results, 'succeeded': sum(item['ok'] for item in results), 'failed': sum(not item['ok'] for item in results)}
+                task = {'id': str(len(batches)), 'operation': body['operation'], 'destination': body.get('destination', ''),
+                        'state': 'failed' if any(not item['ok'] for item in results) else 'completed',
+                        'created_at': '2026-09-21T01:02:03Z', 'total': len(results), 'completed': len(results),
+                        'succeeded': sum(item['ok'] for item in results), 'failed': sum(not item['ok'] for item in results),
+                        'retryable_count': 0,
+                        'items': [{**item, 'state': 'succeeded' if item['ok'] else 'failed'} for item in results]}
+                tasks.insert(0, task)
+                data = {'task': task}
             elif path.endswith('/archive'):
                 archives.append(json.loads(parse_qs(request.request.post_data)['paths'][0]))
                 if archive_error:
@@ -133,6 +143,7 @@ async def main():
         await page.locator('#batch-copy').click()
         await page.locator('#picker-list .picker-item', has_text='目标').click()
         await page.locator('#picker-move').click()
+        await page.locator('#tasks-close').click()
         await expect(page.locator('#batch-summary')).to_have_text('复制：成功 2 项，失败 1 项')
         await expect(page.locator('#batch-result-list')).to_contain_text('同名项目已存在')
         await expect(page.locator('#selection-count')).to_have_text('已选择 1 项')
@@ -152,6 +163,7 @@ async def main():
         await page.locator('#batch-move').click()
         await page.locator('#picker-list .picker-item', has_text='目标').click()
         await page.locator('#picker-move').click()
+        await page.locator('#tasks-close').click()
         await expect(page.locator('#batch-summary')).to_have_text('移动：成功 1 项，失败 0 项')
         await expect(check('b.txt')).to_have_count(0)
         await check('a.txt').check()
@@ -160,6 +172,7 @@ async def main():
         assert len(batches) == 2
         await page.locator('#batch-delete').click()
         await page.locator('#modal-submit').click()
+        await page.locator('#tasks-close').click()
         await expect(page.locator('#batch-summary')).to_have_text('删除：成功 1 项，失败 0 项')
         await check(SPECIAL).check()
         await check('资料').check()

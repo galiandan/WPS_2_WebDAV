@@ -50,6 +50,8 @@ async def main():
                 data = {'version': 'offline'}
             elif path.endswith('/update'):
                 data = {'state': 'idle', 'update_available': False}
+            elif path.endswith('/tasks'):
+                data = {'tasks': []}
             elif path.endswith('/entries'):
                 folder = params['path'][0]
                 data = {'entries': ([{'id': 'space:' + name, 'name': name, 'kind': 'folder'} for name in ['个人空间', '团队空间']] if folder == '/' else

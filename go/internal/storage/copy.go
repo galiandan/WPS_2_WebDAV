@@ -26,8 +26,10 @@ type Copier interface {
 // CopyOptions carries copy_path's keyword surface. Depth is validated
 // exactly like the Python str.strip().lower() gate.
 type CopyOptions struct {
-	Depth     string
-	Overwrite bool
+	Depth            string
+	Overwrite        bool
+	ExpectedSourceID string
+	ExpectedParentID string
 }
 
 // CopyPath mirrors copy_path: depth validation, self-copy and folder-into-
@@ -59,6 +61,9 @@ func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPa
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
+	if options.ExpectedSourceID != "" && source.ID != options.ExpectedSourceID {
+		return model.RemoteEntry{}, errBoundSourceChanged
+	}
 	if source.Kind == model.KindFolder && len(destinationParts) >= len(sourceParts) &&
 		slices.Equal(destinationParts[:len(sourceParts)], sourceParts) {
 		return model.RemoteEntry{}, model.NewStorageError(model.KindInvalidPath, "a folder cannot be copied into itself")
@@ -66,6 +71,9 @@ func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPa
 	destinationParent, err := s.resolveParts(destinationParts[:len(destinationParts)-1])
 	if err != nil {
 		return model.RemoteEntry{}, err
+	}
+	if options.ExpectedParentID != "" && destinationParent.ID != options.ExpectedParentID {
+		return model.RemoteEntry{}, errBoundDestinationChanged
 	}
 	if destinationParent.Kind != model.KindFolder {
 		return model.RemoteEntry{}, model.NewStorageError(model.KindNotFolder, "the COPY destination parent is not a folder")
