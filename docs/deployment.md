@@ -215,3 +215,15 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 ```
 
 脚本会要求输入 `YES` 确认；自动化执行时可以添加 `--yes`。卸载脚本不会删除 Docker 软件，也不会删除 WPS 云盘上的远端文件。如果没有 Docker 命令或 Docker daemon 不可用，会跳过容器和镜像清理，但继续删除 Native 和本机配置。
+
+### 网页安全设置与 Docker 挂载
+
+网页设置 `web-settings.json` 和登录安全设置 `auth-settings.json` 默认保存在
+`WPS_WORKSPACE_FILE` 所在目录。Docker 自定义安装目录时，两者会随工作区文件保存到
+已挂载的私有目录；该目录必须允许容器运行用户创建和原子替换文件。
+可用 `WPS_WEB_SETTINGS_FILE` 指定网页设置文件的绝对路径，登录安全设置仍保存在其同目录。
+
+1.0.34 之前这两个文件固定写入 `/opt/wps-adapter/config/secrets/`。
+如果自定义部署曾在旧位置成功保存设置，请在停止服务后将这两个文件迁移到工作区目录，
+保留文件 `0600` 权限和服务用户所有权，或用 `WPS_WEB_SETTINGS_FILE` 显式保留旧位置并挂载该目录。
+若 Google 已保存 Passkey 而网站注册失败，升级后重新注册；密码管理器里的失败条目可删除。

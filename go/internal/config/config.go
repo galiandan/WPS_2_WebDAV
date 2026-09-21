@@ -37,10 +37,6 @@ const (
 	gib int64 = 1024 * 1024 * 1024
 )
 
-// fallbackWebSettingsFile is a var so tests can redirect the default web
-// settings path; production always uses DefaultWebSettingsFile.
-var fallbackWebSettingsFile = DefaultWebSettingsFile
-
 // Config carries every runtime setting of the adapter.
 type Config struct {
 	// Workspace resolution.
@@ -272,7 +268,12 @@ func Load() (Config, error) {
 	if err := validateRootName(cfg.RootName); err != nil {
 		return Config{}, err
 	}
-	cfg.WebSettingsDir = fallbackWebSettingsFile
+	// Keep browser and authentication settings inside the deployed secrets
+	// mount, including Docker installations outside /opt/wps-adapter.
+	cfg.WebSettingsDir = os.Getenv("WPS_WEB_SETTINGS_FILE")
+	if cfg.WebSettingsDir == "" {
+		cfg.WebSettingsDir = filepath.Join(filepath.Dir(cfg.WorkspaceFile), "web-settings.json")
+	}
 	if err := validateWebSettingsPath(cfg.WebSettingsDir); err != nil {
 		return Config{}, err
 	}

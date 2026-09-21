@@ -12,7 +12,7 @@ import (
 // deterministic blank slate.
 var allEnvNames = []string{
 	"WPS_CREDENTIAL_REFRESH_COMMAND", "WPS_GROUP_ID", "WPS_ROOT_ID",
-	"WPS_WORKSPACE_FILE", "WPS_COOKIE_FILE", "WPS_CSRF_TOKEN_FILE",
+	"WPS_WORKSPACE_FILE", "WPS_WEB_SETTINGS_FILE", "WPS_COOKIE_FILE", "WPS_CSRF_TOKEN_FILE",
 	"WPS_CREDENTIAL_REFRESH_TIMEOUT", "WPS_BASE_URL", "WPS_ACCOUNT_BASE_URL", "WPS_MODE",
 	"WPS_OBJECT_STORAGE_HOST_SUFFIX", "WPS_AUTO_REFRESH", "WPS_REFERER",
 	"WPS_ORIGIN", "WPS_CID", "WPS_TIMEOUT", "WPS_STATUS_PROBE_TTL",
@@ -68,8 +68,6 @@ func clearEnv(t *testing.T) {
 			os.Setenv(name, value)
 		}
 	})
-	fallbackWebSettingsFile = filepath.Join(mkPrivateDir(t), "web-settings.json")
-	t.Cleanup(func() { fallbackWebSettingsFile = DefaultWebSettingsFile })
 	workspaceFile := filepath.Join(mkPrivateDir(t), "wps-workspace.json")
 	t.Setenv("WPS_WORKSPACE_FILE", workspaceFile)
 }
@@ -651,5 +649,28 @@ func TestErrorOrderMatchesPython(t *testing.T) {
 	t.Setenv("WPS_LIST_COUNT", "abc")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "workspace file") {
 		t.Errorf("workspace error should come first, got %v", err)
+	}
+}
+
+func TestBrowserSettingsFollowDeploymentDirectory(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(os.Getenv("WPS_WORKSPACE_FILE")), "web-settings.json")
+	if cfg.WebSettingsDir != want {
+		t.Fatalf("settings path = %q, want %q", cfg.WebSettingsDir, want)
+	}
+	// Existing installations can explicitly keep settings at their old location.
+	override := filepath.Join(mkPrivateDir(t), "web-settings.json")
+	t.Setenv("WPS_WEB_SETTINGS_FILE", override)
+	cfg, err = Load()
+	if err != nil || cfg.WebSettingsDir != override {
+		t.Fatalf("override = %q, %v", cfg.WebSettingsDir, err)
+	}
+	t.Setenv("WPS_WEB_SETTINGS_FILE", "relative.json")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted relative settings path")
 	}
 }

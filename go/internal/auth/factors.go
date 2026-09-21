@@ -175,7 +175,7 @@ func (s *Store) persistFactorStateLocked() error {
 		return ErrFactorState
 	}
 	if _, err := securefile.WriteAtomic(s.securityPath, string(raw)); err != nil {
-		return ErrFactorState
+		return fmt.Errorf("%w: %w", ErrFactorState, err)
 	}
 	return nil
 }
@@ -432,6 +432,10 @@ func (s *Store) BeginPasskeyRegistration(sessionToken, username, rpID string) (P
 	if len(s.factorState.Passkeys) >= maxPasskeys {
 		return PasskeyCreationOptions{}, ErrPasskeyLimit
 	}
+	// Check storage before asking the authenticator to create a credential.
+	if err := s.persistFactorStateLocked(); err != nil {
+		return PasskeyCreationOptions{}, err
+	}
 	challenge, err := s.newChallengeLocked(factorChallenge{Kind: "passkey-register", Username: username, Session: sessionToken, RPID: rpID})
 	if err != nil {
 		return PasskeyCreationOptions{}, err
@@ -489,11 +493,11 @@ func (s *Store) RegisterPasskey(sessionToken, challengeToken string, payload Pas
 		Username:  credential.Username,
 		CreatedAt: s.now().UTC().Format(time.RFC3339),
 	})
-	delete(s.pending, challengeToken)
 	if err := s.persistFactorStateLocked(); err != nil {
 		s.factorState.Passkeys = previous
 		return err
 	}
+	delete(s.pending, challengeToken)
 	return nil
 }
 
@@ -773,10 +777,11 @@ func verifyECDSA(key cborValue, digest, signature []byte) bool {
 		return false
 	}
 	public := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x.bytes), Y: new(big.Int).SetBytes(y.bytes)}
-	if !public.Curve.IsOnCurve(public.X, public.Y) || len(signature) != 64 {
+	if !public.Curve.IsOnCurve(public.X, public.Y) {
 		return false
 	}
-	return ecdsa.Verify(public, digest, new(big.Int).SetBytes(signature[:32]), new(big.Int).SetBytes(signature[32:]))
+	// WebAuthn ES256 assertions use ASN.1 DER, not the COSE r || s encoding.
+	return ecdsa.VerifyASN1(public, digest, signature)
 }
 
 func verifyEd25519(key cborValue, message, signature []byte) bool {
@@ -823,11 +828,23 @@ func parseAttestedCredentialData(authData []byte) ([]byte, []byte, error) {
 	}
 	id := append([]byte(nil), authData[position:position+length]...)
 	position += length
-	key := authData[position:]
-	if _, err := decodeCBOR(key); err != nil {
-		return nil, nil, err
+	// The public key is one CBOR item; ED indicates a separate extension map.
+	d := &cborDecoder{data: authData[position:]}
+	key, err := d.value()
+	if err != nil || key.kind != cborMap {
+		return nil, nil, ErrInvalidPasskey
 	}
-	return id, append([]byte(nil), key...), nil
+	keyEnd := d.position
+	if authData[32]&0x80 != 0 {
+		extensions, err := d.value()
+		if err != nil || extensions.kind != cborMap {
+			return nil, nil, ErrInvalidPasskey
+		}
+	}
+	if d.position != len(d.data) {
+		return nil, nil, ErrInvalidPasskey
+	}
+	return id, append([]byte(nil), d.data[:keyEnd]...), nil
 }
 
 // Minimal bounded CBOR decoder for WebAuthn authenticator data. It supports

@@ -273,6 +273,9 @@ func (d *RESTDispatcher) passkeyRegistrationOptions(w http.ResponseWriter, r *ht
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_origin", "当前地址不支持 Passkey")
 	}
 	options, err := d.webAuth.store.BeginPasskeyRegistration(sessionToken(r), user.Username, rpID)
+	if errors.Is(err, auth.ErrFactorState) {
+		return sendAuthError(w, r, http.StatusInternalServerError, "auth_state_unavailable", "无法保存登录安全设置，请检查服务端配置目录的写入权限和磁盘空间")
+	}
 	if err != nil {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_factor_failed", "无法创建 Passkey 注册请求")
 	}
@@ -299,6 +302,10 @@ func (d *RESTDispatcher) registerPasskey(w http.ResponseWriter, r *http.Request)
 	}
 	if err := d.webAuth.store.RegisterPasskey(sessionToken(r), challenge, credential, name, rpID, origin); errors.Is(err, auth.ErrInvalidPasskey) || errors.Is(err, auth.ErrFactorChallengeExpired) {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_passkey", "Passkey 注册失败，请重试")
+	} else if errors.Is(err, auth.ErrFactorState) {
+		return sendAuthError(w, r, http.StatusInternalServerError, "auth_state_unavailable", "Passkey 未保存到网站，请检查服务端配置目录的写入权限和磁盘空间后重试")
+	} else if errors.Is(err, auth.ErrPasskeyAlreadyRegistered) {
+		return sendAuthError(w, r, http.StatusConflict, "passkey_already_registered", "这个 Passkey 已注册，请刷新安全设置")
 	} else if err != nil {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_factor_failed", "Passkey 注册失败")
 	}

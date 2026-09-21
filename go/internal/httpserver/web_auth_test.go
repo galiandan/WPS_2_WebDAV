@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -120,5 +121,30 @@ func TestAuthMeDoesNotExposeCredentialFields(t *testing.T) {
 		if _, found := payload[field]; found {
 			t.Fatalf("credential field %q leaked from auth/me", field)
 		}
+	}
+}
+
+func TestPasskeyOptionsReportStorageFailureBeforeCredentialCreation(t *testing.T) {
+	store, err := auth.NewPersistentStore(func() (string, string) { return "alice", "password" }, filepath.Join(t.TempDir(), "missing", "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := store.Login("alice", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := newReadDispatcher(t, &fakeReadStorage{}, nil)
+	dispatcher.SetWebAuth(store)
+	request := httptest.NewRequest(http.MethodPost, "https://example.test/api/v1/auth/passkey/register/options", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	response := httptest.NewRecorder()
+	if err := dispatcher.passkeyRegistrationOptions(response, request); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"code":"auth_state_unavailable"`) {
+		t.Fatalf("response: %d %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "publicKey") {
+		t.Fatal("issued options for unavailable storage")
 	}
 }
