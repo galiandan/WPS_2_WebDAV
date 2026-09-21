@@ -876,7 +876,7 @@
     // lets a user return to the root or another cached location.
     $("up-button").disabled = state.busy || state.path === "/";
     $("refresh-button").disabled = state.busy;
-    [$("folder-button"), $("upload-button")].forEach((button) => {
+    [$("folder-button"), $("upload-button"), $("text-file-button")].forEach((button) => {
       button.disabled = state.busy || state.loading || unavailable || virtualRoot;
     });
     // Empty-state retry and search actions remain usable while WPS is down;
@@ -2431,6 +2431,77 @@
   }
 
   /* ============ 文件操作 ============ */
+  let textFileTarget = null;
+  let textFileSaving = false;
+
+  function openTextFile() {
+    if ($("text-file-button").disabled) return;
+    // Keep a closed draft attached to its original folder, even after navigation.
+    if (!hasTextFileDraft()) textFileTarget = state.path;
+    $("text-file-target").textContent = "保存到：" + textFileTarget;
+    $("text-file-error").textContent = "";
+    $("text-file-modal").showModal();
+    $("text-file-name").focus();
+  }
+
+  function closeTextFile() {
+    if (!textFileSaving) $("text-file-modal").close();
+  }
+
+  function hasTextFileDraft() {
+    return textFileTarget !== null && ($("text-file-content").value !== "" || $("text-file-name").value !== "新建文档.txt");
+  }
+
+  async function saveTextFile(event) {
+    event.preventDefault();
+    if (textFileSaving || textFileTarget === null) return;
+    const errorNode = $("text-file-error");
+    errorNode.textContent = "";
+    const name = $("text-file-name").value.trim();
+    if (!name || /[\\/\u0000-\u001f\u007f]/.test(name) || name === "." || name === "..") {
+      errorNode.textContent = "请输入有效文件名，不能包含路径分隔符或控制字符。";
+      return;
+    }
+    if (!isPreviewableText(name)) {
+      errorNode.textContent = "请使用支持在线预览的扩展名，例如 .txt、.md 或 .json。";
+      return;
+    }
+    if (state.busy || state.loading || state.connection !== "connected") {
+      errorNode.textContent = "当前正在处理其他操作或连接不可用，请稍后重试。";
+      return;
+    }
+    const target = textFileTarget;
+    if (target === state.path && state.entries.some((entry) => entry.name === name)) {
+      errorNode.textContent = "此目录已有同名项目，请换一个文件名。";
+      return;
+    }
+    const body = new Blob([$("text-file-content").value], { type: "text/plain;charset=utf-8" });
+    textFileSaving = true;
+    setBusy(true);
+    ["text-file-name", "text-file-content", "text-file-save", "text-file-close"].forEach((id) => { $(id).disabled = true; });
+    $("text-file-save").textContent = "正在创建…";
+    try {
+      // No overwrite flag: the server also rejects stale-list name collisions.
+      await api("upload", joinPath(target, name), { method: "PUT", body });
+      clearDirectoryCacheFor(target);
+      textFileTarget = null;
+      $("text-file-name").value = "新建文档.txt";
+      $("text-file-content").value = "";
+      $("text-file-modal").close();
+      toast("文件 “" + name + "” 已创建", "success");
+      if (state.path === target) await load(target, true, true);
+    } catch (error) {
+      errorNode.textContent = error.status === 409 ? "此目录已有同名项目，请换一个文件名。" : (error.message || "创建失败，请重试；草稿已保留。");
+      if (error.status === 401 || isWpsError(error)) showError(error, { notify: false });
+    } finally {
+      textFileSaving = false;
+      setBusy(false);
+      ["text-file-name", "text-file-content", "text-file-save", "text-file-close"].forEach((id) => { $(id).disabled = false; });
+      $("text-file-save").textContent = "创建文件";
+      renderBreadcrumbs();
+    }
+  }
+
   async function createFolder() {
     const name = await openInputModal("新建文件夹", "文件夹名称", "", "例如：项目资料");
     if (!name) return;
@@ -3043,6 +3114,15 @@
   $("sidebar-settings-button").addEventListener("click", () => { closeMobileNav(); openSettingsModal(); });
   $("sidebar-theme-button").addEventListener("click", () => { closeMobileNav(); openSettingsModal(); });
   $("sidebar-logout-button").addEventListener("click", logout);
+  $("text-file-button").addEventListener("click", openTextFile);
+  $("text-file-form").addEventListener("submit", saveTextFile);
+  $("text-file-close").addEventListener("click", closeTextFile);
+  $("text-file-modal").addEventListener("cancel", (event) => { event.preventDefault(); closeTextFile(); });
+  window.addEventListener("beforeunload", (event) => {
+    if (!hasTextFileDraft()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
   $("folder-button").addEventListener("click", createFolder);
   $("upload-button").addEventListener("click", () => $("file-input").click());
   $("tray-cancel").addEventListener("click", trayCancel);

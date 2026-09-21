@@ -33,3 +33,7 @@ python test/ui-offline/text_preview.py
 ```
 
 覆盖中文编码与手动切换、空文件、多字节截断、安全显示、二进制提示、请求失败与取消、阅读控制及手机布局。截图保存到 `/tmp/wps-text-preview-desktop.png` 和 `/tmp/wps-text-preview-mobile.png`。
+
+新建文本文件回归：运行 python test/ui-offline/text_create.py。
+
+覆盖 UTF-8 编写保存及随后预览、空文件、特殊字符路径、文件名校验、同名保护、失败/关闭保留草稿及目标目录、加载和保存状态、手机布局；截图保存到 /tmp/wps-text-create-desktop.png 和 /tmp/wps-text-create-mobile.png。

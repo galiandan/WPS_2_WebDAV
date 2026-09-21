@@ -271,6 +271,7 @@ SOFTWARE.
   <aside class="openlist-tools" aria-label="文件工具栏">
     <div id="openlist-tools-panel" class="openlist-tools-panel">
       <button id="refresh-button" class="icon-button" type="button" title="刷新目录" aria-label="刷新目录"><svg class="icon"><use href="#i-refresh"/></svg></button>
+      <button id="text-file-button" class="toolbar-action" type="button" title="新建文本文件"><svg class="icon"><use href="#i-pencil"/></svg><span>新建文本文件</span></button>
       <button id="folder-button" class="toolbar-action" type="button" title="新建文件夹"><svg class="icon"><use href="#i-plus"/></svg><span>新建文件夹</span></button>
       <button id="upload-button" class="primary toolbar-action" type="button" title="上传文件"><svg class="icon"><use href="#i-upload"/></svg><span>上传文件</span></button>
       <button id="settings-button" class="icon-button" type="button" title="设置云盘名称" aria-label="设置云盘名称"><svg class="icon"><use href="#i-sliders"/></svg></button>
@@ -318,6 +319,24 @@ SOFTWARE.
       <div class="modal-actions">
         <button id="modal-cancel" type="button">取消</button>
         <button id="modal-submit" class="primary" type="submit">确定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="text-file-modal" class="text-file-dialog" aria-labelledby="text-file-title">
+    <form id="text-file-form" class="modal-card text-file-card">
+      <h2 id="text-file-title" class="modal-title">新建文本文件</h2>
+      <p id="text-file-target" class="preview-meta"></p>
+      <label for="text-file-name">文件名（含扩展名）</label>
+      <input id="text-file-name" type="text" value="新建文档.txt" placeholder="例如：笔记.md、配置.json" required autocomplete="off">
+      <p class="preview-meta">支持 TXT、LOG、MD、CSV、JSON、XML、YAML、YML、INI、CONF、TOML；保存为 UTF-8。</p>
+      <label for="text-file-content">文件内容</label>
+      <textarea id="text-file-content" spellcheck="false" placeholder="在这里编写内容，也可以创建空文件。"></textarea>
+      <p class="preview-meta">关闭后草稿保留在当前页面；刷新或离开页面后不保留。</p>
+      <p id="text-file-error" class="modal-inline-error" role="alert" aria-live="polite"></p>
+      <div class="modal-actions">
+        <button id="text-file-close" type="button">关闭</button>
+        <button id="text-file-save" class="primary" type="submit">创建文件</button>
       </div>
     </form>
   </dialog>

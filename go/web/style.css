@@ -980,6 +980,13 @@ dialog[open] .modal-card { animation: modal-in .26s var(--ease-out) both; }
 }
 .danger-solid:hover { background: var(--grad-bad); border-color: transparent; color: #ffffff; filter: brightness(1.06); }
 .modal-inline-error { color: var(--bad); font-size: 12px; min-height: 18px; margin: 10px 0 -6px; }
+.text-file-dialog { max-width: min(920px, calc(100vw - 24px)); }
+.text-file-card { display: flex; flex-direction: column; max-height: calc(100dvh - 48px); overflow: auto; }
+.text-file-card label { margin: 16px 0 6px; font-size: 14px; }
+.text-file-card input { flex-shrink: 0; }
+#text-file-content { width: 100%; min-height: 160px; height: 40vh; flex-shrink: 0; resize: vertical; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--text); font: 14px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+#text-file-content:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 600px) { #text-file-name, #text-file-content { font-size: 16px; } .text-file-card { padding: 16px; } }
 .preview-dialog { max-width: min(920px, calc(100vw - 28px)); }
 .preview-card { max-width: 920px; padding: 20px; }
 .preview-head { align-items: flex-start; display: flex; gap: 14px; justify-content: space-between; }
