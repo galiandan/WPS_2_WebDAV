@@ -106,6 +106,10 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 		return err
 	}
 	defer stream.Close()
+	// Cancellation must interrupt a blocked Read, not wait for another byte
+	// or an upstream timeout. Stop the callback on normal completion.
+	stopCancel := context.AfterFunc(r.Context(), func() { stream.Close() })
+	defer stopCancel()
 
 	streamLength := stream.ContentLength()
 	if rangeRequested {

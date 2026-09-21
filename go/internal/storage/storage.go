@@ -52,6 +52,12 @@ type Downloader interface {
 	OpenDownload(entryID string, offset int64, length *int64, cid *string) (DownloadStream, error)
 }
 
+// ContextDownloader extends legacy downloaders with request cancellation.
+// The production WPS adapter implements it; older injected adapters still work.
+type ContextDownloader interface {
+	OpenDownloadContext(ctx context.Context, entryID string, offset int64, length *int64, cid *string) (DownloadStream, error)
+}
+
 // DownloadStream is the upstream download surface the HTTP layer consumes.
 // Pointer accessors mirror Python's None-or-value properties.
 type DownloadStream interface {
@@ -645,6 +651,9 @@ func (s *Storage) OpenDownload(entryID string, offset int64) (DownloadStream, er
 // held download slot; the slot is released when the stream is closed or
 // when opening fails.
 func (s *Storage) OpenPath(ctx context.Context, path string, offset int64, length *int64) (DownloadStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	entry, err := s.Resolve(path)
 	if err != nil {
 		return nil, err
@@ -660,7 +669,12 @@ func (s *Storage) OpenPath(ctx context.Context, path string, offset int64, lengt
 		release()
 		return nil, errDownloadsNotWired
 	}
-	stream, err := s.downloader.OpenDownload(entry.ID, offset, length, entry.LinkID)
+	var stream DownloadStream
+	if downloader, ok := s.downloader.(ContextDownloader); ok {
+		stream, err = downloader.OpenDownloadContext(ctx, entry.ID, offset, length, entry.LinkID)
+	} else {
+		stream, err = s.downloader.OpenDownload(entry.ID, offset, length, entry.LinkID)
+	}
 	if err != nil {
 		release()
 		return nil, err

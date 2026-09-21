@@ -149,6 +149,14 @@ func (c *SignedObjectClient) Do(
 	body io.Reader,
 	contentLength int64,
 ) (*http.Response, error) {
+	return c.DoContext(context.Background(), operation, method, signedURL, headers, body, contentLength)
+}
+
+// DoContext cancels connection setup and response-body reads with ctx.
+func (c *SignedObjectClient) DoContext(ctx context.Context, operation, method, signedURL string, headers []SignedHeader, body io.Reader, contentLength int64) (*http.Response, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if _, err := ParseSignedTarget(signedURL, operation, c.suffix); err != nil {
 		return nil, err
 	}
@@ -158,7 +166,7 @@ func (c *SignedObjectClient) Do(
 			return nil, model.NewWpsAPIError(operation, 0, model.WpsCategoryUpstream)
 		}
 	}
-	request, err := http.NewRequest(method, signedURL, body)
+	request, err := http.NewRequestWithContext(ctx, method, signedURL, body)
 	if err != nil {
 		return nil, model.NewWpsAPIError(operation, 0, model.WpsCategoryUpstream)
 	}
@@ -173,6 +181,9 @@ func (c *SignedObjectClient) Do(
 	}
 	response, err := c.transport.RoundTrip(request)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, model.NewWpsAPIError(operation, 0, model.WpsCategoryUnavailable)
 	}
 	return response, nil

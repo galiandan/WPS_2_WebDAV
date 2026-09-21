@@ -4,7 +4,10 @@
 
 package storage
 
-import "github.com/galiandan/WPS_2_WebDAV/go/internal/wps"
+import (
+	"context"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/wps"
+)
 
 // wpsDownloader adapts *wps.Client's OpenDownload return type to the
 // storage DownloadStream interface.
@@ -19,4 +22,9 @@ func (d *wpsDownloader) OpenDownload(entryID string, offset int64, length *int64
 // NewDownloader returns the real WPS download surface for a client.
 func NewDownloader(client *wps.Client) Downloader {
 	return &wpsDownloader{client: client}
+}
+
+// OpenDownloadContext propagates cancellation through both upstream phases.
+func (d *wpsDownloader) OpenDownloadContext(ctx context.Context, entryID string, offset int64, length *int64, cid *string) (DownloadStream, error) {
+	return d.client.OpenDownloadContext(ctx, entryID, offset, length, cid)
 }

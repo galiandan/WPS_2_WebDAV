@@ -74,6 +74,9 @@ func (s *fakeDownloadStream) Close() error {
 		s.mu.Lock()
 		s.closeCount++
 		s.mu.Unlock()
+		if closer, ok := s.data.(io.Closer); ok {
+			closer.Close()
+		}
 	})
 	return nil
 }
@@ -374,6 +377,7 @@ func TestDAVDownloadOverLongStreamTruncates(t *testing.T) {
 // exactly once.
 func TestDAVDownloadDisconnectReleasesSlot(t *testing.T) {
 	reader, writer := io.Pipe()
+	defer writer.Close()
 	stream := &fakeDownloadStream{data: reader}
 	storage := downloadStorage(t, stream)
 	server := httptest.NewServer(newDownloadRouter(t, storage, DownloadLimits{}))
@@ -396,7 +400,6 @@ func TestDAVDownloadDisconnectReleasesSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Close()
-	writer.Close()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for stream.closeCalls() == 0 && time.Now().Before(deadline) {

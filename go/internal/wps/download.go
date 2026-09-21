@@ -7,6 +7,7 @@
 package wps
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -65,6 +66,14 @@ func (s *DownloadStream) Status() *string { return s.status }
 // default checksum list, the direct-download flag unset so the observed 403
 // fallback can enable it once, and cid falling back to the configured value.
 func (c *Client) OpenDownload(fileID string, offset int64, length *int64, cid *string) (*DownloadStream, error) {
+	return c.OpenDownloadContext(context.Background(), fileID, offset, length, cid)
+}
+
+// OpenDownloadContext binds URL resolution and the object stream to ctx.
+func (c *Client) OpenDownloadContext(ctx context.Context, fileID string, offset int64, length *int64, cid *string) (*DownloadStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if offset < 0 {
 		return nil, errors.New("offset must not be negative")
 	}
@@ -110,7 +119,7 @@ func (c *Client) OpenDownload(fileID string, offset int64, length *int64, cid *s
 		if effectiveCID != nil && !c.personal() {
 			query = append(query, QueryPair{Key: "cid", Value: *effectiveCID})
 		}
-		return c.RequestJSON(JSONRequest{Path: path, Query: query, RetryOn401: true})
+		return c.RequestJSONContext(ctx, JSONRequest{Path: path, Query: query, RetryOn401: true})
 	}
 
 	payload, err := resolve(false)
@@ -152,7 +161,7 @@ func (c *Client) OpenDownload(fileID string, offset int64, length *int64, cid *s
 			Value: fmt.Sprintf("bytes=%d-%s", offset, end),
 		})
 	}
-	response, err := c.signed.Do("object download", http.MethodGet, signedURL, headers, nil, 0)
+	response, err := c.signed.DoContext(ctx, "object download", http.MethodGet, signedURL, headers, nil, 0)
 	if err != nil {
 		return nil, err
 	}
