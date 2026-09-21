@@ -208,11 +208,9 @@ input, select {
 /* ============ 3. OpenList 风格登录 ============
    Background geometry: OpenList-Frontend, MIT; notice embedded in index.html. */
 .auth-loading { min-height: 100dvh; display: grid; place-items: center; color: var(--text-2); }
-.auth-screen { --auth-bg: #a9c6ff; position: fixed; inset: 0; z-index: 100; overflow-y: auto; background: var(--auth-bg); }
-html[data-theme="dark"] .auth-screen { --auth-bg: #062b74; }
-@media (prefers-color-scheme: dark) { html:not([data-theme="light"]) .auth-screen { --auth-bg: #062b74; } }
+.auth-screen { position: fixed; inset: 0; z-index: 100; overflow-y: auto; background: var(--bg); }
 .auth-screen.leaving { opacity: 0; transition: opacity .18s ease; pointer-events: none; }
-.auth-background { position: fixed; inset: 0; overflow: hidden; pointer-events: none; }
+.auth-background { display: none; }
 .auth-corner-top { position: absolute; right: -300px; top: -900px; }
 .auth-corner-bottom { position: absolute; left: -200px; bottom: -400px; }
 .auth-shell { position: relative; min-height: 100%; min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 32px 20px; }
@@ -226,6 +224,7 @@ html[data-theme="dark"] .auth-screen { --auth-bg: #062b74; }
 .auth-input-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .auth-input-control > .icon { display: none; }
 .auth-field input { background: transparent; border: 0; border-radius: 0; flex: 1; min-width: 0; width: 100%; padding: 9px 0; outline: none; box-shadow: none; font-size: 14px; }
+.auth-field input:is(:autofill, :-webkit-autofill) { box-shadow: 0 0 0 1000px var(--surface) inset; -webkit-text-fill-color: var(--text); caret-color: var(--text); }
 .auth-field input::placeholder { color: var(--text-3); opacity: 1; }
 .password-control { position: relative; padding-right: 42px; }
 .password-toggle { position: absolute; right: 3px; top: 2px; width: 36px; min-height: 36px; border: 0; background: transparent; color: var(--text-3); padding: 0; }
