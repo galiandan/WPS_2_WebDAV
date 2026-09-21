@@ -278,8 +278,9 @@ func parseListPage(payload map[string]any) (model.ListPage, error) {
 // cursorKey identifies one pagination cursor, the Python tuple
 // (next_offset, next_filter).
 type cursorKey struct {
-	offset int
-	filter *string
+	offset    int
+	filter    string
+	hasFilter bool
 }
 
 // IterOptions mirrors the iter_entries keyword arguments. Count is required
@@ -368,7 +369,10 @@ func (c *Client) IterEntries(parentID string, options IterOptions) ([]model.Remo
 		if page.NextOffset == nil || *page.NextOffset < 0 {
 			return entries, nil
 		}
-		nextCursor := cursorKey{offset: *page.NextOffset, filter: page.NextFilter}
+		nextCursor := cursorKey{offset: *page.NextOffset, hasFilter: page.NextFilter != nil}
+		if page.NextFilter != nil {
+			nextCursor.filter = *page.NextFilter
+		}
 		if _, seen := seenCursors[nextCursor]; seen {
 			return entries, nil
 		}

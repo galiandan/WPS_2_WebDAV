@@ -337,3 +337,26 @@ func TestIterEntriesValidatesArguments(t *testing.T) {
 		t.Fatalf("error = %v, want max_entries must be positive", err)
 	}
 }
+
+func TestIterEntriesDetectsFilterCycleByValue(t *testing.T) {
+	client, opener := listFixtureClient(t)
+	for _, filter := range []string{"a", "b", "a"} {
+		opener.script = append(opener.script, listResponse(`{"files":[],"next_offset":1,"next_filter":"`+filter+`","result":"ok"}`))
+	}
+	_, err := client.IterEntries("folder", IterOptions{Count: 1, MaxEntries: model.Ptr(2)})
+	if err != nil || len(opener.requests) != 3 {
+		t.Fatalf("cycle should stop at third page: requests=%d error=%v", len(opener.requests), err)
+	}
+}
+
+func TestIterEntriesAllowsAdvancingFiltersAtSameOffset(t *testing.T) {
+	client, opener := listFixtureClient(t)
+	for _, filter := range []string{"a", "b", "c"} {
+		opener.script = append(opener.script, listResponse(`{"files":[],"next_offset":1,"next_filter":"`+filter+`","result":"ok"}`))
+	}
+	opener.script = append(opener.script, listResponse(`{"files":[`+entryJSON("1", "a.txt", "")+`],"next_offset":-1,"result":"ok"}`))
+	entries, err := client.IterEntries("folder", IterOptions{Count: 1})
+	if err != nil || len(entries) != 1 || len(opener.requests) != 4 {
+		t.Fatalf("advancing cursor truncated: entries=%d requests=%d error=%v", len(entries), len(opener.requests), err)
+	}
+}
