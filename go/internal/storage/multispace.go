@@ -107,6 +107,9 @@ func NewMultiSpace(transferBudget *budget.Budget, config MultiSpaceConfig) (*Mul
 type MultiSpace struct {
 	budget *budget.Budget
 
+	// syncMu serializes snapshot reads and rebuilds, so an older snapshot
+	// cannot publish after a newer one. Readers keep using the current route.
+	syncMu   sync.Mutex
 	mu       sync.Mutex
 	rootName string
 	mounts   []Mount
@@ -121,13 +124,21 @@ type MultiSpace struct {
 // atomically. On failure the previous routing keeps serving; the next call
 // retries the rebuild because the mounts still differ.
 func (m *MultiSpace) rebuild(mounts []Mount, groupID string) error {
-	for i, mount := range mounts {
-		for _, other := range mounts[i+1:] {
-			if other.Name == mount.Name {
-				return errors.New("WPS space names must be unique")
-			}
+	mounts = slices.Clone(mounts)
+	seen := make(map[string]bool, len(mounts))
+	for _, mount := range mounts {
+		if seen[mount.Name] {
+			return errors.New("WPS space names must be unique")
 		}
+		seen[mount.Name] = true
 	}
+	m.mu.Lock()
+	rootName := m.rootName
+	previous := make(map[Mount]*Storage, len(m.mounts))
+	for _, mount := range m.mounts {
+		previous[mount] = m.spaces[mount.Name]
+	}
+	m.mu.Unlock()
 	spaces := make(map[string]*Storage, len(mounts))
 	var single *Storage
 	if len(mounts) == 0 {
@@ -151,7 +162,7 @@ func (m *MultiSpace) rebuild(mounts []Mount, groupID string) error {
 			}
 			spaceConfig := m.config.Space
 			spaceConfig.RootID = rootID
-			spaceConfig.RootName = m.rootName
+			spaceConfig.RootName = rootName
 			spaceConfig.Writer = clients.Writer
 			spaceConfig.Downloader = clients.Downloader
 			spaceConfig.WorkspaceSelection = selection
@@ -162,6 +173,10 @@ func (m *MultiSpace) rebuild(mounts []Mount, groupID string) error {
 		}
 	} else {
 		for _, mount := range mounts {
+			if existing := previous[mount]; existing != nil {
+				spaces[mount.Name] = existing
+				continue
+			}
 			clients, err := m.config.SpaceFactory(mount.GroupID)
 			if err != nil {
 				return err
@@ -193,6 +208,8 @@ func (m *MultiSpace) rebuild(mounts []Mount, groupID string) error {
 // the previous routing in place (the mounts still differ, so the next call
 // retries) and reports the error, instead of Python's half-updated state.
 func (m *MultiSpace) syncMounts() error {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
 	if m.config.MountsSource == nil {
 		return nil
 	}
@@ -265,6 +282,8 @@ func (m *MultiSpace) SetRootID(rootID string) error {
 // SetRootName updates the display name of the virtual root and of the
 // single-space fallback.
 func (m *MultiSpace) SetRootName(rootName string) error {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
 	if rootName == "" {
 		return errors.New("root_name is required")
 	}
