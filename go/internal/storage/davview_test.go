@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
@@ -58,5 +59,32 @@ func TestDAVViewRejectsInvalidPrefix(t *testing.T) {
 	}
 	if _, err := view.Metadata("/"); err == nil {
 		t.Fatal("invalid DAV prefix was accepted")
+	}
+}
+
+func TestDAVViewSnapshotKeepsLockAndOperationPathsOnOneRoot(t *testing.T) {
+	prefix := "/A/web"
+	view, err := NewDAVView(&MultiSpace{}, func() (string, error) { return prefix, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := view.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix = "/B/other"
+	for _, path := range []string{"/file", "/100%25 + 笔记.txt", "/"} {
+		locked, err := pinned.LockPath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapped, err := pinned.mapPath(path)
+		if err != nil || locked != mapped || !strings.HasPrefix(locked, "/A/web") {
+			t.Fatalf("lock=%q operation=%q err=%v", locked, mapped, err)
+		}
+	}
+	next, err := view.LockPath("/file")
+	if err != nil || next != "/B/other/file" {
+		t.Fatalf("next=%q err=%v", next, err)
 	}
 }

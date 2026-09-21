@@ -100,6 +100,12 @@ func recoverPanics(panicLog func(recovered any, stack []byte)) Middleware {
 				if recovered == nil {
 					return
 				}
+				// A streaming response cannot change its status after headers.
+				// Let net/http abort its framing instead of appending a 500 to
+				// an incomplete archive and making the transfer look complete.
+				if recovered == http.ErrAbortHandler {
+					panic(recovered)
+				}
 				if panicLog != nil {
 					stack := make([]byte, 8192)
 					stack = stack[:runtime.Stack(stack, false)]

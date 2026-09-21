@@ -512,7 +512,6 @@ func TestPyEscapeMatchesEnsureASCII(t *testing.T) {
 	}
 }
 
-
 // TestStateStatThrottle pins the reload latency bound: external writes are
 // noticed on the first access after the stat interval, not on every access.
 func TestStateStatThrottle(t *testing.T) {

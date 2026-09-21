@@ -11,7 +11,7 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 )
 
-const previewUnsupportedMessage = "only supported text files can be previewed"
+const previewUnsupportedMessage = "only supported text, image and PDF files can be previewed"
 
 // sendPreview serves bounded raw bytes for browser-side text decoding.
 // The upstream stream is still slot-managed by OpenPath, while
@@ -23,6 +23,9 @@ func sendPreview(w http.ResponseWriter, r *http.Request, path string, downloads 
 	}
 	if entry.Kind != model.KindFile {
 		return model.NewStorageError(model.KindNotFolder, "the requested path is not a file")
+	}
+	if mediaType := previewMediaType(entry.Name); mediaType != "" {
+		return sendEntryDownload(w, r, path, true, downloads, limits.chunkSize(), entry, mediaType)
 	}
 	if !isPreviewableText(entry.Name) {
 		return model.NewStorageError(model.KindUnsupportedOperation, previewUnsupportedMessage)
@@ -63,5 +66,29 @@ func isPreviewableText(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// Active document formats such as HTML and SVG are deliberately excluded.
+func previewMediaType(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".avif":
+		return "image/avif"
+	case ".bmp":
+		return "image/bmp"
+	case ".ico":
+		return "image/x-icon"
+	case ".pdf":
+		return "application/pdf"
+	default:
+		return ""
 	}
 }

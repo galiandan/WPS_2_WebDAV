@@ -28,3 +28,32 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath -o /tmp/wps-adapter ./cmd/wps-adapter
       - name: Check shell installers
         run: bash -n scripts/install-native.sh scripts/install-docker.sh scripts/uninstall.sh
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install offline browser test tools
+        run: |
+          python -m pip install -r test/ui-offline/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Run offline browser regressions
+        run: |
+          export WPS_UI_BROWSER="$(python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
+          for script in test/ui-offline/*.py; do
+            python "$script"
+          done
+      - name: Save UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-ui-screenshots
+          if-no-files-found: ignore
+          path: |
+            /tmp/wps-*.png
+            /tmp/wps-ui-shots/*.png

@@ -8,6 +8,7 @@
   <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="/assets/search.css">
 </head>
 <body class="openlist-ui">
   <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
@@ -137,7 +138,7 @@ SOFTWARE.
     <svg class="drop-frame" aria-hidden="true"><rect pathLength="1000"/></svg>
     <div class="drop-overlay-card" role="status" aria-live="polite">
       <span class="drop-overlay-icon" aria-hidden="true"><svg class="icon lg"><use href="#i-upload"/></svg></span>
-      <strong>松开即可上传</strong>
+      <strong>松开即可上传文件或文件夹</strong>
       <span>上传到当前目录：<b id="drop-target">/</b></span>
     </div>
   </div>
@@ -248,8 +249,24 @@ SOFTWARE.
 
 
           <input id="file-input" class="hidden" type="file" multiple>
+          <input id="folder-input" class="hidden" type="file" webkitdirectory multiple>
         </div>
       </div>
+      <div class="selection-toolbar" aria-label="批量文件操作">
+        <label class="selection-all"><input id="select-all" type="checkbox" aria-label="选择当前筛选结果"><span>全选</span></label>
+        <span id="selection-count" role="status">未选择</span>
+        <div id="selection-actions" class="selection-actions" hidden>
+          <button id="batch-copy" type="button">复制</button>
+          <button id="batch-move" type="button">移动</button>
+          <button id="batch-archive" type="button">打包下载</button>
+          <button id="batch-delete" class="danger" type="button">删除</button>
+          <button id="selection-clear" type="button">取消选择</button>
+        </div>
+      </div>
+      <section id="batch-results" class="batch-results" aria-label="批量操作结果" hidden>
+        <div class="batch-results-head"><strong id="batch-summary" role="status"></strong><button id="batch-results-close" type="button">关闭</button></div>
+        <ul id="batch-result-list"></ul>
+      </section>
       <div id="list-head" class="list-head" role="row">
         <div class="cell name" role="columnheader" aria-sort="none"><button type="button" data-sort="name" class="sort-button">名称<svg class="icon sort-ic" aria-hidden="true"><use href="#i-sort"/></svg></button></div>
         <div class="cell type" role="columnheader">类型</div>
@@ -273,6 +290,7 @@ SOFTWARE.
       <button id="refresh-button" class="icon-button" type="button" title="刷新目录" aria-label="刷新目录"><svg class="icon"><use href="#i-refresh"/></svg></button>
       <button id="text-file-button" class="toolbar-action" type="button" title="新建文本文件"><svg class="icon"><use href="#i-pencil"/></svg><span>新建文本文件</span></button>
       <button id="folder-button" class="toolbar-action" type="button" title="新建文件夹"><svg class="icon"><use href="#i-plus"/></svg><span>新建文件夹</span></button>
+      <button id="upload-folder-button" class="toolbar-action" type="button" title="上传文件夹（保留目录结构）"><svg class="icon"><use href="#i-folder"/></svg><span>上传文件夹</span></button>
       <button id="upload-button" class="primary toolbar-action" type="button" title="上传文件"><svg class="icon"><use href="#i-upload"/></svg><span>上传文件</span></button>
       <button id="settings-button" class="icon-button" type="button" title="设置云盘名称" aria-label="设置云盘名称"><svg class="icon"><use href="#i-sliders"/></svg></button>
       <button id="theme-button" class="icon-button" type="button" title="切换主题" aria-label="切换主题"><svg class="icon"><use id="theme-icon" href="#i-sun"/></svg></button>
@@ -350,7 +368,7 @@ SOFTWARE.
         </div>
         <button id="preview-close-top" class="icon-button small" type="button" title="关闭预览" aria-label="关闭预览"><svg class="icon"><use href="#i-x"/></svg></button>
       </div>
-      <div class="preview-toolbar" role="group" aria-label="阅读选项">
+      <div id="preview-text-toolbar" class="preview-toolbar" role="group" aria-label="阅读选项">
         <label>编码 <select id="preview-encoding">
           <option value="auto">自动识别</option>
           <option value="utf-8">UTF-8</option>
@@ -369,6 +387,18 @@ SOFTWARE.
         </select></label>
         <button id="preview-fullscreen" type="button" aria-pressed="false">全屏阅读</button>
       </div>
+      <div id="preview-media-toolbar" class="preview-toolbar" role="group" aria-label="图片选项" hidden>
+        <button id="preview-previous" type="button">上一张</button>
+        <button id="preview-next" type="button">下一张</button>
+        <label>缩放 <select id="preview-zoom">
+          <option value="fit">适应窗口</option>
+          <option value="50">50%</option>
+          <option value="100">100%</option>
+          <option value="150">150%</option>
+          <option value="200">200%</option>
+        </select></label>
+      </div>
+      <div id="preview-media" class="preview-media" hidden></div>
       <div id="preview-loading" class="preview-state" role="status">正在读取文件...</div>
       <pre id="preview-content" class="preview-content" tabindex="0" hidden></pre>
       <p id="preview-note" class="preview-note" hidden></p>
@@ -429,7 +459,7 @@ SOFTWARE.
 
   <dialog id="picker">
     <form class="modal-card picker-card" method="dialog" onsubmit="return false;">
-      <h2 class="modal-title">移动到…</h2>
+      <h2 id="picker-title" class="modal-title">移动到…</h2>
       <p id="picker-subtitle" class="modal-message">选择目标文件夹</p>
       <div class="picker-nav">
         <button id="picker-up" class="icon-button small" type="button" title="上一级" aria-label="上一级"><svg class="icon"><use href="#i-chev-up"/></svg></button>
@@ -461,6 +491,7 @@ SOFTWARE.
     </form>
   </dialog>
 
+  <script src="/assets/search.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>
 </html>

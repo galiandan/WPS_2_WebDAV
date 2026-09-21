@@ -47,6 +47,23 @@ func (v *DAVView) mapPath(path string) (string, error) {
 	return JoinRemotePath(append(prefixParts, pathParts...), false)
 }
 
+// LockPath uses the browser business namespace for shared REST/WebDAV locks.
+// The DAV path itself is only an alias of the same remote resource.
+func (v *DAVView) LockPath(path string) (string, error) {
+	return v.mapPath(path)
+}
+
+// Snapshot pins the selected subtree for one HTTP request. A settings change
+// must not redirect a write after its lock check, or map COPY's two endpoints
+// through different roots. The next request observes the new selection.
+func (v *DAVView) Snapshot() (*DAVView, error) {
+	prefix, err := v.mapPath("/")
+	if err != nil {
+		return nil, err
+	}
+	return NewDAVView(v.base, func() (string, error) { return prefix, nil })
+}
+
 func (v *DAVView) Metadata(path string) (model.RemoteEntry, error) {
 	mapped, err := v.mapPath(path)
 	if err != nil {

@@ -74,6 +74,13 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 	if entry.Kind != model.KindFile {
 		return model.NewStorageError(model.KindNotFolder, "the requested path is not a file")
 	}
+	return sendEntryDownload(w, r, path, rest, downloads, chunkSize, entry, "")
+}
+
+// sendEntryDownload also serves allowlisted media previews through the same
+// bounded, cancellable Range pipeline. inlineType is never supplied by callers
+// over HTTP; previewMediaType is the only source.
+func sendEntryDownload(w http.ResponseWriter, r *http.Request, path string, rest bool, downloads DownloadStorage, chunkSize int64, entry model.RemoteEntry, inlineType string) error {
 	headers := map[string]string{
 		"Accept-Ranges":          "bytes",
 		"Cache-Control":          "no-store, no-transform",
@@ -85,7 +92,7 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 		// ETag is written.
 		headers["ETag"] = `"` + strings.Trim(*entry.Etag, `"`) + `"`
 	}
-	if rest {
+	if rest && inlineType == "" {
 		headers["Content-Disposition"] = `attachment; filename="` +
 			asciiDownloadName(entry.Name) + `"; filename*=UTF-8''` + pythonQuote(entry.Name)
 	}
@@ -132,6 +139,11 @@ func sendDownload(w http.ResponseWriter, r *http.Request, path string, rest bool
 		header[name] = []string{value}
 	}
 	header.Set("Content-Type", mimetypes.GuessMimeType(entry.Name))
+	if inlineType != "" {
+		header.Set("Content-Type", inlineType)
+		header.Set("Content-Disposition", "inline")
+		header.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'")
+	}
 	if _, known := headers["Content-Length"]; known {
 		header.Set("Connection", "close")
 	} else {

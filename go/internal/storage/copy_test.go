@@ -102,6 +102,20 @@ func TestCopyPathNativeSingleFile(t *testing.T) {
 	}
 }
 
+func TestCopyPathCancelledBeforeAnyStorageWork(t *testing.T) {
+	client := newFakeClient()
+	writer := &copyWriter{fakeClient: client}
+	storage := newTestStorage(t, client, func(c *StorageConfig) { c.Writer = writer })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := storage.CopyPath(ctx, "/file", "/other/file", CopyOptions{Depth: "infinity"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation before path resolution", err)
+	}
+	if len(writer.calls) != 0 {
+		t.Fatalf("cancelled request copied files: %v", writer.calls)
+	}
+}
+
 func TestCopyPathRelaysRenamedFilesWithGuessedType(t *testing.T) {
 	client := newFakeClient()
 	client.children["root"][1].LinkID = model.Ptr("link-1")

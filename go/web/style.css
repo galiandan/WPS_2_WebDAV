@@ -1423,3 +1423,35 @@ button.primary:hover { background: var(--accent-deep); border-color: var(--accen
   .openlist-ui .tree-toggle { flex-basis: 32px; width: 32px; min-height: 44px; }
   .openlist-ui .directory-row .tree-link { min-height: 44px; }
 }
+
+/* Images remain streamed through the authenticated preview route. */
+.preview-media { margin-top: 16px; overflow: auto; max-height: 60dvh; min-height: 180px; text-align: center; background: var(--bg); border-radius: 8px; }
+.preview-media img { display: block; max-width: 100%; max-height: 60dvh; margin: auto; object-fit: contain; }
+.preview-media img.actual-size { max-width: none; max-height: none; }
+.preview-media iframe { display: block; width: 100%; height: 60dvh; border: 0; background: white; }
+.preview-dialog.expanded .preview-media { flex: 1; min-height: 0; max-height: none; }
+#preview-media-toolbar button { margin-left: 0; }
+
+/* Selection stays available in list and card views, including touch devices. */
+.selection-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 8px; color: var(--text-2); font-size: 13px; }
+.selection-all { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.selection-all input, .entry-select { width: 17px; height: 17px; min-width: 17px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.selection-all input:disabled, .entry-select:disabled { cursor: default; }
+.selection-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.selection-actions[hidden], .batch-results[hidden] { display: none; }
+.selection-actions button, .batch-results-head button { min-height: 30px; padding: 4px 10px; font-size: 13px; }
+.entry-select { flex-shrink: 0; }
+.card > .entry-select { position: absolute; z-index: 2; top: 10px; left: 10px; }
+.batch-results { padding: 12px; margin: 0 8px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.batch-results-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.batch-results ul { margin: 8px 0 0; padding-left: 20px; max-height: 240px; overflow: auto; }
+.batch-results li { padding: 3px 0; overflow-wrap: anywhere; }
+.batch-results .failed, .selection-actions .danger { color: var(--bad); }
+@media (max-width: 767px) {
+  .selection-toolbar { gap: 8px; }
+  .selection-actions { flex-basis: 100%; }
+  .selection-all { min-height: 32px; }
+  .selection-all input, .entry-select { width: 20px; height: 20px; min-width: 20px; }
+}
+
+.upload-tray-open .toasts { top: calc(var(--header-h) + 12px); bottom: auto; }

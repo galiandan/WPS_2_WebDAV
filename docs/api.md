@@ -78,7 +78,23 @@ PATCH /api/v1/storage
 
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
 
-其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。 图片和 PDF 使用同一 `GET /api/v1/preview` 路由，支持 JPG/JPEG、PNG、GIF、WebP、AVIF、BMP、ICO、PDF（不区分大小写），按允许列表设置类型并返回 `Content-Disposition: inline`，复用下载并发、流式读取和单 Range 能力，不套用文本的 2 MiB 截断规则。HTML 和 SVG 不提供在线预览。PDF 由浏览器内置阅读器显示；不支持的浏览器可下载查看。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+
+### 批量操作与打包下载
+
+`POST /api/v1/batch` 接收 `{"operation":"copy","paths":["/空间/目录/文件.txt"],"destination":"/空间/目标目录"}`。`operation` 支持 `copy`、`move`、`delete`；删除省略 `destination`。最多 100 个不重叠路径，拒绝根目录和目标落在源目录内部，复制/移动不覆盖同名目标。沿用现有空间边界，不增加 WPS 原生目录复制或跨空间操作。响应包含 `results: [{path,ok,status,error?}]`、`succeeded` 和 `failed`；HTTP 200 不代表所有项目成功。取消请求后不启动剩余项目，已经完成的项目不回滚，也不会隐式重试。
+
+`POST /api/v1/archive` 接收 `{"paths":["/空间/文件.txt","/空间/目录"]}`；也接受表单 `paths` 字段（值为 JSON 数组），使浏览器直接保存下载而不在 JavaScript 中缓冲整个 ZIP。`GET /api/v1/archive?path=...&path=...` 提供相同读取行为。返回 ZIP 附件，保留相对目录与空目录，采用不压缩的流式打包。每次最多选择 100 项、展开 10000 项、64 层、10 GiB 数据和 8 MiB 累计名称；同名或大小写冲突拒绝打包。开始传输后若上游失败、大小变化或超过预算，立即中断 HTTP 传输，不生成貌似成功的残缺 ZIP。ZIP 不支持 Range 续传。
+
+### 全局文件名与路径搜索
+
+- `POST /api/v1/search/refresh?path=/` 建立所有已选空间的索引；`path=/空间` 仅扫描该空间。返回 202；已有扫描时返回 409。一次只运行一个扫描，新扫描替换旧索引。
+- `GET /api/v1/search?q=报告&path=/空间&type=document&match=name&offset=0&limit=100` 查询已有索引。`type` 为 `all/file/folder/image/video/audio/document`，`match` 为 `name/path`；每页 1–200 项。
+- `DELETE /api/v1/search` 停止扫描。底层目录请求有自身超时，取消在当前目录请求返回后生效；关闭搜索窗口不会停止后台扫描。
+
+查询返回 `results: [{path,entry}]`、`total`、`has_more`、`scope_covered` 和 `index`。`index` 包含 `state`、`path`、`generation`、`entries`、`scanned_folders`、`skipped_folders`、`complete`、`reason` 和时间信息。状态为 `idle/indexing/ready/partial/cancelling/cancelled/failed`。只有 `complete=true` 且 `scope_covered=true` 时，空结果才代表已扫描范围内没有匹配项。索引只包含元数据，不查询文件正文；类型按扩展名识别。
+
+索引在内存中最多保存 50000 项及 32 MiB 元数据；最多遍历 5000 个目录、64 层。扫描在目录请求之间检查 10 分钟时限；当前目录请求需等待自身超时或完成，因此不是严格的 10 分钟硬截止。目录请求间隔至少 100 毫秒。错误和超限仅报告固定原因，不返回上游原文。手动刷新会清理目录缓存；服务重启、REST/WebDAV 文件写入、登录凭据或工作区热替换会失效索引。来自 WPS 官网或其他客户端的变更需手动更新。
 
 ### WPS status
 

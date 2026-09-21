@@ -144,7 +144,7 @@ func (d *DAVDispatcher) destinationDavPath(r *http.Request) (string, error) {
 // is discarded, then the folder is created and answered with its JSON and
 // Location header.
 func (d *DAVDispatcher) doDavMkcol(w http.ResponseWriter, r *http.Request, davPath string) error {
-	allowed, err := checkLocks(w, r, d.locks, false, davPath)
+	allowed, err := d.checkLocks(w, r, davPath)
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func (d *DAVDispatcher) doDavDelete(w http.ResponseWriter, r *http.Request, davP
 	if len(parts) == 0 {
 		return model.NewStorageError(model.KindInvalidPath, "the root cannot be deleted")
 	}
-	allowed, err := checkLocks(w, r, d.locks, false, davPath)
+	allowed, err := d.checkLocks(w, r, davPath)
 	if err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func (d *DAVDispatcher) doDavMove(w http.ResponseWriter, r *http.Request, davPat
 	if err != nil {
 		return err
 	}
-	allowed, err := checkLocks(w, r, d.locks, false, davPath, destination)
+	allowed, err := d.checkLocks(w, r, davPath, destination)
 	if err != nil {
 		return err
 	}
@@ -286,7 +286,7 @@ func (d *DAVDispatcher) doDavCopy(w http.ResponseWriter, r *http.Request, davPat
 	if err != nil {
 		return err
 	}
-	allowed, err := checkLocks(w, r, d.locks, false, davPath, destination)
+	allowed, err := d.checkLocks(w, r, davPath, destination)
 	if err != nil {
 		return err
 	}
@@ -564,8 +564,8 @@ func firstXMLElementText(body []byte, local string) (string, error) {
 }
 
 // sendLockResponse mirrors _send_lock_response.
-func (d *DAVDispatcher) sendLockResponse(w http.ResponseWriter, r *http.Request, status int, active ActiveLock) error {
-	body := lockResponseBody(active, d.locks.RemainingSeconds(active), hrefPath(active.Path, d.davPrefix))
+func (d *DAVDispatcher) sendLockResponse(w http.ResponseWriter, r *http.Request, status int, active ActiveLock, davPath string) error {
+	body := lockResponseBody(active, d.locks.RemainingSeconds(active), hrefPath(davPath, d.davPrefix))
 	extra := map[string]string{
 		"DAV":        "1,2",
 		"Lock-Token": "<" + active.Token + ">",
@@ -578,7 +578,7 @@ func (d *DAVDispatcher) sendLockResponse(w http.ResponseWriter, r *http.Request,
 // request into a refresh; otherwise the resource metadata decides between
 // 200 and 201 for a new lock.
 func (d *DAVDispatcher) doDavLock(w http.ResponseWriter, r *http.Request, davPath string) error {
-	canonical, err := canonicalRemotePath(davPath)
+	canonical, err := d.lockPath(davPath)
 	if err != nil {
 		return err
 	}
@@ -616,7 +616,7 @@ func (d *DAVDispatcher) doDavLock(w http.ResponseWriter, r *http.Request, davPat
 			}
 			return err
 		}
-		return d.sendLockResponse(w, r, http.StatusOK, active)
+		return d.sendLockResponse(w, r, http.StatusOK, active, davPath)
 	}
 
 	if !d.locks.Allows(canonical, tokens) {
@@ -642,7 +642,7 @@ func (d *DAVDispatcher) doDavLock(w http.ResponseWriter, r *http.Request, davPat
 	if !existed {
 		status = http.StatusCreated
 	}
-	return d.sendLockResponse(w, r, status, active)
+	return d.sendLockResponse(w, r, status, active, davPath)
 }
 
 // doDavUnlock mirrors _do_unlock: the body is discarded first, exactly one
@@ -659,7 +659,7 @@ func (d *DAVDispatcher) doDavUnlock(w http.ResponseWriter, r *http.Request, davP
 	for value := range tokens {
 		token = value
 	}
-	canonical, err := canonicalRemotePath(davPath)
+	canonical, err := d.lockPath(davPath)
 	if err != nil {
 		return err
 	}

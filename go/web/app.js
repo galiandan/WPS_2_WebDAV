@@ -22,6 +22,7 @@
     view: "list",
     spaces: [],
     selectedPath: "",
+    selectedPaths: new Set(),
     pendingDeletes: new Set(),
     sort: { key: "auto", dir: "asc" },
   };
@@ -880,7 +881,7 @@
     // lets a user return to the root or another cached location.
     $("up-button").disabled = state.busy || state.path === "/";
     $("refresh-button").disabled = state.busy;
-    [$("folder-button"), $("upload-button"), $("text-file-button")].forEach((button) => {
+    [$("folder-button"), $("upload-button"), $("upload-folder-button"), $("text-file-button")].forEach((button) => {
       button.disabled = state.busy || state.loading || unavailable || virtualRoot;
     });
     // Empty-state retry and search actions remain usable while WPS is down;
@@ -888,6 +889,7 @@
     document.querySelectorAll("#entries .action-button, #entries .action-menu-trigger").forEach((button) => {
       button.disabled = state.busy || unavailable;
     });
+    updateSelectionControls();
   }
 
   function setBusy(value) {
@@ -1603,11 +1605,13 @@
     const popover = el("div", "action-menu-popover");
     popover.setAttribute("role", "menu");
     popover.append(
-      ...(entry.kind === "file" && isPreviewableText(entry.name)
-        ? [menuItem("在线浏览", "在线浏览文件", "eye", () => previewText(entry, entryPath))]
+      ...(entry.kind === "file" && isPreviewable(entry.name)
+        ? [menuItem("在线浏览", "在线浏览文件", "eye", () => previewFile(entry, entryPath))]
         : []),
       menuItem("重命名", "重命名", "pencil", () => rename(entry, entryPath)),
+      menuItem("复制", "复制到其他文件夹", "file", () => batchOperation("copy", [entryPath])),
       menuItem("移动", "移动到其他文件夹", "move", () => move(entry, entryPath)),
+      ...(entry.kind === "folder" ? [menuItem("打包下载", "下载文件夹为 ZIP", "download", () => downloadArchive([entryPath]))] : []),
       menuItem("删除", "删除", "trash", () => remove(entry, entryPath), true),
     );
 
@@ -1646,21 +1650,66 @@
     return actions;
   }
 
-  function selectEntry(entryPath) {
-    closeActionMenu();
-    state.selectedPath = entryPath;
-    document.querySelectorAll("[data-entry-path]").forEach((node) => {
-      const selected = node.dataset.entryPath === entryPath;
+  function selectableEntries() {
+    return sortedEntries(filteredEntries()).filter((entry) => !isVirtualSpaceEntry(entry) && !state.pendingDeletes.has(joinPath(state.path, entry.name)));
+  }
+
+  function updateSelectionControls() {
+    const entries = selectableEntries();
+    const selectedVisible = entries.filter((entry) => state.selectedPaths.has(joinPath(state.path, entry.name))).length;
+    const all = $("select-all");
+    all.checked = entries.length > 0 && selectedVisible === entries.length;
+    all.indeterminate = selectedVisible > 0 && selectedVisible < entries.length;
+    all.disabled = state.busy || state.loading || entries.length === 0;
+    $("selection-count").textContent = state.selectedPaths.size ? `已选择 ${state.selectedPaths.size} 项${selectedVisible < state.selectedPaths.size ? `（当前显示 ${selectedVisible} 项）` : ""}` : "未选择";
+    $("selection-actions").hidden = state.selectedPaths.size === 0;
+    document.querySelectorAll("#selection-actions button, .entry-select").forEach((button) => {
+      button.disabled = state.busy || state.loading || (button.id !== "selection-clear" && !button.classList.contains("entry-select") && state.connection !== "connected");
+    });
+    document.querySelectorAll("#entries [data-entry-path]").forEach((node) => {
+      const selected = state.selectedPaths.has(node.dataset.entryPath);
       node.classList.toggle("is-selected", selected);
-      node.querySelectorAll(".entry-name, .card-name").forEach((button) => {
-        button.setAttribute("aria-pressed", String(selected));
-      });
+      const checkbox = node.querySelector(".entry-select");
+      if (checkbox) checkbox.checked = selected;
+      node.querySelectorAll(".entry-name:not(.folder), .card-name[aria-pressed]").forEach((button) => button.setAttribute("aria-pressed", String(selected)));
     });
   }
 
-  function openTarget(entry, entryPath) {
-    if (entry.kind === "folder") load(entryPath);
-    else selectEntry(entryPath);
+  function selectEntry(entryPath, event = {}, toggle = false) {
+    if (state.busy || state.loading) return;
+    closeActionMenu();
+    const paths = selectableEntries().map((entry) => joinPath(state.path, entry.name));
+    if (!paths.includes(entryPath)) return;
+    if (event.shiftKey && paths.includes(state.selectedPath)) {
+      const bounds = [paths.indexOf(state.selectedPath), paths.indexOf(entryPath)].sort((a, b) => a - b);
+      paths.slice(bounds[0], bounds[1] + 1).forEach((path) => state.selectedPaths.add(path));
+    } else {
+      if (!toggle && !event.ctrlKey && !event.metaKey) state.selectedPaths.clear();
+      if ((toggle || event.ctrlKey || event.metaKey) && state.selectedPaths.has(entryPath)) state.selectedPaths.delete(entryPath);
+      else state.selectedPaths.add(entryPath);
+      state.selectedPath = entryPath;
+    }
+    updateSelectionControls();
+  }
+
+  function selectionCheckbox(entry, entryPath) {
+    if (isVirtualSpaceEntry(entry)) return null;
+    const checkbox = el("input", "entry-select");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.selectedPaths.has(entryPath);
+    checkbox.setAttribute("aria-label", `选择：${entry.name}`);
+    checkbox.title = "选择项目（Shift 连选）";
+    checkbox.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectEntry(entryPath, event, true);
+    });
+    return checkbox;
+  }
+
+  function openTarget(entry, entryPath, event = {}) {
+    if (event.shiftKey || event.ctrlKey || event.metaKey) selectEntry(entryPath, event);
+    else if (entry.kind === "folder") load(entryPath);
+    else selectEntry(entryPath, event);
   }
 
   function directoryErrorFor(error) {
@@ -1753,11 +1802,11 @@
         if (entry.kind === "folder") top.append(icon("chev-right", "card-chev"));
         const name = el("button", "card-name");
         name.type = "button";
-        name.title = entry.kind === "file" && isPreviewableText(entry.name) ? `${entry.name} · 双击在线浏览` : entry.name;
+        name.title = entry.kind === "file" && isPreviewable(entry.name) ? `${entry.name} · 双击在线浏览` : entry.name;
         name.setAttribute("aria-label", `${entry.kind === "folder" ? "打开文件夹" : "选择文件"}：${entry.name}`);
-        if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPath === entryPath));
+        if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPaths.has(entryPath)));
         name.append(highlightedName(entry.name, query));
-        name.addEventListener("click", () => openTarget(entry, entryPath));
+        name.addEventListener("click", (event) => openTarget(entry, entryPath, event));
         const typeLabel = isVirtualSpaceEntry(entry) ? "WPS 空间" : entry.kind === "folder" ? "文件夹" : extKind(entry.name).label;
         const meta = el("div", "card-meta",
           entry.kind === "folder"
@@ -1766,20 +1815,24 @@
         const ops = el("div", "card-ops");
         ops.append(entryActions(entry, entryPath));
         node.append(top, name, meta, ops);
+        const checkbox = selectionCheckbox(entry, entryPath);
+        if (checkbox) node.append(checkbox);
       } else {
         node = el("div", "list-row");
         node.setAttribute("role", "row");
         const nameCell = el("div", "cell name name-cell");
         nameCell.setAttribute("role", "cell");
+        const checkbox = selectionCheckbox(entry, entryPath);
+        if (checkbox) nameCell.append(checkbox);
         nameCell.append(glyphNode(entry));
         const nameStack = el("div", "name-stack");
         const name = el("button", "entry-name" + (entry.kind === "folder" ? " folder" : ""));
         name.type = "button";
-        name.title = entry.kind === "file" && isPreviewableText(entry.name) ? `${entry.name} · 双击在线浏览` : entry.name;
+        name.title = entry.kind === "file" && isPreviewable(entry.name) ? `${entry.name} · 双击在线浏览` : entry.name;
         name.setAttribute("aria-label", `${entry.kind === "folder" ? "打开文件夹" : "选择文件"}：${entry.name}`);
-        if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPath === entryPath));
+        if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPaths.has(entryPath)));
         name.append(highlightedName(entry.name, query));
-        name.addEventListener("click", () => openTarget(entry, entryPath));
+        name.addEventListener("click", (event) => openTarget(entry, entryPath, event));
         nameStack.append(name);
         const typeLabel = isVirtualSpaceEntry(entry) ? "WPS 空间" : entry.kind === "folder" ? "文件夹" : extKind(entry.name).label;
         const mobileMeta = el("div", "entry-mobile-meta",
@@ -1802,14 +1855,14 @@
       // OpenList ListItem/GridItem: the whole item opens; controls keep their own actions.
       node.addEventListener("click", (event) => {
         if (state.loading || event.target.closest("button, a, input, .actions")) return;
-        openTarget(entry, entryPath);
+        openTarget(entry, entryPath, event);
       });
       node.addEventListener("dblclick", (event) => {
-        if (state.loading || state.pendingDeletes.has(entryPath) || entry.kind !== "file" || !isPreviewableText(entry.name)) return;
+        if (state.loading || state.pendingDeletes.has(entryPath) || entry.kind !== "file" || !isPreviewable(entry.name)) return;
         // File names are buttons too; only operation controls opt out.
         if (event.target.closest(".actions, a, input, button:not(.entry-name):not(.card-name)")) return;
         event.preventDefault();
-        previewText(entry, entryPath);
+        previewFile(entry, entryPath);
       });
       node.addEventListener("contextmenu", (event) => {
         const trigger = node.querySelector(".action-menu-trigger");
@@ -1818,7 +1871,7 @@
         if (!trigger.closest(".action-menu").classList.contains("open")) trigger.click();
       });
       node.dataset.entryPath = entryPath;
-      if (state.selectedPath === entryPath) node.classList.add("is-selected");
+      if (state.selectedPaths.has(entryPath)) node.classList.add("is-selected");
       if (animate) node.style.setProperty("--i", String(Math.min(index, 14)));
       if (state.pendingDeletes.has(entryPath)) node.classList.add("is-pending");
       holder.append(node);
@@ -1909,7 +1962,7 @@
     const requestGeneration = ++navigationGeneration;
     treeRevealGeneration += 1;
     closeActionMenu();
-    if (targetPath !== previousPath) state.selectedPath = "";
+    if (targetPath !== previousPath) { state.selectedPath = ""; state.selectedPaths.clear(); }
     state.path = targetPath;
     state.loading = true;
     state.refreshing = showCachedImmediately;
@@ -1934,6 +1987,8 @@
       state.loading = false;
       state.refreshing = false;
       state.entries = entries;
+      const availablePaths = new Set(entries.map((entry) => joinPath(targetPath, entry.name)));
+      for (const path of state.selectedPaths) if (!availablePaths.has(path)) state.selectedPaths.delete(path);
       state.directoryError = null;
       // Reusing a cached listing is not new evidence about upstream health.
       if (entries !== cachedEntries) {
@@ -1994,6 +2049,96 @@
     return typeof name === "string" && /\.(txt|log|md|csv|json|xml|ya?ml|ini|conf|toml)$/i.test(name);
   }
 
+  function isPreviewableImage(name) {
+    return typeof name === "string" && /\.(jpe?g|png|gif|webp|avif|bmp|ico)$/i.test(name);
+  }
+
+  function isPreviewable(name) {
+    return isPreviewableText(name) || isPreviewableImage(name) || /\.pdf$/i.test(name);
+  }
+
+  let previewGallery = [];
+  let previewGalleryIndex = -1;
+
+  function clearMediaPreview() {
+    for (const media of $("preview-media").querySelectorAll("img, iframe")) {
+      media.onload = null;
+      media.onerror = null;
+      media.removeAttribute("src");
+    }
+    $("preview-media").replaceChildren();
+    $("preview-media").hidden = true;
+    $("preview-media-toolbar").hidden = true;
+  }
+
+  function previewFile(entry, path, galleryNavigation = false) {
+    if (isPreviewableText(entry.name)) {
+      previewText(entry, path);
+      return;
+    }
+    closeActionMenu();
+    if (previewController) previewController.abort();
+    previewController = null;
+    clearMediaPreview();
+    const generation = ++previewGeneration;
+    previewTarget = { entry, path };
+    previewBytes = null;
+    const isImage = isPreviewableImage(entry.name);
+    $("preview-title").textContent = entry.name;
+    $("preview-meta").textContent = `${formatBytes(entry.size)} · ${isImage ? "图片" : "PDF 文档"}`;
+    $("preview-text-toolbar").hidden = true;
+    $("preview-content").hidden = true;
+    $("preview-content").textContent = "";
+    $("preview-error").textContent = "";
+    $("preview-loading").hidden = false;
+    $("preview-download").disabled = false;
+    $("preview-note").hidden = isImage;
+    $("preview-note").textContent = isImage ? "" : "PDF 使用浏览器内置阅读器；若未显示内容，请下载后查看。";
+    const container = $("preview-media");
+    container.hidden = false;
+    const media = document.createElement(isImage ? "img" : "iframe");
+    media.setAttribute(isImage ? "alt" : "title", entry.name);
+    media.onload = () => {
+      if (generation !== previewGeneration) return;
+      $("preview-loading").hidden = true;
+      if (isImage) applyPreviewZoom();
+    };
+    media.onerror = () => {
+      if (generation !== previewGeneration) return;
+      $("preview-loading").hidden = true;
+      container.hidden = true;
+      $("preview-error").textContent = "文件预览失败，文件可能已被删除、登录已过期或格式不受浏览器支持。请重新打开或下载查看。";
+    };
+    if (isImage) {
+      if (!galleryNavigation) {
+        previewGallery = sortedEntries(filteredEntries()).filter((item) => item.kind === "file" && isPreviewableImage(item.name))
+          .map((item) => ({ entry: item, path: joinPath(state.path, item.name) }));
+      }
+      previewGalleryIndex = previewGallery.findIndex((item) => item.path === path);
+      $("preview-media-toolbar").hidden = false;
+      $("preview-previous").disabled = previewGalleryIndex <= 0;
+      $("preview-next").disabled = previewGalleryIndex < 0 || previewGalleryIndex >= previewGallery.length - 1;
+      $("preview-zoom").value = "fit";
+    }
+    container.append(media);
+    media.src = pathUrl("preview", path).toString();
+    const dialog = $("preview-modal");
+    if (!dialog.open) dialog.showModal();
+  }
+
+  function applyPreviewZoom() {
+    const img = $("preview-media").querySelector("img");
+    if (!img) return;
+    const zoom = $("preview-zoom").value;
+    img.classList.toggle("actual-size", zoom !== "fit");
+    img.style.width = zoom === "fit" ? "" : `${img.naturalWidth * Number(zoom) / 100}px`;
+  }
+
+  function navigatePreviewGallery(offset) {
+    const target = previewGallery[previewGalleryIndex + offset];
+    if (target) previewFile(target.entry, target.path, true);
+  }
+
   let previewGeneration = 0;
   let previewTarget = null;
   let previewController = null;
@@ -2002,6 +2147,9 @@
   let previewLimit = 0;
 
   function closePreview() {
+    clearMediaPreview();
+    previewGallery = [];
+    previewGalleryIndex = -1;
     previewGeneration += 1;
     if (previewController) previewController.abort();
     previewController = null;
@@ -2059,6 +2207,8 @@
   }
 
   async function previewText(entry, path) {
+    clearMediaPreview();
+    $("preview-text-toolbar").hidden = false;
     closeActionMenu();
     if (previewController) previewController.abort();
     const controller = new AbortController();
@@ -2460,6 +2610,7 @@
   /* ============ 文件夹选择器 ============ */
   let pickerResolve = null;
   let pickerSourcePath = "";
+  let pickerSourcePaths = [];
   let pickerCurrent = "/";
   let pickerLoading = false;
   let pickerFirstLoad = false;
@@ -2470,8 +2621,7 @@
   function pickerCanMoveHere() {
     if (pickerLoading) return false;
     if (pickerCurrent === parentPath(pickerSourcePath)) return false;
-    if (pickerCurrent === pickerSourcePath) return false;
-    if (pickerSourcePath !== "/" && pickerCurrent.startsWith(pickerSourcePath + "/")) return false;
+    if (pickerSourcePaths.some((path) => pickerCurrent === path || pickerCurrent.startsWith(path + "/"))) return false;
     if (state.spaces.length > 0) {
       const sourceSpace = pickerSourcePath.split("/").filter(Boolean)[0] || "";
       const targetSpace = pickerCurrent.split("/").filter(Boolean)[0] || "";
@@ -2516,7 +2666,7 @@
       const folders = entries.filter((entry) => {
         if (!entry || entry.kind !== "folder") return false;
         const full = joinPath(pickerCurrent, entry.name);
-        return full !== pickerSourcePath;
+        return !pickerSourcePaths.includes(full);
       });
       if (!folders.length) {
         list.append(el("div", "picker-empty", "这里没有子文件夹"));
@@ -2565,13 +2715,17 @@
     resolve(value);
   }
 
-  function openFolderPicker(sourcePath) {
+  function openFolderPicker(sourcePath, operation = "move") {
+    pickerSourcePaths = Array.isArray(sourcePath) ? sourcePath.slice() : [sourcePath];
+    sourcePath = pickerSourcePaths[0];
+    $("picker-title").textContent = operation === "copy" ? "复制到…" : "移动到…";
+    $("picker-move").textContent = operation === "copy" ? "复制到这里" : "移动到这里";
     pickerTrigger = document.activeElement;
     pickerSourcePath = sourcePath;
     pickerCurrent = parentPath(sourcePath);
     pickerLoading = true;
     pickerFirstLoad = true;
-    $("picker-subtitle").textContent = `选择 “${sourcePath.split("/").filter(Boolean).pop() || "项目"}” 的目标文件夹`;
+    $("picker-subtitle").textContent = pickerSourcePaths.length > 1 ? `选择 ${pickerSourcePaths.length} 个项目的目标文件夹，同名项目不会覆盖` : `选择 “${sourcePath.split("/").filter(Boolean).pop() || "项目"}” 的目标文件夹`;
     $("picker").showModal();
     return new Promise((resolve) => {
       pickerResolve = resolve;
@@ -2724,8 +2878,99 @@
     finally { setBusy(false); renderBreadcrumbs(); }
   }
 
+  function showBatchResults(operation, results) {
+    const verb = { copy: "复制", move: "移动", delete: "删除" }[operation];
+    const succeeded = results.filter((result) => result.ok).length;
+    $("batch-summary").textContent = `${verb}：成功 ${succeeded} 项，失败 ${results.length - succeeded} 项`;
+    $("batch-result-list").replaceChildren(...results.map((result) => el("li", result.ok ? "" : "failed", `${result.path} · ${result.ok ? "完成" : result.error || "操作失败"}`)));
+    $("batch-results").hidden = false;
+  }
+
+  async function batchOperation(operation, paths = Array.from(state.selectedPaths)) {
+    if (state.busy || state.loading || !paths.length) return;
+    if (paths.length > 100) { toast("每次最多操作 100 项，请减少选择", "warn"); return; }
+    const sourcePath = state.path;
+    let destination;
+    if (operation === "delete") {
+      if (!(await openConfirmModal("批量删除", `确定删除所选 ${paths.length} 个项目及文件夹内的内容吗？此操作会同步到 WPS。`, "删除", true))) return;
+    } else {
+      pickerFallback = false;
+      destination = await openFolderPicker(paths, operation);
+      if (pickerFallback) destination = await openInputModal(operation === "copy" ? "复制项目" : "移动项目", "目标文件夹路径", sourcePath);
+      if (!destination) return;
+    }
+    setBusy(true);
+    if (operation === "delete") paths.forEach((path) => state.pendingDeletes.add(path));
+    renderEntries();
+    try {
+      const response = await apiRequest("batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation, paths, ...(destination ? { destination: canonicalPath(destination) } : {}) }) });
+      const results = response.results || [];
+      showBatchResults(operation, results);
+      for (const result of results) {
+        if (result.ok) {
+          state.selectedPaths.delete(result.path);
+          clearDirectoryCacheFor(parentPath(result.path));
+        }
+      }
+      if (destination) clearDirectoryCacheFor(canonicalPath(destination));
+      paths.forEach((path) => state.pendingDeletes.delete(path));
+      if (state.path === sourcePath) await load(sourcePath, true, true);
+      const failed = results.filter((result) => !result.ok).length;
+      toast($("batch-summary").textContent, failed ? "warn" : "success", 5000);
+    } catch (error) {
+      // The response can be lost after some mutations succeeded. Refresh and
+      // retain selection for review; never automatically repeat a mutation.
+      paths.forEach((path) => state.pendingDeletes.delete(path));
+      clearDirectoryCacheFor(sourcePath);
+      if (destination) clearDirectoryCacheFor(canonicalPath(destination));
+      if (state.path === sourcePath) await load(sourcePath, true, true);
+      showError(error);
+    } finally {
+      paths.forEach((path) => state.pendingDeletes.delete(path));
+      setBusy(false);
+      renderEntries();
+    }
+  }
+
+  let archiveDownloadID = 0;
+
+  function downloadArchive(paths = Array.from(state.selectedPaths)) {
+    if (state.busy || state.loading || !paths.length) return;
+    if (paths.length > 100) { toast("每次最多打包 100 个所选项目，请减少选择", "warn"); return; }
+    // A native form streams directly into the browser download manager. A
+    // same-origin error document can still be read from its hidden frame.
+    const frame = el("iframe");
+    frame.hidden = true;
+    frame.name = "archive-" + (++archiveDownloadID);
+    frame.title = "ZIP 下载";
+    frame.addEventListener("load", () => {
+      try {
+        const body = frame.contentDocument && frame.contentDocument.body.textContent;
+        if (body) {
+          const payload = JSON.parse(body);
+          toast(payload.error || "打包下载失败，请重试", "error", 6000);
+          frame.remove();
+        }
+      } catch (_) { /* Native attachment responses do not expose a document. */ }
+    });
+    const form = el("form");
+    form.method = "POST";
+    form.action = apiRoot + "archive";
+    form.target = frame.name;
+    const input = el("input");
+    input.type = "hidden";
+    input.name = "paths";
+    input.value = JSON.stringify(paths);
+    form.append(input);
+    document.body.append(frame, form);
+    form.submit();
+    form.remove();
+    toast("正在准备 ZIP，完成准备后将由浏览器下载；大文件夹可能需要等待。", "info", 5500);
+  }
+
   /* ============ 上传托盘 ============ */
   const tray = {
+    generation: 0,
     active: false,
     cancelled: false,
     xhr: null,
@@ -2736,6 +2981,10 @@
     errors: [],
     targets: [],
     existingEntries: [],
+    existingByDirectory: new Map(),
+    relativePaths: [],
+    rootPath: "/",
+    folderUpload: false,
     cancelledItems: new Set(),
     done: 0,
   };
@@ -2763,7 +3012,8 @@
       iconHolder.append(trayIconWrap(iconName, st === "done" ? "ok" : st === "error" ? "bad" : ""));
     }
     const file = tray.files[index];
-    const size = file ? formatBytes(file.size) : "-";
+    const directory = file && file.kind === "folder";
+    const size = directory ? "文件夹" : file ? formatBytes(file.size) : "-";
     const loaded = Math.max(0, Number(tray.loaded[index]) || 0);
     const percent = file && file.size > 0 ? Math.min(100, loaded * 100 / file.size) : 0;
     const statusText = {
@@ -2773,12 +3023,12 @@
       cancelling: "正在取消",
       done: "上传完成",
       error: tray.errors[index] || "上传失败",
-      skipped: "已跳过",
+      skipped: tray.errors[index] || "已跳过",
       cancelled: "已取消",
     }[st] || "等待上传";
     item.querySelector(".tray-status").textContent = statusText;
     item.querySelector(".tray-target").textContent = `上传到 ${tray.targets[index] || "/"}`;
-    item.querySelector(".tray-size").textContent = `${formatBytes(loaded)} / ${size}`;
+    item.querySelector(".tray-size").textContent = directory ? size : `${formatBytes(loaded)} / ${size}`;
     item.querySelector(".tray-rate").textContent = tray.speeds[index] || "计算中";
     item.querySelector(".tray-progress-bar").style.width = `${percent}%`;
     const cancel = item.querySelector(".tray-item-action");
@@ -2786,12 +3036,13 @@
     const canRetry = st === "error" || st === "skipped";
     cancel.hidden = !canCancel && !canRetry;
     cancel.disabled = st === "cancelling" || (canRetry && tray.active);
-    cancel.title = canRetry ? "重新上传此文件" : "取消此文件上传";
+    cancel.title = canRetry ? "重试此项目" : "取消此项目上传";
     cancel.setAttribute("aria-label", cancel.title);
     cancel.replaceChildren(icon(canRetry ? "refresh" : "x"));
   }
 
-  function trayReset(files, targetPath) {
+  function trayReset(files, targetPath, relativePaths = []) {
+    tray.generation += 1;
     tray.active = true;
     tray.cancelled = false;
     tray.done = 0;
@@ -2800,7 +3051,11 @@
     tray.loaded = files.map(() => 0);
     tray.speeds = files.map(() => "等待上传");
     tray.errors = files.map(() => "");
-    tray.targets = files.map(() => targetPath);
+    tray.relativePaths = files.map((file, index) => relativePaths[index] || file.name);
+    tray.targets = tray.relativePaths.map((path) => parentPath(joinPath(targetPath, path)));
+    tray.rootPath = targetPath;
+    tray.folderUpload = files.some((file) => file.kind === "folder");
+    tray.existingByDirectory = new Map();
     tray.existingEntries = [];
     tray.cancelledItems = new Set();
     const list = $("tray-list");
@@ -2809,8 +3064,8 @@
       const item = el("li", "tray-item pending");
       const top = el("div", "tray-item-top");
       const left = el("span", "tray-state-icon");
-      const name = el("span", "t-name", file.name);
-      name.title = file.name;
+      const name = el("span", "t-name", tray.relativePaths[index]);
+      name.title = tray.relativePaths[index];
       const status = el("span", "tray-status", "等待上传");
       top.append(left, name, status);
       const target = el("div", "tray-target", `上传到 ${targetPath}`);
@@ -2836,6 +3091,7 @@
     $("tray-percent").textContent = "0%";
     setRing(0);
     $("upload-tray").classList.add("show");
+    document.body.classList.add("upload-tray-open");
     $("upload-tray").setAttribute("aria-hidden", "false");
   }
 
@@ -2859,10 +3115,12 @@
     $("tray-cancel").classList.add("hidden");
     $("tray-close").classList.remove("hidden");
     $("tray-speed").textContent = message || (ok ? "全部完成" : "队列已停止");
-    if (ok) setTimeout(() => { if (!tray.active) trayHide(); }, 2400);
+    const generation = tray.generation;
+    if (ok) setTimeout(() => { if (!tray.active && tray.generation === generation) trayHide(); }, 2400);
   }
 
   function trayHide() {
+    document.body.classList.remove("upload-tray-open");
     $("upload-tray").classList.remove("show");
     $("upload-tray").setAttribute("aria-hidden", "true");
   }
@@ -2966,43 +3224,87 @@
     if (tray.cancelled || tray.cancelledItems.has(index) || tray.states[index] === "cancelled") return true;
     const file = tray.files[index];
     if (!file) return true;
+    const target = tray.targets[index];
+    const fullPath = joinPath(target, file.name);
     tray.states[index] = "active";
     tray.errors[index] = "";
     tray.speeds[index] = "计算中";
     traySetItem(index);
-    const existing = tray.existingEntries.find((entry) => entry.name === file.name);
-    let overwrite = false;
-    if (existing) {
-      if (existing.kind !== "file") {
-        tray.states[index] = "skipped";
-        tray.errors[index] = "同名文件夹无法覆盖";
-        traySetItem(index);
-        toast(`“${file.name}” 与现有文件夹同名，已跳过`, "warn", 5200);
-        return true;
-      }
-      const confirmed = await openConfirmModal("文件已存在", `“${file.name}”已经存在，要覆盖它吗？`, "覆盖", false);
-      if (!confirmed) {
-        tray.states[index] = "skipped";
-        tray.errors[index] = "用户取消覆盖";
-        traySetItem(index);
-        return true;
-      }
-      overwrite = true;
-    }
-    if (tray.cancelled || tray.cancelledItems.has(index)) {
-      tray.states[index] = "cancelled";
-      traySetItem(index);
-      return !tray.cancelled;
-    }
+    const cancelled = () => tray.cancelled || tray.cancelledItems.has(index);
     try {
-      await uploadOne(file, overwrite, tray.targets[index], index);
+      // A rejected, failed or cancelled directory prevents every descendant
+      // from falling through into an existing remote directory of that name.
+      const blockedParent = tray.files.findIndex((item, i) => item.kind === "folder" && i !== index && fullPath.startsWith(joinPath(tray.targets[i], item.name) + "/") && (tray.states[i] !== "done" || tray.cancelledItems.has(i)));
+      if (blockedParent >= 0) {
+        tray.states[index] = "skipped";
+        tray.errors[index] = tray.cancelledItems.has(blockedParent) ? "父文件夹已取消，请重新选择文件夹上传" : "父文件夹未完成，请先重试父文件夹";
+        traySetItem(index);
+        return true;
+      }
+      let entries = tray.existingByDirectory.get(target);
+      if (!entries) {
+        entries = await directoryEntries(target, true);
+        tray.existingByDirectory.set(target, entries.slice());
+      }
+      if (cancelled()) {
+        tray.states[index] = "cancelled";
+        traySetItem(index);
+        return !tray.cancelled;
+      }
+      const existing = entries.find((entry) => entry.name === file.name);
+      let overwrite = false;
+      if (existing) {
+        if ((file.kind === "folder") !== (existing.kind === "folder")) {
+          tray.states[index] = "skipped";
+          tray.errors[index] = "同名文件与文件夹不能互相覆盖";
+          traySetItem(index);
+          return true;
+        }
+        if (file.kind === "folder") {
+          // Nested directories are covered by their root's merge decision.
+          const topLevel = target === tray.rootPath;
+          if (topLevel && !(await openConfirmModal("文件夹已存在", `“${file.name}”已经存在，要合并上传吗？同名文件会逐个询问是否覆盖。`, "合并上传"))) {
+            tray.states[index] = "skipped";
+            tray.errors[index] = "已取消合并文件夹";
+            traySetItem(index);
+            return true;
+          }
+        } else {
+          if (!(await openConfirmModal("文件已存在", `“${tray.relativePaths[index]}”已经存在，要覆盖它吗？`, "覆盖"))) {
+            tray.states[index] = "skipped";
+            tray.errors[index] = "用户取消覆盖";
+            traySetItem(index);
+            return true;
+          }
+          overwrite = true;
+        }
+      }
+      if (cancelled()) {
+        tray.states[index] = "cancelled";
+        traySetItem(index);
+        return !tray.cancelled;
+      }
+      if (file.kind === "folder") {
+        if (!existing) {
+          await api("folders", fullPath, { method: "POST" });
+          tray.existingByDirectory.set(fullPath, []);
+        }
+        // Folder creation cannot be rolled back by cancellation: report the
+        // confirmed creation, then stop the remaining queue.
+        trayCurrent(file, 100, existing ? "文件夹已合并" : "文件夹已创建");
+      } else {
+        await uploadOne(file, overwrite, target, index);
+      }
       tray.done += 1;
       tray.states[index] = "done";
       traySetItem(index);
-      clearDirectoryCacheFor(tray.targets[index]);
+      const updated = entries.filter((entry) => entry.name !== file.name);
+      updated.push({ name: file.name, kind: file.kind === "folder" ? "folder" : "file", size: file.size });
+      tray.existingByDirectory.set(target, updated);
+      clearDirectoryCacheFor(target);
       return true;
     } catch (error) {
-      if (error.cancelled || tray.cancelledItems.has(index) || tray.cancelled) {
+      if (error.cancelled || cancelled()) {
         tray.states[index] = "cancelled";
         traySetItem(index);
         return !tray.cancelled;
@@ -3019,10 +3321,10 @@
   async function uploadFiles(files, options = {}) {
     const retryIndex = Number.isInteger(options.retryIndex) ? options.retryIndex : null;
     const retry = retryIndex !== null && tray.files[retryIndex] === files[0];
-    const targetPath = retry ? tray.targets[retryIndex] : state.path;
+    const targetPath = retry ? tray.rootPath : options.targetPath || state.path;
     if (state.loading) return;
-    if (!files.length || state.connection !== "connected" || (!retry && state.path === "/" && state.spaces.length > 0)) {
-      if (files.length && !retry && state.path === "/" && state.spaces.length > 0) {
+    if (!files.length || state.connection !== "connected" || (!retry && targetPath === "/" && state.spaces.length > 0)) {
+      if (files.length && !retry && targetPath === "/" && state.spaces.length > 0) {
         toast("请先进入一个 WPS 空间再上传文件", "warn", 4200);
       }
       return;
@@ -3031,18 +3333,21 @@
     if (retry && (tray.active || state.busy)) return;
     setBusy(true);
     if (retry) {
+      tray.generation += 1;
       tray.active = true;
       tray.cancelled = false;
       tray.cancelledItems.delete(retryIndex);
       tray.states[retryIndex] = "pending";
       tray.loaded[retryIndex] = 0;
       tray.errors[retryIndex] = "";
+      tray.existingByDirectory.delete(tray.targets[retryIndex]);
       tray.speeds[retryIndex] = "等待上传";
       traySetItem(retryIndex);
       $("tray-cancel").classList.remove("hidden");
     } else {
-      trayReset(files, targetPath);
-      tray.existingEntries = state.entries.slice();
+      trayReset(files, targetPath, options.relativePaths);
+      tray.existingEntries = state.path === targetPath ? state.entries.slice() : [];
+      if (state.path === targetPath) tray.existingByDirectory.set(targetPath, tray.existingEntries);
     }
     let failure = null;
     try {
@@ -3052,7 +3357,7 @@
         for (let index = 0; index < tray.files.length; index += 1) {
           if (tray.cancelled) break;
           if (tray.states[index] !== "pending") continue;
-          if (tray.files.length > 1) setStatus(`准备上传第 ${index + 1}/${tray.files.length} 个文件`);
+          if (tray.files.length > 1) setStatus(`准备上传第 ${index + 1}/${tray.files.length} 个项目`);
           $("tray-count").textContent = tray.files.length > 1 ? `${tray.done} / ${tray.files.length}` : "";
           if (!(await uploadQueueItem(index))) {
             if (!failure) failure = new Error(tray.errors[index] || "上传失败");
@@ -3070,10 +3375,10 @@
         trayFinishAll(false);
       } else {
         const hasSkipped = tray.states.some((item) => item === "cancelled" || item === "skipped");
-        const message = hasSkipped ? `已上传 ${tray.done} 个文件，其他项目未上传` : "上传完成";
+        const message = hasSkipped ? `已上传 ${tray.done} 个项目，其他项目未上传` : "上传完成";
         setStatus(message, tray.done ? "success" : "");
         toast(message, tray.done ? "success" : "info");
-        trayFinishAll(true, hasSkipped ? "队列已处理" : "全部完成");
+        trayFinishAll(!hasSkipped, hasSkipped ? "队列已处理" : "全部完成");
       }
     } catch (error) {
       showError(error);
@@ -3082,6 +3387,90 @@
       setBusy(false);
       renderBreadcrumbs();
     }
+  }
+
+  function directoryUploadJobs(files, directories = []) {
+    const jobs = new Map();
+    function validPath(path) {
+      const parts = path.split("/");
+      if (!parts.length || parts.some((part) => !part || part === "." || part === ".." || /[\\\u0000-\u001f\u007f]/.test(part))) throw new Error("文件夹包含无效路径，未开始上传");
+      if (parts.length > 128) throw new Error("目录层级超过 128 层，未开始上传");
+      return parts;
+    }
+    function addDirectory(path) {
+      const parts = validPath(path);
+      for (let count = 1; count <= parts.length; count += 1) {
+        const relative = parts.slice(0, count).join("/");
+        const known = jobs.get(relative);
+        if (known && known.file.kind !== "folder") throw new Error("同一路径同时包含文件和文件夹，未开始上传");
+        if (!known) jobs.set(relative, { path: relative, file: { name: parts[count - 1], size: 0, kind: "folder" } });
+      }
+    }
+    directories.forEach(addDirectory);
+    for (const item of files) {
+      const file = item.file || item;
+      const path = item.path || file.webkitRelativePath || file.name;
+      const parts = validPath(path);
+      if (parts[parts.length - 1] !== file.name) throw new Error("文件名与相对路径不一致，未开始上传");
+      if (parts.length > 1) addDirectory(parts.slice(0, -1).join("/"));
+      if (jobs.has(path)) throw new Error("存在重复上传路径，未开始上传");
+      jobs.set(path, { path, file });
+    }
+    if (jobs.size > 10000) throw new Error("单次最多上传 10000 个文件和文件夹，请分批上传");
+    // Parent folders precede their descendants; files retain input order.
+    return Array.from(jobs.values()).sort((a, b) => (a.file.kind === "folder" ? 0 : 1) - (b.file.kind === "folder" ? 0 : 1) || (a.file.kind === "folder" ? a.path.split("/").length - b.path.split("/").length : 0));
+  }
+
+  function uploadDirectoryFiles(files, directories = [], targetPath = state.path) {
+    try {
+      const jobs = directoryUploadJobs(files, directories);
+      if (!jobs.length) { toast("浏览器未提供可上传的文件或文件夹", "info"); return; }
+      return uploadFiles(jobs.map((job) => job.file), { targetPath, relativePaths: jobs.map((job) => job.path) });
+    } catch (error) { showError(error); }
+  }
+
+  async function uploadDrop(transfer) {
+    if (state.busy || state.loading || state.connection !== "connected") return;
+    const target = state.path;
+    // DataTransfer is protected after this event returns: obtain handles and
+    // fallback Files synchronously, before the first directory read awaits.
+    const files = Array.from(transfer.files || []);
+    const items = Array.from(transfer.items || []).filter((item) => item.kind === "file");
+    const entries = items.map((item) => item.webkitGetAsEntry ? item.webkitGetAsEntry() : null);
+    if (!entries.some((entry) => entry && entry.isDirectory)) { uploadFiles(files); return; }
+    const collected = [];
+    const directories = [];
+    setBusy(true);
+    setStatus("正在读取拖入的文件夹…");
+    try {
+      async function walk(entry, prefix = "", depth = 0) {
+        if (depth > 128 || collected.length + directories.length >= 10000) throw new Error("拖入的目录过大或层级过深，请分批上传");
+        const path = prefix + entry.name;
+        if (entry.isFile) {
+          const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+          collected.push({ file, path });
+        } else if (entry.isDirectory) {
+          directories.push(path);
+          const reader = entry.createReader();
+          // Chromium returns directory entries in batches of up to 100.
+          while (true) {
+            const children = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+            if (!children.length) break;
+            for (const child of children) await walk(child, path + "/", depth + 1);
+          }
+        }
+      }
+      for (let index = 0; index < entries.length; index += 1) {
+        if (entries[index]) await walk(entries[index]);
+        else {
+          const file = files[index];
+          if (!file) throw new Error("浏览器无法读取其中一个拖入项目，未开始上传");
+          collected.push({ file, path: file.name });
+        }
+      }
+      setBusy(false);
+      await uploadDirectoryFiles(collected, directories, target);
+    } catch (error) { setBusy(false); showError(error); }
   }
 
   /* ============ 拖放 ============ */
@@ -3102,6 +3491,16 @@
     $("drop-overlay").classList.remove("active");
     $("drop-overlay").setAttribute("aria-hidden", "true");
   }
+
+  if (window.WPSGlobalSearch) window.WPSGlobalSearch.init({
+    getPath: () => state.path,
+    getSpaces: () => state.spaces,
+    navigate: (path) => load(path),
+    preview: (entry, path) => previewFile(entry, path),
+    canPreview: (entry) => entry.kind === "file" && isPreviewable(entry.name),
+    download: (entry, path) => download(entry, path),
+    onError: (error) => showError(error, { notify: false }),
+  });
 
   /* ============ 事件绑定 ============ */
   $("login-form").addEventListener("submit", submitAuth);
@@ -3209,6 +3608,9 @@
   $("modal-cancel").addEventListener("click", () => closeModal(null));
   $("modal").addEventListener("cancel", (event) => { event.preventDefault(); closeModal(null); });
 
+  $("preview-previous").addEventListener("click", () => navigatePreviewGallery(-1));
+  $("preview-next").addEventListener("click", () => navigatePreviewGallery(1));
+  $("preview-zoom").addEventListener("change", applyPreviewZoom);
   $("preview-download").addEventListener("click", () => {
     if (previewTarget) download(previewTarget.entry, previewTarget.path, $("preview-download"));
   });
@@ -3268,12 +3670,29 @@
   $("text-file-close").addEventListener("click", closeTextFile);
   $("text-file-modal").addEventListener("cancel", (event) => { event.preventDefault(); closeTextFile(); });
   window.addEventListener("beforeunload", (event) => {
-    if (!hasTextFileDraft()) return;
+    if (!hasTextFileDraft() && !tray.active) return;
     event.preventDefault();
     event.returnValue = "";
   });
+  $("select-all").addEventListener("change", (event) => {
+    selectableEntries().forEach((entry) => {
+      const path = joinPath(state.path, entry.name);
+      if (event.target.checked) state.selectedPaths.add(path);
+      else state.selectedPaths.delete(path);
+    });
+    updateSelectionControls();
+  });
+  $("selection-clear").addEventListener("click", () => { state.selectedPaths.clear(); state.selectedPath = ""; updateSelectionControls(); });
+  ["copy", "move", "delete"].forEach((operation) => $("batch-" + operation).addEventListener("click", () => batchOperation(operation)));
+  $("batch-archive").addEventListener("click", () => downloadArchive());
+  $("batch-results-close").addEventListener("click", () => { $("batch-results").hidden = true; });
   $("folder-button").addEventListener("click", createFolder);
   $("upload-button").addEventListener("click", () => $("file-input").click());
+  $("upload-folder-button").addEventListener("click", () => $("folder-input").click());
+  $("folder-input").addEventListener("change", (event) => {
+    uploadDirectoryFiles(Array.from(event.target.files || []));
+    event.target.value = "";
+  });
   $("tray-cancel").addEventListener("click", trayCancel);
   $("tray-close").addEventListener("click", trayHide);
 
@@ -3384,7 +3803,7 @@
     event.preventDefault();
     dragDepth = 0;
     hideDropOverlay();
-    if (!state.busy) uploadFiles(Array.from(event.dataTransfer.files || []));
+    uploadDrop(event.dataTransfer);
   });
 
   window.addEventListener("scroll", () => {

@@ -34,6 +34,9 @@ type CopyOptions struct {
 // itself refusals, an existing-destination refusal that never deletes the
 // target, the native single-file branch, and the recursive relay.
 func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPath string, options CopyOptions) (model.RemoteEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return model.RemoteEntry{}, err
+	}
 	depth := strings.TrimSpace(strings.ToLower(options.Depth))
 	if depth != "0" && depth != "1" && depth != "infinity" {
 		return model.RemoteEntry{}, model.NewStorageError(model.KindInvalidPath, "COPY Depth must be 0, 1 or infinity")
@@ -94,6 +97,9 @@ func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPa
 	// The captured endpoint only fits a file whose basename is unchanged.
 	if source.Kind == model.KindFile && destinationName == source.Name {
 		if copier, ok := s.writer.(Copier); ok {
+			if err := ctx.Err(); err != nil {
+				return model.RemoteEntry{}, err
+			}
 			copiedID, err := copier.Copy(source.ID, destinationParent.ID)
 			if err != nil {
 				return model.RemoteEntry{}, err
@@ -115,6 +121,9 @@ func (s *Storage) CopyPath(ctx context.Context, sourcePath string, destinationPa
 	copied := 0
 	var copyEntry func(sourceEntry model.RemoteEntry, sourceParts []string, destinationParentEntry model.RemoteEntry, destinationItemName string, level int) (model.RemoteEntry, error)
 	copyEntry = func(sourceEntry model.RemoteEntry, sourceParts []string, destinationParentEntry model.RemoteEntry, destinationItemName string, level int) (model.RemoteEntry, error) {
+		if err := ctx.Err(); err != nil {
+			return model.RemoteEntry{}, err
+		}
 		copied++
 		if copied > s.maxCopyEntries {
 			return model.RemoteEntry{}, model.NewStorageError(model.KindInsufficientStorage, "COPY exceeds the configured entry limit")

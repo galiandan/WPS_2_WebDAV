@@ -172,6 +172,8 @@ type RESTDispatcher struct {
 	maxUploadBytes int64
 	locations      StorageLocationController
 	updater        UpdateController
+	searchOnce     sync.Once
+	search         *SearchIndex
 }
 
 // SetStorageLocations enables the authenticated storage-location settings
@@ -223,12 +225,27 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 	if strings.HasPrefix(route.Suffix, "auth/") || route.Suffix == "auth" {
 		return d.serveWebAuth(w, r, route)
 	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead &&
+		route.Suffix != "search" && route.Suffix != "search/refresh" &&
+		route.Suffix != "archive" && route.Suffix != "update" {
+		d.invalidateSearch()
+		defer d.invalidateSearch()
+	}
 	switch r.Method {
 	case "GET":
 		return d.doGet(w, r, route)
 	case "PATCH":
 		return d.doPatch(w, r, route)
 	case "POST":
+		if route.Suffix == "batch" {
+			return d.doBatch(w, r)
+		}
+		if route.Suffix == "archive" {
+			return d.doArchive(w, r, route)
+		}
+		if route.Suffix == "search/refresh" {
+			return d.doSearchRefresh(w, r, route)
+		}
 		if route.Suffix == "session/import" {
 			return d.session.Import(w, r)
 		}
@@ -257,6 +274,9 @@ func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route
 		sendError(w, r, http.StatusNotFound, "unknown REST route", true, nil, false)
 		return nil
 	case "DELETE":
+		if route.Suffix == "search" {
+			return d.doSearchCancel(w, r)
+		}
 		if route.Suffix == "entries" || route.Suffix == "files" || route.Suffix == "delete" {
 			return d.doRestDelete(w, r, route)
 		}
@@ -342,6 +362,10 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	// Python answers status and settings before reading the path query, so
 	// both tolerate missing or malformed path parameters.
 	switch route.Suffix {
+	case "search":
+		return d.doSearch(w, r, route)
+	case "archive":
+		return d.doArchive(w, r, route)
 	case "status":
 		if err := discardBody(w, r, d.limits); err != nil {
 			return err

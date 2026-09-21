@@ -80,3 +80,46 @@ func TestPreviewCancelDuringBlockedRead(t *testing.T) {
 		t.Fatal("canceled preview did not interrupt upstream read")
 	}
 }
+
+func TestMediaPreviewStreamsAndHonorsRange(t *testing.T) {
+	for _, name := range []string{"photo.PNG", "document.pdf"} {
+		for _, partial := range []bool{false, true} {
+			store := &downloadStorageFake{entry: downloadFileEntry(), payload: "0123456789"}
+			store.entry.Name = name
+			store.entry.Size = model.Ptr(int64(10))
+			router := newDownloadRouter(t, store, DownloadLimits{PreviewMaxBytes: 2, StreamChunkSize: 3})
+			request := newTestRequest("GET", "/api/v1/preview?path=%2Fmedia")
+			want, status := "0123456789", 200
+			if partial {
+				request.Header.Set("Range", "bytes=2-5")
+				want, status = "2345", 206
+			}
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != status || recorder.Body.String() != want {
+				t.Fatalf("%s partial=%v: status=%d body=%q", name, partial, recorder.Code, recorder.Body.String())
+			}
+			if recorder.Header().Get("Content-Type") != previewMediaType(name) || recorder.Header().Get("Content-Disposition") != "inline" {
+				t.Fatalf("incorrect inline media headers: %v", recorder.Header())
+			}
+			if recorder.Header().Get("X-Content-Type-Options") != "nosniff" || recorder.Header().Get("Cache-Control") != "no-store, no-transform" {
+				t.Fatal("missing media protection headers")
+			}
+			if partial && recorder.Header().Get("Content-Range") != "bytes 2-5/10" {
+				t.Fatal("missing range")
+			}
+		}
+	}
+}
+
+func TestMediaPreviewRejectsActiveFormatsBeforeOpening(t *testing.T) {
+	for _, name := range []string{"page.html", "image.svg", "photo.png.html", "file.bin"} {
+		store := downloadStorage(t, newFakeStream("active content", nil))
+		store.entry.Name = name
+		recorder := httptest.NewRecorder()
+		newDownloadRouter(t, store, DownloadLimits{}).ServeHTTP(recorder, newTestRequest("GET", "/api/v1/preview?path=%2Fmedia"))
+		if recorder.Code != 501 || len(store.opened) != 0 {
+			t.Fatalf("active format opened: %s status=%d", name, recorder.Code)
+		}
+	}
+}

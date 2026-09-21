@@ -581,7 +581,7 @@ func TestRESTTextPreviewIsBounded(t *testing.T) {
 	}
 }
 
-func TestRESTTextPreviewRejectsNonTextFiles(t *testing.T) {
+func TestRESTPreviewRejectsUnsupportedFiles(t *testing.T) {
 	entry := downloadFileEntry()
 	entry.Name = "bench-one.bin"
 	storage := &downloadStorageFake{entry: entry, stream: newFakeStream(downloadPayload, model.Ptr(int64(len(downloadPayload))))}
@@ -591,7 +591,7 @@ func TestRESTTextPreviewRejectsNonTextFiles(t *testing.T) {
 	if recorder.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d body = %q", recorder.Code, recorder.Body.String())
 	}
-	if recorder.Body.String() != `{"error":"only supported text files can be previewed"}` {
+	if recorder.Body.String() != `{"error":"only supported text, image and PDF files can be previewed"}` {
 		t.Errorf("body = %q", recorder.Body.String())
 	}
 }

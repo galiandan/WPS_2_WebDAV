@@ -102,7 +102,7 @@ type uploadPayload struct {
 // overwrite is always on, and success answers 201 with the entry JSON and
 // the quoted Location href.
 func (d *DAVDispatcher) doDavPut(w http.ResponseWriter, r *http.Request, davPath string) error {
-	allowed, err := checkLocks(w, r, d.locks, false, davPath)
+	allowed, err := d.checkLocks(w, r, davPath)
 	if err != nil {
 		return err
 	}

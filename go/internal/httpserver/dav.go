@@ -105,6 +105,16 @@ func NewDAVDispatcher(storage DAVStorage, limits ControlLimits, propfind DAVLimi
 // ServeDAV fits Handlers.DAV in the router; returned errors map through
 // the domain table with the plain-text framing.
 func (d *DAVDispatcher) ServeDAV(w http.ResponseWriter, r *http.Request, davPath string) error {
+	if view, ok := d.storage.(*storage.DAVView); ok {
+		pinned, err := view.Snapshot()
+		if err != nil {
+			return err
+		}
+		scoped := *d
+		scoped.storage, scoped.uploads, scoped.mutations = pinned, pinned, pinned
+		scoped.downloads = scopedDAVDownloads{pinned}
+		d = &scoped
+	}
 	switch r.Method {
 	case "GET":
 		return sendDownload(w, r, davPath, false, d.downloads, d.download.chunkSize())

@@ -295,6 +295,7 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	if application.Sessions != nil {
 		rest.SetWebAuth(application.Sessions)
 	}
+	rest.SetSearchIdentity(application.searchIdentity)
 	rest.SetStorageLocations(application.storageLocations())
 	rest.SetUpdater(application.Updater)
 	davDownloads := downloadStorage{storage: davStorage}
@@ -802,7 +803,7 @@ func (a *Application) Handler() (http.Handler, error) {
 			WebApp:   a.serveWebApp,
 			WebAsset: a.serveWebAsset,
 			REST:     a.rest.ServeREST,
-			DAV:      a.dav.ServeDAV,
+			DAV:      a.serveDAVWithSearch,
 		},
 	})
 	if err != nil {
@@ -842,6 +843,9 @@ func (a *Application) RESTPrefix() string {
 // Close releases the shared transports. Assembly failures and process
 // shutdown both call it; individual in-flight requests drain before that.
 func (a *Application) Close() {
+	if a.rest != nil {
+		a.rest.CancelSearch()
+	}
 	a.closeTransports()
 }
 
