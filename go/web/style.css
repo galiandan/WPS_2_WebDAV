@@ -1415,8 +1415,8 @@ button.primary:hover { background: var(--accent-deep); border-color: var(--accen
 .openlist-ui .sidebar { display: flex; flex-direction: column; }
 .openlist-ui .sidebar-head { flex-shrink: 0; padding: 8px 8px 12px; }
 @media (min-width: 1200px) {
-  .openlist-ui .workspace-shell { display: block; width: calc(100% - 240px); max-width: none; margin: 0 0 0 240px; }
-  .openlist-ui .sidebar { position: fixed; top: var(--header-h); left: 0; width: 240px; max-width: none; height: calc(100dvh - var(--header-h)); max-height: none; overflow: hidden; border-radius: 0; border-right: 1px solid var(--line); box-shadow: none; }
+  .openlist-ui .workspace-shell { display: block; width: calc(100% - 264px); max-width: none; margin: 0 0 0 264px; }
+  .openlist-ui .sidebar { position: fixed; top: calc(var(--header-h) + 16px); left: 24px; width: 240px; max-width: none; height: calc(100dvh - var(--header-h) - 40px); max-height: none; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-1); }
   .openlist-ui .content { width: calc(100% - 80px); max-width: 1080px; margin: 4px auto 0; padding: 8px 0; }
 }
 @media (max-width: 1199px) {
