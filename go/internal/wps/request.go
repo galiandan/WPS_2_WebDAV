@@ -130,7 +130,7 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 			authRetried = true
 			refreshed := rotated
 			if !refreshed {
-				ok, err := c.refreshCredentials()
+				ok, err := c.refreshCredentials(ctx, currentCredentials)
 				if err != nil {
 					return nil, err
 				}
@@ -168,6 +168,9 @@ func (c *Client) RequestJSONContext(ctx context.Context, request JSONRequest) (m
 	)
 	response.Body.Close()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	decoded, err := decodeJSONObject(payload)
@@ -289,27 +292,6 @@ func (c *Client) persistSetCookieHeaders(headers http.Header) bool {
 	return err == nil && stored
 }
 
-// refreshCredentials mirrors _refresh_credentials: refresh grants stay
-// serial so a rotated rtk cookie cannot be overwritten by a concurrent
-// grant response.
-func (c *Client) refreshCredentials() (bool, error) {
-	c.credentialRefreshLock.Lock()
-	defer c.credentialRefreshLock.Unlock()
-	if c.config.CredentialSource != nil {
-		refreshed, err := c.config.CredentialSource.Refresh()
-		if err != nil {
-			return false, err
-		}
-		if refreshed {
-			return true, nil
-		}
-	}
-	if !c.config.AutoRefresh {
-		return false, nil
-	}
-	return c.refreshWPSSession()
-}
-
 // accountBaseURL mirrors _account_base_url: the configured account host or
 // account.<last two labels> of the API host, both validated as bare HTTPS
 // kdocs.cn URLs.
@@ -359,7 +341,7 @@ func (c *Client) accountBaseURL() (string, error) {
 // grant is attempted with the current cookie and any rotated Set-Cookie is
 // persisted. Transport failures report no refresh; a malformed grant body
 // fails the enclosing request exactly like the Python helper.
-func (c *Client) refreshWPSSession() (bool, error) {
+func (c *Client) refreshWPSSession(ctx context.Context) (bool, error) {
 	current, err := c.currentCredentials()
 	if err != nil {
 		return false, err
@@ -371,8 +353,8 @@ func (c *Client) refreshWPSSession() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	httpRequest, err := http.NewRequest(
-		http.MethodPost,
+	httpRequest, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
 		buildRequestURL(baseURL, "/passport/secure/api/grant_token", nil),
 		bytes.NewReader([]byte(`{"grant_type":"refresh_token"}`)),
 	)
@@ -391,6 +373,9 @@ func (c *Client) refreshWPSSession() (bool, error) {
 
 	opened, err := c.opener.Do(httpRequest)
 	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 		return false, nil
 	}
 	ok := opened.StatusCode == http.StatusOK
@@ -410,6 +395,9 @@ func (c *Client) refreshWPSSession() (bool, error) {
 		return false, nil
 	}
 	if readErr != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 		return false, readErr
 	}
 	return c.persistSetCookieHeaders(headers), nil

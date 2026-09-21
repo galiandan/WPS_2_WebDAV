@@ -207,6 +207,7 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	application.clientConfig = wpsConfig(cfg, application.Source, application.State)
 	application.clientConfig.SpoolLimiter = transferBudget
 	clientOptions := append([]wps.Option(nil), application.transportOptions...)
+	clientOptions = append(clientOptions, wps.WithRefreshCoordinator(&wps.RefreshCoordinator{}))
 	if injected.opener == nil {
 		application.opener = wps.NewControlHTTPClient(cfg.Timeout)
 		clientOptions = append(clientOptions, wps.WithOpener(application.opener))

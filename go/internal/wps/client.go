@@ -135,9 +135,8 @@ type Client struct {
 	// capture the message.
 	warnUpload func(string)
 
-	// credentialRefreshLock serializes 401 refresh grants so a rotated rtk
-	// cookie cannot be overwritten by a concurrent grant response.
-	credentialRefreshLock sync.Mutex
+	// refreshCoordinator is shared by clients using the same credential source.
+	refreshCoordinator *RefreshCoordinator
 
 	// Status cache fields (guarded by statusMu). statusDone is closed when
 	// the current inflight probe finishes; waiters select on it.
@@ -266,11 +265,12 @@ func NewClient(config Config, options ...Option) (*Client, error) {
 	}
 
 	client := &Client{
-		config:     config,
-		opener:     NewControlHTTPClient(config.Timeout),
-		signed:     NewSignedObjectClient(config),
-		diskFree:   budget.DiskFree,
-		warnUpload: func(message string) { log.Printf("%s", message) },
+		config:             config,
+		refreshCoordinator: &RefreshCoordinator{},
+		opener:             NewControlHTTPClient(config.Timeout),
+		signed:             NewSignedObjectClient(config),
+		diskFree:           budget.DiskFree,
+		warnUpload:         func(message string) { log.Printf("%s", message) },
 	}
 	for _, option := range options {
 		option(client)
