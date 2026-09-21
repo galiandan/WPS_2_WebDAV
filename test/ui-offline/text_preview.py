@@ -33,6 +33,7 @@ async def main():
             '二进制.toml': ('abc\x00def', 'utf-8'),
             '慢请求.txt': ('旧内容', 'utf-8'),
             '失败.txt': ('', 'utf-8'),
+            '不支持.bin': ('binary', 'utf-8'),
         }
         slow_started, slow_gate, aborted = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
@@ -98,8 +99,7 @@ async def main():
         await expect(page.locator('#skeleton')).to_be_hidden()
 
         async def open_preview(name):
-            await page.get_by_role('button', name='选择文件：' + name, exact=True).click(button='right')
-            await page.get_by_role('menuitem', name='在线浏览', exact=True).click()
+            await page.get_by_role('button', name='选择文件：' + name, exact=True).dblclick()
             await expect(page.locator('#preview-title')).to_have_text(name)
 
         async def check(name, expected):
@@ -108,7 +108,30 @@ async def main():
             await expect(page.locator('#preview-content')).to_have_text(expected)
             await page.locator('#preview-close').click()
 
-        await check('中文.txt', '中文阅读\n第二行')
+        # Both layouts support double-clicking names and the surrounding item.
+        for view in ('list', 'grid'):
+            await page.locator('#view-' + view + '-button').click()
+            name = page.get_by_role('button', name='选择文件：中文.txt', exact=True)
+            await name.click()
+            await expect(page.locator('#preview-modal')).not_to_be_visible()
+            count = len(requests)
+            await check('中文.txt', '中文阅读\n第二行')
+            assert len(requests) == count + 1, 'double click must open only once'
+            row = page.locator('[data-entry-path="/测试空间/中文.txt"]')
+            await row.locator('.entry-glyph').dblclick()
+            await expect(page.locator('#preview-content')).to_have_text('中文阅读\n第二行')
+            await page.locator('#preview-close').click()
+            count = len(requests)
+            await page.get_by_role('button', name='选择文件：不支持.bin', exact=True).dblclick()
+            await expect(page.locator('#preview-modal')).not_to_be_visible()
+            assert len(requests) == count
+        await page.locator('#view-list-button').click()
+        # Keep the menu entry available as well.
+        await page.get_by_role('button', name='选择文件：中文.txt', exact=True).click(button='right')
+        await page.get_by_role('menuitem', name='在线浏览', exact=True).click()
+        await expect(page.locator('#preview-content')).to_have_text('中文阅读\n第二行')
+        await page.locator('#preview-close').click()
+
         await check('旧文档.LOG', '中文编码测试')
         await check('UTF16.ini', '中文配置')
         await check('UTF16BE.conf', '中文配置')

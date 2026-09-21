@@ -1605,7 +1605,7 @@
         if (entry.kind === "folder") top.append(icon("chev-right", "card-chev"));
         const name = el("button", "card-name");
         name.type = "button";
-        name.title = entry.name;
+        name.title = entry.kind === "file" && isPreviewableText(entry.name) ? `${entry.name} · 双击在线浏览` : entry.name;
         name.setAttribute("aria-label", `${entry.kind === "folder" ? "打开文件夹" : "选择文件"}：${entry.name}`);
         if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPath === entryPath));
         name.append(highlightedName(entry.name, query));
@@ -1627,7 +1627,7 @@
         const nameStack = el("div", "name-stack");
         const name = el("button", "entry-name" + (entry.kind === "folder" ? " folder" : ""));
         name.type = "button";
-        name.title = entry.name;
+        name.title = entry.kind === "file" && isPreviewableText(entry.name) ? `${entry.name} · 双击在线浏览` : entry.name;
         name.setAttribute("aria-label", `${entry.kind === "folder" ? "打开文件夹" : "选择文件"}：${entry.name}`);
         if (entry.kind === "file") name.setAttribute("aria-pressed", String(state.selectedPath === entryPath));
         name.append(highlightedName(entry.name, query));
@@ -1655,6 +1655,13 @@
       node.addEventListener("click", (event) => {
         if (state.loading || event.target.closest("button, a, input, .actions")) return;
         openTarget(entry, entryPath);
+      });
+      node.addEventListener("dblclick", (event) => {
+        if (state.loading || state.pendingDeletes.has(entryPath) || entry.kind !== "file" || !isPreviewableText(entry.name)) return;
+        // File names are buttons too; only operation controls opt out.
+        if (event.target.closest(".actions, a, input, button:not(.entry-name):not(.card-name)")) return;
+        event.preventDefault();
+        previewText(entry, entryPath);
       });
       node.addEventListener("contextmenu", (event) => {
         const trigger = node.querySelector(".action-menu-trigger");
