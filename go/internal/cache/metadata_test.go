@@ -497,7 +497,7 @@ func TestInvalidateFolderKeepsOtherFolders(t *testing.T) {
 	}
 }
 
-// TestInvalidateFolderBlocksLateLoads pins the epoch contract: a load that
+// TestInvalidateFolderBlocksLateLoads pins the load-identity contract: a load that
 // raced a targeted invalidation can neither repopulate the key nor absorb
 // callers that arrived after the invalidation.
 func TestInvalidateFolderBlocksLateLoads(t *testing.T) {

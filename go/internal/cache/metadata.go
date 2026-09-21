@@ -8,10 +8,11 @@
 // before the change can only land under the old generation's key and never
 // repopulates the new one ("迟到请求不得污染新 workspace"). Single-folder
 // invalidations after a mutation follow the same rule through a per-key
-// epoch, keeping every untouched folder's cache entry valid.
+// load identity, keeping every untouched folder's cache entry valid.
 package cache
 
 import (
+	"container/heap"
 	"errors"
 	"sync"
 	"time"
@@ -65,7 +66,6 @@ func New(options Options) (*Cache, error) {
 	return &Cache{
 		entries:    make(map[Key]*folderEntry),
 		inflights:  make(map[Key]*inflightLoad),
-		epochs:     make(map[Key]uint64),
 		ttl:        options.TTL,
 		maxFolders: options.MaxFolders,
 		now:        now,
@@ -73,16 +73,17 @@ func New(options Options) (*Cache, error) {
 }
 
 type folderEntry struct {
+	key      Key
+	index    int
 	expireAt time.Time
 	seq      uint64
 	entries  []model.RemoteEntry
 }
 
 type inflightLoad struct {
-	done       chan struct{}
-	startEpoch uint64
-	entries    []model.RemoteEntry
-	err        error
+	done    chan struct{}
+	entries []model.RemoteEntry
+	err     error
 }
 
 // Cache is safe for concurrent use.
@@ -90,7 +91,7 @@ type Cache struct {
 	mu         sync.Mutex
 	entries    map[Key]*folderEntry
 	inflights  map[Key]*inflightLoad
-	epochs     map[Key]uint64
+	expiry     expiryHeap
 	generation uint64
 	ttl        time.Duration
 	maxFolders int
@@ -125,7 +126,7 @@ func (c *Cache) Get(key Key) ([]model.RemoteEntry, bool) {
 // while different keys load in parallel. Only complete successful results
 // are cached — an error is returned to every caller of that attempt and
 // never stored. A load that races Invalidate or InvalidateFolder is
-// discarded: its generation or per-key epoch went stale, so it can neither
+// discarded: its generation or load identity went stale, so it can neither
 // repopulate the key nor absorb callers that arrived after the invalidation.
 func (c *Cache) GetOrLoad(key Key, load func() ([]model.RemoteEntry, error)) ([]model.RemoteEntry, error) {
 	c.mu.Lock()
@@ -134,32 +135,26 @@ func (c *Cache) GetOrLoad(key Key, load func() ([]model.RemoteEntry, error)) ([]
 		c.mu.Unlock()
 		return entries, nil
 	}
-	epoch := c.epochs[key]
-	if existing, ok := c.inflights[key]; ok && existing.startEpoch == epoch {
+	if existing, ok := c.inflights[key]; ok {
 		c.mu.Unlock()
 		<-existing.done
 		return existing.entries, existing.err
 	}
 
-	current := &inflightLoad{done: make(chan struct{}), startEpoch: epoch}
+	current := &inflightLoad{done: make(chan struct{})}
 	c.inflights[key] = current
-	generation := c.generation
 	c.mu.Unlock()
 
 	entries, err := load()
 
 	c.mu.Lock()
-	// Only our own inflight record may be removed: a targeted invalidation
-	// during the load bumped the epoch and registered the next loader.
+	// Invalidation detaches this load. An older load must never delete a
+	// replacement or overwrite its result, even if the replacement finished.
 	if c.inflights[key] == current {
 		delete(c.inflights, key)
-	}
-	if err == nil && generation == c.generation && current.startEpoch == c.epochs[key] {
-		// A complete, successful result for the current generation and
-		// epoch is the only thing that may enter the cache. Partial pages
-		// and failures are never cached, and a result that raced with an
-		// invalidation lands under a dead epoch and is dropped.
-		c.storeLocked(key, entries)
+		if err == nil && key.Generation == c.generation {
+			c.storeLocked(key, entries)
+		}
 	}
 	c.mu.Unlock()
 	current.entries = entries
@@ -168,27 +163,51 @@ func (c *Cache) GetOrLoad(key Key, load func() ([]model.RemoteEntry, error)) ([]
 	return entries, err
 }
 
-// storeLocked inserts the folder, evicting the deterministically oldest
-// entry when a new key needs room: earliest expiry, ties broken by earliest
-// insertion sequence, which reproduces storage.py's min() over its
-// insertion-ordered dict. Re-storing a known key only refreshes it, exactly
-// like the Python dict assignment.
+// expiryHeap keeps eviction O(log n), ordered by expiry and then insertion
+// sequence. Indexed removal prevents invalidated folders leaving tombstones.
+type expiryHeap []*folderEntry
+
+func (h expiryHeap) Len() int { return len(h) }
+func (h expiryHeap) Less(i, j int) bool {
+	return h[i].expireAt.Before(h[j].expireAt) ||
+		(h[i].expireAt.Equal(h[j].expireAt) && h[i].seq < h[j].seq)
+}
+func (h expiryHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index, h[j].index = i, j
+}
+func (h *expiryHeap) Push(value any) {
+	entry := value.(*folderEntry)
+	entry.index = len(*h)
+	*h = append(*h, entry)
+}
+func (h *expiryHeap) Pop() any {
+	old := *h
+	entry := old[len(old)-1]
+	old[len(old)-1] = nil
+	entry.index = -1
+	*h = old[:len(old)-1]
+	return entry
+}
+
+// storeLocked preserves earliest-expiry eviction, including insertion-order
+// ties and refreshing an existing key without evicting an unrelated folder.
 func (c *Cache) storeLocked(key Key, entries []model.RemoteEntry) {
-	if _, exists := c.entries[key]; !exists && len(c.entries) >= c.maxFolders {
-		var oldestKey Key
-		var oldest folderEntry
-		first := true
-		for candidate, entry := range c.entries {
-			older := entry.expireAt.Before(oldest.expireAt) ||
-				(entry.expireAt.Equal(oldest.expireAt) && entry.seq < oldest.seq)
-			if first || older {
-				oldestKey, oldest, first = candidate, *entry, false
-			}
-		}
-		delete(c.entries, oldestKey)
-	}
 	c.seq++
-	c.entries[key] = &folderEntry{expireAt: c.now().Add(c.ttl), seq: c.seq, entries: entries}
+	if existing, ok := c.entries[key]; ok {
+		existing.expireAt = c.now().Add(c.ttl)
+		existing.seq = c.seq
+		existing.entries = entries
+		heap.Fix(&c.expiry, existing.index)
+		return
+	}
+	if len(c.entries) >= c.maxFolders {
+		oldest := heap.Pop(&c.expiry).(*folderEntry)
+		delete(c.entries, oldest.key)
+	}
+	entry := &folderEntry{key: key, expireAt: c.now().Add(c.ttl), seq: c.seq, entries: entries}
+	c.entries[key] = entry
+	heap.Push(&c.expiry, entry)
 }
 
 // Invalidate drops every cached folder and bumps the root generation, so
@@ -198,20 +217,21 @@ func (c *Cache) Invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[Key]*folderEntry)
-	c.epochs = make(map[Key]uint64)
+	c.expiry = nil
+	c.inflights = make(map[Key]*inflightLoad)
 	c.generation++
 }
 
-// InvalidateFolder drops one cached folder and bumps its per-key epoch, so
-// a listing that was in flight before the mutation can neither repopulate
-// the key nor be joined by callers that arrived after it. A mutation only
-// changes the affected parent's listing, so every other cached folder keeps
-// serving instead of forcing a full cold re-list; the full Invalidate stays
-// for workspace remaps, where every folder may change.
+// InvalidateFolder drops one folder and detaches its active load. Existing
+// callers still receive their result; later callers start a fresh load.
+// No per-folder invalidation history is retained after the load completes.
 func (c *Cache) InvalidateFolder(groupID string, parentID string) {
-	key := Key{GroupID: groupID, Generation: c.generation, ParentID: parentID}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.entries, key)
-	c.epochs[key]++
+	key := Key{GroupID: groupID, Generation: c.generation, ParentID: parentID}
+	if entry, ok := c.entries[key]; ok {
+		heap.Remove(&c.expiry, entry.index)
+		delete(c.entries, key)
+	}
+	delete(c.inflights, key)
 }
