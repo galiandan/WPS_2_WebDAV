@@ -479,6 +479,7 @@
 
   function showAppForUser(user) {
     webUser = user || null;
+    $("auth-loading").classList.add("hidden");
     const authScreen = $("auth-screen");
     if (authScreen.classList.contains("hidden")) {
       authScreen.classList.add("hidden");
@@ -498,6 +499,7 @@
   }
 
   function showLoginScreen() {
+    $("auth-loading").classList.add("hidden");
     const authScreen = $("auth-screen");
     authScreen.classList.remove("leaving");
     authScreen.classList.remove("hidden");
