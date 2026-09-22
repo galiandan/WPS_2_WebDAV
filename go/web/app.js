@@ -486,6 +486,8 @@
   let taskCenter = null;
   let mediaPlayer = null;
   let usersManager = null;
+  let sharesManager = null;
+  let zipBrowser = null;
   let textEditor = null;
   let globalSearch = null;
   let sessionGeneration = 0;
@@ -513,9 +515,12 @@
     return false;
   }
 
+  function canShare() { return Boolean(webUser && permitted("read")); }
+
   function renderAccount() {
     const admin = isAdmin();
     $("users-button").hidden = !admin;
+    $("shares-button").hidden = $("selection-share").hidden = !canShare();
     $("version-button").hidden = !admin;
     document.querySelectorAll("[data-admin-only]").forEach((item) => { item.hidden = !admin; });
     $("settings-description").textContent = admin ? "修改本地显示方式和云盘名称" : "管理当前账号的登录安全和本地显示方式";
@@ -538,6 +543,8 @@
     if (window.WPSRichPreview) window.WPSRichPreview.clearReadme();
     if (taskCenter) taskCenter.stop();
     if (usersManager) usersManager.reset();
+    if (sharesManager) sharesManager.reset();
+    if (zipBrowser) zipBrowser.reset();
     if (textEditor) { if (preserveEditor) textEditor.suspend(); else textEditor.reset(); }
     if (globalSearch) globalSearch.reset();
     closeModal(null);
@@ -1796,6 +1803,7 @@
       ...(entry.kind === "file" && isPreviewable(entry.name)
         ? [menuItem("在线浏览", "在线浏览文件", "eye", () => previewFile(entry, entryPath))]
         : []),
+      ...(canShare() ? [menuItem("分享", "创建分享链接", "share", () => sharesManager && sharesManager.open({ entry, path: entryPath }))] : []),
       ...(permitted("modify") ? [menuItem("重命名", "重命名", "pencil", () => rename(entry, entryPath))] : []),
       ...(permitted("upload") ? [menuItem("复制", "复制到其他文件夹", "file", () => batchOperation("copy", [entryPath]))] : []),
       ...(permitted("modify") ? [menuItem("移动", "移动到其他文件夹", "move", () => move(entry, entryPath))] : []),
@@ -1855,6 +1863,7 @@
     document.querySelectorAll("#selection-actions button, .entry-select").forEach((button) => {
       button.disabled = state.busy || state.loading || (button.id !== "selection-clear" && !button.classList.contains("entry-select") && state.connection !== "connected");
     });
+    $("selection-share").disabled = $("selection-share").disabled || !canShare() || state.selectedPaths.size !== 1;
     $("batch-copy").disabled = $("batch-copy").disabled || !permitted("upload");
     $("batch-move").disabled = $("batch-move").disabled || !permitted("modify");
     $("batch-delete").disabled = $("batch-delete").disabled || !permitted("delete");
@@ -2258,6 +2267,7 @@
   }
 
   function isPreviewable(name) {
+    if (window.WPSZipBrowser && window.WPSZipBrowser.supports(name)) return true;
     return isPreviewableText(name) || isPreviewableCode(name) || isPreviewableImage(name) || isPreviewableMedia(name) || /\.pdf$/i.test(name);
   }
 
@@ -2278,6 +2288,7 @@
   }
 
   function previewFile(entry, path, galleryNavigation = false, mediaAutoplay = false) {
+    if (zipBrowser && window.WPSZipBrowser.supports(entry.name)) { closePreview(); zipBrowser.open(entry, path); return; }
     if (isPreviewableText(entry.name) || isPreviewableCode(entry.name)) {
       previewText(entry, path);
       return;
@@ -3743,6 +3754,16 @@
     $("drop-overlay").setAttribute("aria-hidden", "true");
   }
 
+  if (window.WPSShares) sharesManager = window.WPSShares.init({
+    canShare,
+    request: apiRequest,
+    confirm: openConfirmModal,
+    dismissConfirm: () => closeModal(false),
+    notify: toast,
+    onError: (error) => showError(error),
+  });
+  if (window.WPSZipBrowser) zipBrowser = window.WPSZipBrowser.init({ onError: (error) => showError(error, { notify: false }) });
+
   if (window.WPSUsers) usersManager = window.WPSUsers.init({
     isAdmin,
     request: apiRequest,
@@ -4003,6 +4024,13 @@
   $("selection-clear").addEventListener("click", () => { state.selectedPaths.clear(); state.selectedPath = ""; updateSelectionControls(); });
   ["copy", "move", "delete"].forEach((operation) => $("batch-" + operation).addEventListener("click", () => batchOperation(operation)));
   $("batch-archive").addEventListener("click", () => downloadArchive());
+  $("shares-button").addEventListener("click", () => { if (sharesManager) sharesManager.open(); });
+  $("selection-share").addEventListener("click", () => {
+    if (!sharesManager || state.selectedPaths.size !== 1 || !requirePermission("read")) return;
+    const path = Array.from(state.selectedPaths)[0];
+    const entry = state.entries.find((item) => joinPath(state.path, item.name) === path);
+    if (entry && !isVirtualSpaceEntry(entry)) sharesManager.open({ entry, path });
+  });
   $("batch-results-close").addEventListener("click", () => { $("batch-results").hidden = true; });
   $("folder-button").addEventListener("click", createFolder);
   $("upload-button").addEventListener("click", () => $("file-input").click());

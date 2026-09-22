@@ -1,0 +1,8 @@
+.zip-browser-dialog { width: min(820px, calc(100vw - 24px)); max-width: none; }
+.zip-browser-card { width: 100%; max-width: none; max-height: calc(100dvh - 40px); overflow: auto; }
+.zip-browser-toolbar { display: flex; gap: 8px; margin-top: 16px; }
+.zip-browser-path { overflow-wrap: anywhere; }
+.zip-browser-list { max-height: 52dvh; min-height: 160px; overflow: auto; }
+.zip-browser-row { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); padding: 12px 0; }
+.zip-browser-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .zip-browser-card { padding: 16px; } .zip-browser-list { max-height: 48dvh; } }

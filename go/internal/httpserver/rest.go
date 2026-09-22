@@ -388,6 +388,10 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	// Python answers status and settings before reading the path query, so
 	// both tolerate missing or malformed path parameters.
 	switch route.Suffix {
+	case "zip/entries":
+		return d.doZIPBrowse(w, r, route, false)
+	case "zip/download":
+		return d.doZIPBrowse(w, r, route, true)
 	case "text":
 		return d.doTextGet(w, r, route)
 	case "search":

@@ -75,6 +75,7 @@ type RESTRoute struct {
 // context — JSON for REST, text for everything else, exactly like
 // Python's do_* methods deciding the rest= flag.
 type Handlers struct {
+	Share    func(w http.ResponseWriter, r *http.Request, id, action string) error
 	Health   http.HandlerFunc
 	WebApp   http.HandlerFunc
 	WebAsset func(w http.ResponseWriter, r *http.Request, name string)
@@ -160,6 +161,14 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path, rawQuery := SplitRequestTarget(r.RequestURI)
+	if rt.handlers.Share != nil {
+		if id, action, ok := PublicShareRoute(r.Method, path); ok {
+			if err := rt.handlers.Share(w, r, id, action); err != nil {
+				mapError(w, r, err, true)
+			}
+			return
+		}
+	}
 	if r.Method == "OPTIONS" {
 		// Python answers OPTIONS on every path — inside or outside the DAV
 		// prefix (contract DAV-OPTIONS-001/002) — with fixed capability

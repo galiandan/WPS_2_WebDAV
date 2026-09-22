@@ -162,12 +162,18 @@ func (a *Application) serveScopedREST(w http.ResponseWriter, r *http.Request, ro
 		}
 		return memberDenied()
 	}
+	if route.Suffix == "shares" || strings.HasPrefix(route.Suffix, "shares/") {
+		if a.Shares == nil {
+			return memberDenied()
+		}
+		return a.Shares.ServeManagement(w, r, route)
+	}
 	if principal.IsAdmin() {
 		return a.rest.ServeREST(w, r, route)
 	}
 	allowed := false
 	switch route.Suffix {
-	case "entries", "list", "metadata", "download", "preview", "thumbnail", "archive", "batch", "folders", "folder", "upload", "files", "delete", "text", "search", "search/refresh", "tasks":
+	case "entries", "list", "metadata", "download", "preview", "thumbnail", "archive", "batch", "folders", "folder", "upload", "files", "delete", "text", "search", "search/refresh", "tasks", "zip/entries", "zip/download":
 		allowed = true
 	case "settings", "status":
 		allowed = r.Method == http.MethodGet

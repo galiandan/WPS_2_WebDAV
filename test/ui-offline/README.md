@@ -61,3 +61,7 @@ GitHub CI 会运行此目录的全部离线浏览器脚本，并保留截图供�
 富文本回归：运行 `python test/ui-offline/rich_preview.py`，覆盖 Markdown/源码、原文切换、编码、恶意 HTML/URL、外部请求隔离、规范化相对路径、渲染预算与工作线程超时、README 导航竞态及手机布局。截图在 `/tmp/wps-rich-preview-desktop.png` 和 `/tmp/wps-rich-preview-mobile.png`。
 
 多用户回归：运行 `python test/ui-offline/users.py`，覆盖管理员成员 CRUD/目录选择、只读与仅上传限制、个人登录安全、Passkey 用户名、账号切换和过期后的隐藏内容清理。截图位于 `/tmp/wps-users-desktop.png` 和 `/tmp/wps-users-mobile.png`。
+
+ZIP 浏览回归：运行 `python test/ui-offline/zip_browser.py`，覆盖目录/特殊字符路径、安全文件名、浏览器原生下载与失败、取消、登录过期和手机布局；截图位于 `/tmp/wps-zip-browser-desktop.png` 和 `/tmp/wps-zip-browser-mobile.png`。
+
+分享回归：运行 `python test/ui-offline/shares.py`，覆盖创建、复制后清理密钥、撤销、访客提取码/授权恢复、目录与预览、失效与迟到响应清理及手机布局。截图在 `/tmp/wps-public-share-desktop.png`、`/tmp/wps-public-share-mobile.png` 和 `/tmp/wps-shares-management-mobile.png`。

@@ -20,7 +20,7 @@ import (
 	"sync"
 )
 
-//go:embed index.html style.css app.js search.js search.css tasks.js tasks.css text-editor.js text-editor.css rich-preview.js rich-preview.css rich-preview-worker.js vendor-marked.js vendor-purify.js vendor-highlight.js player.js player.css users.js users.css bg-internal.jpg
+//go:embed index.html style.css app.js search.js search.css tasks.js tasks.css text-editor.js text-editor.css rich-preview.js rich-preview.css rich-preview-worker.js vendor-marked.js vendor-purify.js vendor-highlight.js player.js player.css users.js users.css shares.js shares.css share.html share-page.js share-page.css zip-browser.js zip-browser.css bg-internal.jpg
 var files embed.FS
 
 // CacheControl is the fixed cache policy for every web asset: store freely,
@@ -29,6 +29,12 @@ const CacheControl = "no-cache"
 
 // assetContentTypes is the whitelist; anything outside it is never served.
 var assetContentTypes = map[string]string{
+	"zip-browser.js":         "text/javascript; charset=utf-8",
+	"zip-browser.css":        "text/css; charset=utf-8",
+	"shares.js":              "text/javascript; charset=utf-8",
+	"shares.css":             "text/css; charset=utf-8",
+	"share-page.js":          "text/javascript; charset=utf-8",
+	"share-page.css":         "text/css; charset=utf-8",
 	"users.js":               "text/javascript; charset=utf-8",
 	"users.css":              "text/css; charset=utf-8",
 	"player.js":              "text/javascript; charset=utf-8",
@@ -103,3 +109,6 @@ func AssetETag(name string) (string, bool) {
 	tag, ok := assetETags()[name]
 	return tag, ok
 }
+
+// SharePage is a separate minimal guest page, never the authenticated app.
+func SharePage() []byte { body, _ := files.ReadFile("share.html"); return body }

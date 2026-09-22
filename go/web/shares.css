@@ -1,0 +1,21 @@
+.shares-dialog { width: min(760px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+.shares-card { width: 100%; max-width: none; }
+.shares-heading, .shares-toolbar, .share-record-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.shares-heading h2 { margin: 0; }
+.shares-toolbar { margin: 18px 0 12px; }
+.shares-form { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 14px 0; }
+.shares-inputs { display: flex; flex-wrap: wrap; gap: 14px; }
+.shares-field { flex: 1; min-width: 150px; display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 13px; }
+.shares-source { margin: 0 0 12px; font-size: 14px; overflow-wrap: anywhere; }
+.shares-created { background: var(--accent-soft); padding: 14px; border-radius: 10px; }
+.shares-created input { width: 100%; margin: 12px 0; font-size: 12px; }
+.shares-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.shares-list { display: flex; flex-direction: column; gap: 10px; }
+.share-record { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-wrap: anywhere; }
+.share-record-heading strong { font-size: 14px; }
+.share-record-path { font-size: 13px; color: var(--text-2); }
+.share-record button { min-height: 30px; font-size: 13px; padding: 4px 10px; color: var(--bad); }
+.shares-form[hidden], .shares-created[hidden] { display: none; }
+@media (max-width: 767px) { .shares-heading { align-items: flex-start; } .shares-heading h2 { font-size: 18px; } }
+
+#shares-button[hidden], #selection-share[hidden] { display: none !important; }

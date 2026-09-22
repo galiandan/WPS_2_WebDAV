@@ -289,9 +289,10 @@ func (c BasicAuthConfig) Credentials() (string, string) {
 // needed to suppress a native Basic Auth prompt for unauthenticated browser
 // fetches; WebDAV still receives the normal challenge.
 type WebAuthConfig struct {
-	Store      *auth.Store
-	Accounts   *auth.AccountStores
-	RESTPrefix string
+	PublicShares bool
+	Store        *auth.Store
+	Accounts     *auth.AccountStores
+	RESTPrefix   string
 }
 
 type basicAuth struct {
@@ -401,6 +402,12 @@ func (a basicAuth) middleware() Middleware {
 			path, _ := SplitRequestTarget(r.RequestURI)
 			// Python's _authorise exempts the health path for every method;
 			// non-GET health requests still route (and 404) later.
+			if a.webAuth != nil && a.webAuth.PublicShares {
+				if _, _, ok := PublicShareRoute(r.Method, path); ok {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
 			if IsHealthPath(path) || (a.webAuth == nil && !a.enabled()) || a.isPublicWebPath(path) {
 				next.ServeHTTP(w, r)
 				return

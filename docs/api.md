@@ -80,6 +80,32 @@ PATCH /api/v1/storage
 
 其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。 图片和 PDF 使用同一 `GET /api/v1/preview` 路由，支持 JPG/JPEG、PNG、GIF、WebP、AVIF、BMP、ICO、PDF（不区分大小写），按允许列表设置类型并返回 `Content-Disposition: inline`，复用下载并发、流式读取和单 Range 能力，不套用文本的 2 MiB 截断规则。HTML 源码可按纯文本/语法高亮查看，但不会按网页执行；SVG 不提供在线预览。PDF 由浏览器内置阅读器显示；不支持的浏览器可下载查看。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
 
+### 只读分享
+
+已登录的用户可使用 `POST /api/v1/shares` 创建分享：`{"path":"/文件或目录","expires_at":"2026-10-01T00:00:00Z","password":"可选提取码"}`。省略到期时间默认 7 天，最长 30 天。成功返回 `{share, url}`，URL 为 `/share/<随机ID>#<随机密钥>`；密钥只返回这一次，服务端保存哈希，不会在列表中再次显示。
+
+`GET /api/v1/shares` 列出自己当前权限策略下的记录（管理员可查看所有记录），`DELETE /api/v1/shares/<id>` 撤销自己创建的分享（管理员可撤销全部）。分享绑定所有者、策略版本、目标 ID 及实际 WPS 空间/接口环境；创建时和读取时重新检查，修改所有者密码/权限、停用/删除账号、目标替换或空间重新映射后失效。
+
+访客页面 `GET /share/<id>` 只提供独立界面。密钥通过 `POST /api/share/<id>/unlock` 的 JSON `{token,password?}` 发送，不进入请求路径或查询参数。验证成功后创建只适用于 `/api/share/<id>` 的 HttpOnly Cookie；有效期不超过 1 小时或分享过期时间。后续仅允许：
+
+- `GET /api/share/<id>/info` 查询当前授权的分享信息。
+- `GET /api/share/<id>/entries?path=/相对目录` 浏览目录。
+- `GET /api/share/<id>/download?path=/相对文件` 下载（支持单 Range）。
+- `GET /api/share/<id>/preview?path=/相对文件` 预览。
+- `GET /api/share/<id>/thumbnail?path=/相对图片` 缩略图。
+
+文件分享只能读取该文件；目录分享只允许其下的规范化相对路径。公开数据不含物理前缀、父目录/内部 ID、所有者信息或上游地址。分享凭据不能用来调用普通 REST/WebDAV，也没有写入、任务、全局搜索或管理接口。撤销/过期/所有者变化会使已有访客授权失效，流式读取在分块边界检查状态。页面与响应设置 `Referrer-Policy: no-referrer`。
+
+记录以私有 JSON 持久化，最多 1000 条、每所有者当前策略最多 100 条有效分享、2 MiB 状态；最多 1024 个内存访客授权。错误密钥、提取码和不存在/撤销/过期链接返回统一失败信息；解锁尝试和密码校验并发受限。正常 Cookie 续期不会改变资源空间绑定。访客授权不跨服务重启保留，重启后需使用原链接重新解锁。
+
+### ZIP 内容浏览
+
+`GET /api/v1/zip/entries?path=/archive.zip&entry=/目录` 返回当前层的 `entries`（`name/path/kind/size/compressed_size/method`）、`path`、`entry` 和 `total_entries`；省略 `entry` 使用 `/`。`GET /api/v1/zip/download?path=/archive.zip&entry=/目录/文件` 下载单个条目，不写本地解压目录。
+
+通过已有下载 Range 读取 ZIP 尾部、中央目录和选中条目；需要启用 `WPS_ENABLE_RANGE`。在交给标准 ZIP 解析器前检查 ZIP/ZIP64 数量及目录边界，拒绝加密、多卷、链接、危险路径、冲突名称、不支持压缩方法和非 UTF-8 名称。支持 Store/Deflate；所有调用仍使用当前账号的受限存储视图。
+
+上限：ZIP 源 10 GiB、中央目录 8 MiB、10000 条记录、4 MiB 名称、64 层；单条目解压 128 MiB、压缩数据 64 MiB、压缩比 200；单请求最多 74 MiB 上游读取、300 次 Range、2 分钟，全局最多 2 个活动请求、8 个等待者。校验实际 Range、元数据变化、CRC 和解压长度；小文件错误在响应前拒绝，大文件中途错误中断 HTTP 而不将残缺文件报告为成功。
+
 ### 多用户与目录权限
 
 安装账号是不可通过网页删除/改名的管理员。管理员可调用：

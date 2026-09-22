@@ -104,6 +104,7 @@ type Config struct {
 	UsernameFile   string
 	PasswordFile   string
 	WebSettingsDir string
+	SharesFile     string
 	UsersFile      string
 	TasksFile      string
 	DAVPrefix      string
@@ -279,6 +280,13 @@ func Load() (Config, error) {
 	}
 	if err := validateWebSettingsPath(cfg.WebSettingsDir); err != nil {
 		return Config{}, err
+	}
+	cfg.SharesFile = os.Getenv("WPS_SHARES_FILE")
+	if cfg.SharesFile == "" {
+		cfg.SharesFile = filepath.Join(filepath.Dir(cfg.WebSettingsDir), "shares.json")
+	}
+	if err := securefile.ValidateStatePath(cfg.SharesFile); err != nil {
+		return Config{}, fmt.Errorf("invalid shares file path")
 	}
 	cfg.UsersFile = os.Getenv("WPS_USERS_FILE")
 	if cfg.UsersFile == "" {

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>文件分享 · WPS Drive</title>
+  <link rel="stylesheet" href="/assets/share-page.css">
+  <script src="/assets/share-page.js" defer></script>
+</head>
+<body>
+  <main class="share-shell">
+    <header class="share-heading"><span class="share-brand" aria-hidden="true">W</span><div><p class="share-eyebrow">WPS Drive · 文件分享</p><h1 id="share-title">打开分享</h1></div></header>
+    <p id="share-status" class="share-status" role="status" aria-live="polite">正在打开分享…</p>
+    <form id="share-unlock" class="share-card unlock-card" hidden>
+      <h2>输入提取码</h2>
+      <label for="share-password">提取码</label>
+      <input id="share-password" type="password" autocomplete="off" maxlength="128">
+      <button id="share-unlock-submit" type="submit" class="primary">打开分享</button>
+    </form>
+    <section id="share-content" class="share-card" hidden aria-label="分享内容">
+      <div class="share-tools"><nav id="share-breadcrumbs" aria-label="当前目录"></nav><button id="share-refresh" type="button">刷新</button></div>
+      <div id="share-list" class="share-list"></div>
+      <p id="share-empty" hidden>此目录为空。</p>
+    </section>
+    <footer>仅可读取和下载分享的内容。</footer>
+    <noscript><p class="share-card">请启用 JavaScript 后重新打开分享链接。</p></noscript>
+  </main>
+  <dialog id="share-preview" aria-labelledby="share-preview-title">
+    <section class="preview-card">
+      <div class="preview-heading"><h2 id="share-preview-title"></h2><button id="share-preview-close" type="button">关闭</button></div>
+      <p id="share-preview-state" role="status"></p>
+      <div id="share-preview-content"></div>
+      <div class="preview-actions"><button id="share-preview-download" type="button" class="primary">下载文件</button></div>
+    </section>
+  </dialog>
+</body>
+</html>

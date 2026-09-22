@@ -55,6 +55,7 @@ type Application struct {
 	// Assembled services, in construction order.
 	Settings       *workspace.WebSettings
 	Accounts       *accounts.Store
+	Shares         *httpserver.ShareController
 	AccountHub     *auth.AccountStores
 	memberMu       sync.Mutex
 	memberServices map[string]*memberService
@@ -330,6 +331,9 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		tasksFile = filepath.Join(filepath.Dir(cfg.WebSettingsDir), "tasks.json")
 	}
 	if err := rest.EnableTasks(tasksFile, application.taskIdentity); err != nil {
+		return fail(err)
+	}
+	if err := application.initShares(); err != nil {
 		return fail(err)
 	}
 	return application, nil
@@ -821,6 +825,7 @@ func (a *Application) Handler() (http.Handler, error) {
 		DAVPrefix:  a.Config.DAVPrefix,
 		RESTPrefix: a.Config.RESTPrefix,
 		Handlers: httpserver.Handlers{
+			Share:    a.serveShare,
 			Health:   a.serveHealth,
 			WebApp:   a.serveWebApp,
 			WebAsset: a.serveWebAsset,
@@ -848,9 +853,10 @@ func (a *Application) Handler() (http.Handler, error) {
 	}
 	if a.Sessions != nil {
 		chainConfig.WebAuth = &httpserver.WebAuthConfig{
-			Store:      a.Sessions,
-			Accounts:   a.AccountHub,
-			RESTPrefix: a.Config.RESTPrefix,
+			PublicShares: a.Shares != nil,
+			Store:        a.Sessions,
+			Accounts:     a.AccountHub,
+			RESTPrefix:   a.Config.RESTPrefix,
 		}
 	}
 	return httpserver.NewChain(chainConfig)

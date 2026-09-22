@@ -1,0 +1,48 @@
+:root { color-scheme: light dark; --bg:#f6f8fb; --surface:#fff; --line:#e3e8ef; --text:#202938; --muted:#68778c; --accent:#1677ff; --danger:#d62c50; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:var(--bg); }
+* { box-sizing:border-box; }
+body { margin:0; }
+[hidden] { display:none !important; }
+.share-shell { max-width:1040px; margin:0 auto; padding:48px 24px; }
+.share-heading { display:flex; align-items:center; gap:16px; }
+.share-brand { color:var(--accent); font-size:42px; font-weight:800; }
+.share-eyebrow { margin:0 0 5px; font-size:13px; color:var(--muted); }
+h1 { font-size:26px; margin:0; overflow-wrap:anywhere; }
+h2 { font-size:19px; margin:0 0 16px; overflow-wrap:anywhere; }
+p { line-height:1.6; }
+button,input { font:inherit; }
+button { background:var(--surface); color:var(--text); border:1px solid var(--line); padding:8px 13px; border-radius:8px; min-height:38px; cursor:pointer; }
+button:hover { border-color:var(--accent); color:var(--accent); }
+button:disabled { opacity:.5; cursor:default; }
+button:focus-visible,input:focus-visible { outline:3px solid #1677ff55; outline-offset:2px; }
+button.primary { color:white; background:var(--accent); border-color:var(--accent); }
+.share-status { color:var(--muted); font-size:14px; margin:22px 0; overflow-wrap:anywhere; }
+.share-status.error { color:var(--danger); }
+.share-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:20px; }
+.unlock-card { width:min(100%,440px); margin:24px 0; display:flex; flex-direction:column; gap:12px; }
+.unlock-card h2 { margin:0; }
+.unlock-card input { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--surface); color:var(--text); }
+.share-tools { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:14px; }
+#share-breadcrumbs { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+#share-breadcrumbs button { border:0; padding:4px 7px; color:var(--accent); max-width:100%; overflow-wrap:anywhere; text-align:left; }
+.share-row { display:flex; align-items:center; gap:16px; padding:14px 0; border-top:1px solid var(--line); }
+.share-file { min-width:0; flex:1; }
+.share-name { font-weight:600; overflow-wrap:anywhere; margin:0; }
+button.share-name { border:0; padding:0; text-align:left; color:var(--accent); }
+.share-meta { color:var(--muted); margin:5px 0 0; font-size:12px; }
+.share-actions { display:flex; gap:8px; flex-wrap:wrap; }
+footer { margin-top:24px; text-align:center; color:var(--muted); font-size:12px; }
+dialog { border:1px solid var(--line); border-radius:14px; width:min(920px,calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px); padding:0; color:var(--text); background:var(--surface); }
+dialog::backdrop { background:#11182780; }
+.preview-card { padding:20px; }
+.preview-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.preview-heading h2 { margin:0; }
+#share-preview-state { color:var(--muted); font-size:13px; }
+#share-preview-content { max-height:62dvh; overflow:auto; }
+#share-preview-content img { display:block; max-width:100%; max-height:58dvh; object-fit:contain; margin:auto; }
+#share-preview-content iframe { display:block; width:100%; height:58dvh; border:0; }
+#share-preview-content video { display:block; width:100%; max-height:58dvh; background:#101218; }
+#share-preview-content audio { width:100%; }
+#share-preview-content pre { white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,monospace; font-size:13px; line-height:1.65; margin:0; }
+.preview-actions { display:flex; justify-content:flex-end; margin-top:18px; }
+@media(prefers-color-scheme:dark) { :root { --bg:#14171d; --surface:#1d222b; --line:#344052; --text:#e3e9f2; --muted:#9babc0; --accent:#579dff; --danger:#ff8398; } }
+@media(max-width:600px) { .share-shell { padding:28px 14px; } .share-card { padding:14px; } h1 { font-size:22px; } .share-row { align-items:flex-start; flex-direction:column; gap:10px; } .share-actions { align-self:flex-end; } .share-tools { align-items:flex-start; } .preview-card { padding:16px; } }

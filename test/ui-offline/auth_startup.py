@@ -76,6 +76,9 @@ async def check_case(browser, outcome):
         if outcome == 'network_error':
             await expect(page.locator('#auth-message')).to_have_text('无法连接服务，请刷新页面重试')
     await expect(page.locator('#auth-loading')).to_be_hidden()
+    if outcome == 'disabled':
+        await expect(page.locator('#shares-button')).to_be_hidden()
+        await expect(page.locator('#selection-share')).to_be_hidden()
     if outcome == 'authenticated':
         await page.screenshot(path='/tmp/wps-auth-startup.png')
     assert not errors, errors
