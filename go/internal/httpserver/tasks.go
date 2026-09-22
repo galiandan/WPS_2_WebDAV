@@ -32,7 +32,19 @@ func (d *RESTDispatcher) EnableTasks(file string, identity func() ([32]byte, err
 		return errChainConfig("task storage must support identity-bound operations")
 	}
 	d.taskIdentity = identity
-	manager, err := tasks.New(tasks.Config{File: file, Validate: d.validateTaskIdentity, Execute: d.executeTaskItem})
+	manager, err := tasks.New(tasks.Config{File: file, Validate: func(spec tasks.Spec) error {
+		owner, err := d.resolveTaskOwner(spec)
+		if err != nil {
+			return err
+		}
+		return owner.validateTaskIdentity(spec)
+	}, Execute: func(ctx context.Context, spec tasks.Spec, source tasks.Binding) tasks.Result {
+		owner, err := d.resolveTaskOwner(spec)
+		if err != nil {
+			return tasks.Result{Status: 403, Error: "task owner or permissions changed"}
+		}
+		return owner.executeTaskItem(ctx, spec, source)
+	}})
 	if err != nil {
 		return err
 	}
@@ -60,6 +72,12 @@ func (d *RESTDispatcher) serveTasks(w http.ResponseWriter, r *http.Request, rout
 		return model.NewStorageError(model.KindUnsupportedOperation, "background tasks are unavailable")
 	}
 	parts := strings.Split(route.Suffix, "/")
+	if len(parts) >= 2 {
+		spec, err := d.tasks.Spec(parts[1])
+		if err != nil || !tasks.OwnerMatches(spec, d.taskOwnerID, d.taskPolicyVersion) {
+			return mapTaskError(tasks.ErrNotFound)
+		}
+	}
 	if len(parts) > 3 {
 		return model.NewStorageError(model.KindEntryNotFound, "unknown task route")
 	}
@@ -68,7 +86,7 @@ func (d *RESTDispatcher) serveTasks(w http.ResponseWriter, r *http.Request, rout
 			return err
 		}
 		if len(parts) == 1 {
-			list, failed := d.tasks.List()
+			list, failed := d.tasks.ListOwned(d.taskOwnerID, d.taskPolicyVersion)
 			return sendJSON(w, r, http.StatusOK, map[string]any{"tasks": list, "persistence_error": failed}, d.limits, nil)
 		}
 		if len(parts) == 2 {
@@ -127,6 +145,11 @@ func (d *RESTDispatcher) taskSpec(w http.ResponseWriter, r *http.Request) (*task
 	if operation != "copy" && operation != "move" && operation != "delete" {
 		return nil, errBadRequest("operation must be copy, move or delete")
 	}
+	if permissions, ok := d.mutations.(interface{ CheckBatchPermission(string) error }); ok {
+		if err := permissions.CheckBatchPermission(operation); err != nil {
+			return nil, err
+		}
+	}
 	for key := range payload {
 		if key != "operation" && key != "paths" && (key != "destination" || operation == "delete") {
 			return nil, errBadRequest("unknown task field")
@@ -140,7 +163,7 @@ func (d *RESTDispatcher) taskSpec(w http.ResponseWriter, r *http.Request) (*task
 	if err != nil {
 		return nil, model.NewStorageError(model.KindIOFailure, "task identity unavailable")
 	}
-	spec := &tasks.Spec{Operation: operation, Identity: hex.EncodeToString(identity[:]), Sources: make([]tasks.Binding, 0, len(paths))}
+	spec := &tasks.Spec{OwnerID: d.taskOwnerID, PolicyVersion: d.taskPolicyVersion, Operation: operation, Identity: hex.EncodeToString(identity[:]), Sources: make([]tasks.Binding, 0, len(paths))}
 	if cache, ok := d.read.(interface{ InvalidateMetadataCache() }); ok {
 		cache.InvalidateMetadataCache()
 	}
@@ -213,7 +236,22 @@ func (d *RESTDispatcher) executeTaskItem(ctx context.Context, spec tasks.Spec, s
 	}
 	// Browser task creation never captures lock tokens: a later operation must
 	// respect the locks that exist when it actually starts.
-	if !d.locks.allowsTree(source.Path, nil) || (destination != "" && (!d.locks.Allows(spec.Destination, nil) || !d.locks.allowsTree(destination, nil))) {
+	allowed, lockErr := d.allowsTree(source.Path, nil)
+	if lockErr != nil {
+		return taskResult(lockErr)
+	}
+	if destination != "" {
+		parentAllowed, err := d.allowsLock(spec.Destination, nil)
+		if err != nil {
+			return taskResult(err)
+		}
+		targetAllowed, err := d.allowsTree(destination, nil)
+		if err != nil {
+			return taskResult(err)
+		}
+		allowed = allowed && parentAllowed && targetAllowed
+	}
+	if !allowed {
 		return tasks.Result{Status: 423, Error: "resource is locked", SafeToRetry: true}
 	}
 	d.invalidateSearch()
@@ -254,4 +292,19 @@ func mapTaskError(err error) error {
 		return errBadRequest(err.Error())
 	}
 	return err
+}
+
+// SetTaskResolver lets the one durable worker obtain the current policy-bound
+// dispatcher before each item and retry. Member dispatchers share this manager.
+func (d *RESTDispatcher) SetTaskResolver(resolve func(string, uint64) (*RESTDispatcher, error)) {
+	d.taskOwnerResolver = resolve
+}
+func (d *RESTDispatcher) resolveTaskOwner(spec tasks.Spec) (*RESTDispatcher, error) {
+	if spec.OwnerID == "" || spec.OwnerID == "installation" {
+		return d, nil
+	}
+	if d.taskOwnerResolver == nil {
+		return nil, tasks.ErrUnavailable
+	}
+	return d.taskOwnerResolver(spec.OwnerID, spec.PolicyVersion)
 }

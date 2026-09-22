@@ -71,7 +71,7 @@ func (d *RESTDispatcher) doRestPut(w http.ResponseWriter, r *http.Request, route
 	if err != nil {
 		return err
 	}
-	allowed, err := checkLocks(w, r, d.locks, true, path)
+	allowed, err := d.checkLocks(w, r, path)
 	if err != nil {
 		return err
 	}

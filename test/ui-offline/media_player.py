@@ -43,6 +43,8 @@ async def main():
         errors, requests, thumbnails, writes = [], [], [], []
         page.on('pageerror', lambda error: errors.append(str(error)))
         username = 'alice'
+        account_id = None
+        policy_version = 1
         thumbnail_gate = asyncio.Event()
         hold_thumbnails = False
         active_thumbnails = 0
@@ -70,7 +72,7 @@ async def main():
             if request.request.method not in ('GET', 'HEAD'):
                 writes.append(path)
             if path.endswith('/auth/me'):
-                data = {'authenticated': True, 'user': {'username': username}}
+                data = {'authenticated': True, 'user': {'username': username, **({'id': account_id, 'policy_version': policy_version} if account_id else {})}}
             elif path.endswith('/auth/logout'):
                 data = {}
             elif path.endswith('/settings'):
@@ -206,6 +208,18 @@ async def main():
         assert await player.evaluate('(media) => media.currentTime') == 0
         await page.locator('#preview-close').click()
         username = 'alice'
+        # Reusing a username after account deletion, or assigning a new root
+        # policy, must not restore another namespace's saved playback paths.
+        for account_id, policy_version in [('first-alice', 1), ('recreated-alice', 1), ('recreated-alice', 2)]:
+            await page.reload()
+            await expect(page.locator('#skeleton')).to_be_hidden()
+            await open_file(names[0])
+            await page.wait_for_function('() => document.getElementById("preview-player").readyState >= 1')
+            assert await player.evaluate('(media) => media.currentTime') == 0
+            await player.evaluate('(media) => { media.currentTime = 6; }')
+            await page.locator('#preview-close').click()
+        account_id = None
+        policy_version = 1
         await page.evaluate('''localStorage.setItem('wpsdrv.media-progress.alice', JSON.stringify(Array.from({length:200}, (_,i)=>({path:'/old/'+i,identity:'[]',position:5,updated:i}))));''')
         await page.reload()
         await expect(page.locator('#skeleton')).to_be_hidden()

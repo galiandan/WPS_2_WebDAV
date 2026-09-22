@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/assets/tasks.css">
   <link rel="stylesheet" href="/assets/text-editor.css">
   <link rel="stylesheet" href="/assets/player.css">
+  <link rel="stylesheet" href="/assets/users.css">
   <link rel="stylesheet" href="/assets/rich-preview.css">
 </head>
 <body class="openlist-ui">
@@ -120,6 +121,7 @@ SOFTWARE.
           <button id="login-submit" class="primary auth-submit" type="submit"><span class="auth-submit-label">登录</span><span class="auth-button-spinner" aria-hidden="true"></span></button></div>
         </div>
         <div id="passkey-login-panel" class="auth-method-panel hidden" role="tabpanel" aria-labelledby="auth-method-passkey" aria-hidden="true">
+          <label class="auth-field"><span class="sr-only">Passkey 用户名</span><span class="auth-input-control"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg><input id="passkey-username" placeholder="用户名" type="text" autocomplete="username" autocapitalize="none"></span></label>
           <div class="passkey-prompt"><span class="passkey-prompt-icon"><svg class="icon lg" aria-hidden="true"><use href="#i-key"/></svg></span><div><strong>使用你的 Passkey</strong><p>通过设备锁屏、生物识别或安全密钥快速登录。</p></div></div>
           <button id="passkey-login-button" class="secondary auth-submit" type="button"><svg class="icon"><use href="#i-key"/></svg><span>验证 Passkey</span><span class="auth-button-spinner" aria-hidden="true"></span></button>
         </div>
@@ -207,6 +209,7 @@ SOFTWARE.
   <div class="workspace-shell">
     <aside id="sidebar" class="sidebar" aria-label="目录导航">
       <div class="sidebar-head"><span>目录</span><button id="sidebar-close" class="icon-button small mobile-only" type="button" title="关闭导航" aria-label="关闭导航"><svg class="icon"><use href="#i-x"/></svg></button></div>
+      <p id="account-summary" class="account-summary" hidden></p>
       <nav class="space-nav" aria-label="WPS 目录">
         <button id="space-root" class="space-item active" type="button"><span class="space-item-icon"><svg class="icon"><use href="#i-home"/></svg></span><span class="space-item-name">全部空间</span></button>
         <ul id="space-list" class="space-list directory-tree" aria-label="空间目录"></ul>
@@ -291,6 +294,7 @@ SOFTWARE.
   <!-- Port of OpenList home/toolbar/Right and Footer; see upstream/openlist/LICENSE. -->
   <aside class="openlist-tools" aria-label="文件工具栏">
     <div id="openlist-tools-panel" class="openlist-tools-panel">
+      <button id="users-button" class="icon-button" type="button" title="用户与目录权限" aria-label="用户与目录权限" hidden><svg class="icon"><use href="#i-user"/></svg></button>
       <button id="tasks-button" class="icon-button" type="button" title="任务中心" aria-label="任务中心"><svg class="icon"><use href="#i-clock"/></svg><span id="tasks-count" hidden></span></button>
       <button id="refresh-button" class="icon-button" type="button" title="刷新目录" aria-label="刷新目录"><svg class="icon"><use href="#i-refresh"/></svg></button>
       <button id="text-file-button" class="toolbar-action" type="button" title="新建文本文件"><svg class="icon"><use href="#i-pencil"/></svg><span>新建文本文件</span></button>
@@ -418,12 +422,12 @@ SOFTWARE.
   <dialog id="settings-modal" aria-labelledby="settings-title">
     <form id="settings-form" class="modal-card settings-card" method="dialog">
       <h2 id="settings-title" class="modal-title">设置</h2>
-      <p class="modal-message">修改本地显示方式和云盘名称</p>
-      <label class="modal-label" for="settings-name">
+      <p id="settings-description" class="modal-message">修改本地显示方式和云盘名称</p>
+      <label class="modal-label" for="settings-name" data-admin-only>
         <span>云盘名称</span>
         <input id="settings-name" class="modal-input" type="text" autocomplete="off" maxlength="256">
       </label>
-      <section class="storage-setting" aria-labelledby="storage-setting-title">
+      <section class="storage-setting" aria-labelledby="storage-setting-title" data-admin-only>
         <div class="storage-setting-head">
           <div>
             <h3 id="storage-setting-title">WebDAV 存储位置</h3>
@@ -502,6 +506,7 @@ SOFTWARE.
   <script src="/assets/player.js" defer></script>
   <script src="/assets/vendor-purify.js" defer></script>
   <script src="/assets/rich-preview.js" defer></script>
+  <script src="/assets/users.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>
 </html>

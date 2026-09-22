@@ -81,6 +81,7 @@ type searchQuery struct {
 // listing returns. We deliberately do not spawn an unbounded goroutine for each
 // listing just to make cancellation appear instantaneous.
 type SearchIndex struct {
+	globalGate     chan struct{}
 	read           RESTReadStorage
 	limits         SearchLimits
 	mu             sync.Mutex
@@ -94,7 +95,7 @@ type SearchIndex struct {
 }
 
 func newSearchIndex(read RESTReadStorage, limits SearchLimits) *SearchIndex {
-	return &SearchIndex{read: read, limits: limits, status: SearchIndexStatus{State: "idle", Path: "/"}}
+	return &SearchIndex{globalGate: make(chan struct{}, 1), read: read, limits: limits, status: SearchIndexStatus{State: "idle", Path: "/"}}
 }
 
 var errSearchBusy = errors.New("a search index refresh is already running")
@@ -109,6 +110,13 @@ func (s *SearchIndex) start(root string) (SearchIndexStatus, error) {
 		return s.status, errSearchBusy
 	}
 	s.invalidateMetadataCache()
+	if s.globalGate != nil {
+		select {
+		case s.globalGate <- struct{}{}:
+		default:
+			return s.status, errSearchBusy
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.limits.MaxDuration)
 	s.cancel, s.active, s.items = cancel, true, nil
 	s.status = SearchIndexStatus{State: "indexing", Path: root,
@@ -172,6 +180,9 @@ func (s *SearchIndex) invalidateMetadataCache() {
 }
 
 func (s *SearchIndex) build(ctx context.Context, generation uint64, root string) {
+	if s.globalGate != nil {
+		defer func() { <-s.globalGate }()
+	}
 	state, reason := "ready", ""
 	defer func() {
 		s.mu.Lock()
@@ -442,11 +453,17 @@ func (d *RESTDispatcher) searchIndex() *SearchIndex {
 	return d.search
 }
 
-func (d *RESTDispatcher) invalidateSearch() { d.searchIndex().invalidate() }
+func (d *RESTDispatcher) invalidateSearch() {
+	d.searchIndex().invalidate()
+	if d.searchInvalidator != nil {
+		d.searchInvalidator()
+	}
+}
+func (d *RESTDispatcher) SetSearchInvalidator(notify func()) { d.searchInvalidator = notify }
 
 // InvalidateSearch connects mutations through other protocol dispatchers to
 // the same process-local filename snapshot.
-func (d *RESTDispatcher) InvalidateSearch() { d.invalidateSearch() }
+func (d *RESTDispatcher) InvalidateSearch() { d.searchIndex().invalidate() }
 
 // SetSearchIdentity installs a local-only fingerprint source before serving
 // requests. It catches credential/workspace replacement by the desktop helper

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/accounts"
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/model"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/storage"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/tasks"
@@ -170,17 +172,25 @@ type RESTDispatcher struct {
 	// maxUploadBytes mirrors the declared-upload gate reading
 	// client.config.max_upload_bytes; zero disables the check like the
 	// Python getattr fallback.
-	maxUploadBytes int64
-	locations      StorageLocationController
-	updater        UpdateController
-	searchOnce     sync.Once
-	search         *SearchIndex
-	tasks          *tasks.Manager
-	taskIdentity   func() ([32]byte, error)
-	textOnce       sync.Once
-	textEditor     *textEditorState
-	thumbnailOnce  sync.Once
-	thumbnails     *thumbnailState
+	maxUploadBytes          int64
+	locations               StorageLocationController
+	updater                 UpdateController
+	searchOnce              sync.Once
+	search                  *SearchIndex
+	searchInvalidator       func()
+	tasks                   *tasks.Manager
+	taskIdentity            func() ([32]byte, error)
+	taskOwnerID             string
+	taskPolicyVersion       uint64
+	taskOwnerResolver       func(string, uint64) (*RESTDispatcher, error)
+	accountHub              *auth.AccountStores
+	users                   *accounts.Store
+	userRootResolver        func(string) (model.RemoteEntry, error)
+	userRootBindingResolver func(string) (string, error)
+	textOnce                sync.Once
+	textEditor              *textEditorState
+	thumbnailOnce           sync.Once
+	thumbnails              *thumbnailState
 }
 
 // SetStorageLocations enables the authenticated storage-location settings
@@ -229,6 +239,9 @@ func NewRESTDispatcher(limits ControlLimits, rootName *RootNameController, sessi
 
 // ServeREST fits Handlers.REST in the router.
 func (d *RESTDispatcher) ServeREST(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
+	if route.Suffix == "users" || strings.HasPrefix(route.Suffix, "users/") {
+		return d.serveUsers(w, r, route)
+	}
 	if strings.HasPrefix(route.Suffix, "auth/") || route.Suffix == "auth" {
 		return d.serveWebAuth(w, r, route)
 	}
@@ -320,7 +333,7 @@ func (d *RESTDispatcher) doRestFolders(w http.ResponseWriter, r *http.Request, r
 	if err != nil {
 		return err
 	}
-	allowed, err := checkLocks(w, r, d.locks, true, path)
+	allowed, err := d.checkLocks(w, r, path)
 	if err != nil {
 		return err
 	}
@@ -344,7 +357,7 @@ func (d *RESTDispatcher) doRestDelete(w http.ResponseWriter, r *http.Request, ro
 	if err != nil {
 		return err
 	}
-	allowed, err := checkLocks(w, r, d.locks, true, path)
+	allowed, err := d.checkLocks(w, r, path)
 	if err != nil {
 		return err
 	}
@@ -656,7 +669,7 @@ func (d *RESTDispatcher) doRestEntriesPatch(w http.ResponseWriter, r *http.Reque
 		}
 		return errBadRequest("JSON field 'name', 'destination' or 'parent_path' is required")
 	}
-	allowed, err := checkLocks(w, r, d.locks, true, lockPaths...)
+	allowed, err := d.checkLocks(w, r, lockPaths...)
 	if err != nil {
 		return err
 	}

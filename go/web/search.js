@@ -113,7 +113,7 @@
         lifecycle += 1;
         resetDisplay();
         scope.replaceChildren();
-        const all = node("option", "所有已选空间");
+        const all = node("option", config.allScopeLabel ? config.allScopeLabel() : "所有已选空间");
         all.value = "/";
         scope.append(all);
         const current = config.getPath();
@@ -273,6 +273,7 @@
         closeDialog();
       });
       dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialog(); });
+      return { reset() { closeDialog(); query.value = ""; scope.replaceChildren(); } };
     },
   };
 })();

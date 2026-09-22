@@ -224,6 +224,8 @@ func mapError(w http.ResponseWriter, r *http.Request, err error, rest bool) {
 	}
 	if storageErr, ok := model.AsStorageError(err); ok {
 		switch storageErr.Kind {
+		case model.KindPermissionDenied:
+			sendError(w, r, http.StatusForbidden, "access denied", rest, nil, false)
 		case model.KindInvalidPath:
 			sendError(w, r, http.StatusBadRequest, storageErr.Message, rest, nil, false)
 		case model.KindEntryNotFound:

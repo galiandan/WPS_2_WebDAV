@@ -124,10 +124,10 @@
     $("settings-name").value = rootName;
     setSettingsError("");
     renderThemeOptions();
-    loadStorageLocations();
+    if (isAdmin()) loadStorageLocations();
     loadSecuritySettings();
     $("settings-modal").showModal();
-    setTimeout(() => $("settings-name").focus(), 0);
+    setTimeout(() => isAdmin() ? $("settings-name").focus() : $("totp-enable-button").focus(), 0);
   }
 
   async function loadSecuritySettings() {
@@ -235,6 +235,7 @@
   }
 
   async function loadStorageLocations() {
+    if (!isAdmin()) return;
     storageLocationLoading = true;
     renderStorageLocation();
     try {
@@ -350,6 +351,7 @@
   }
 
   async function chooseStorageLocation() {
+    if (!requirePermission("admin")) return;
     const selected = await openStoragePicker();
     if (!selected) return;
     setSettingsError("正在保存存储位置...");
@@ -374,7 +376,7 @@
   async function submitSettings(event) {
     event.preventDefault();
     if (settingsInFlight) return;
-    const name = $("settings-name").value.trim();
+    const name = isAdmin() ? $("settings-name").value.trim() : rootName;
     if (!name) {
       setSettingsError("云盘名称不能为空");
       $("settings-name").focus();
@@ -449,30 +451,127 @@
   }
 
   async function api(route, path, options = {}) {
+    const generation = sessionGeneration;
     const response = await fetch(pathUrl(route, path), {
       cache: "no-store",
       credentials: "same-origin",
       ...options,
     });
-    return responseData(response);
+    return accountResponse(response, generation);
   }
 
   async function apiRequest(route, options = {}) {
+    const generation = sessionGeneration;
     const response = await fetch(apiUrl(route), {
       cache: "no-store",
       credentials: "same-origin",
       ...options,
     });
-    return responseData(response);
+    return accountResponse(response, generation);
+  }
+
+  async function accountResponse(response, generation) {
+    if (generation !== sessionGeneration) throw new DOMException("账号已切换", "AbortError");
+    try {
+      const data = await responseData(response);
+      if (generation !== sessionGeneration) throw new DOMException("账号已切换", "AbortError");
+      return data;
+    } catch (error) {
+      if (generation !== sessionGeneration) throw new DOMException("账号已切换", "AbortError");
+      throw error;
+    }
   }
 
   /* ============ 网页账号会话 ============ */
   let taskCenter = null;
   let mediaPlayer = null;
+  let usersManager = null;
+  let textEditor = null;
+  let globalSearch = null;
+  let sessionGeneration = 0;
   let webUser = null;
+  let accountEstablished = false;
   let authInFlight = false;
   let pendingTwoFactorChallenge = "";
   let loginMethod = "password";
+
+  function isAdmin() {
+    return webUser === null || webUser.role === "admin" || (!webUser.role && !webUser.permissions);
+  }
+
+  function permitted(operation) {
+    if (isAdmin()) return true;
+    const grants = webUser && webUser.permissions || {};
+    if (operation === "modify") return grants.read === true && grants.upload === true && grants.delete === true;
+    if (operation === "admin") return false;
+    return grants.read === true && grants[operation] === true;
+  }
+
+  function requirePermission(operation) {
+    if (permitted(operation)) return true;
+    showError(Object.assign(new Error("当前账号没有此操作权限"), { status: 403 }));
+    return false;
+  }
+
+  function renderAccount() {
+    const admin = isAdmin();
+    $("users-button").hidden = !admin;
+    $("version-button").hidden = !admin;
+    document.querySelectorAll("[data-admin-only]").forEach((item) => { item.hidden = !admin; });
+    $("settings-description").textContent = admin ? "修改本地显示方式和云盘名称" : "管理当前账号的登录安全和本地显示方式";
+    $("settings-name").disabled = !admin;
+    $("space-root").querySelector(".space-item-name").textContent = admin ? "全部空间" : "我的文件";
+    $("space-list").setAttribute("aria-label", admin ? "空间目录" : "目录");
+    const summary = $("account-summary");
+    summary.hidden = !webUser;
+    summary.textContent = webUser ? `${webUser.username} · ${admin ? "管理员" : ["可读取", ...(permitted("upload") ? ["可上传"] : []), ...(permitted("delete") ? ["可删除"] : [])].join(" / ")}` : "";
+    updateControls();
+  }
+
+  function resetAccountView(preserveEditor = false) {
+    sessionGeneration += 1;
+    navigationGeneration += 1;
+    clearDirectoryCache();
+    closeActionMenu();
+    closePreview();
+    clearThumbnails();
+    if (window.WPSRichPreview) window.WPSRichPreview.clearReadme();
+    if (taskCenter) taskCenter.stop();
+    if (usersManager) usersManager.reset();
+    if (textEditor) { if (preserveEditor) textEditor.suspend(); else textEditor.reset(); }
+    if (globalSearch) globalSearch.reset();
+    closeModal(null);
+    closePicker(null);
+    closeStoragePicker(null);
+    closeSettingsModal();
+    closeUpdateModal(false);
+    clearTimeout(updatePollTimer);
+    clearTimeout(updateRecoveryTimer);
+    trayCancel();
+    tray.generation += 1;
+    trayHide();
+    tray.files = []; tray.states = []; tray.targets = []; tray.done = 0; tray.active = false;
+    tray.existingEntries = []; tray.existingByDirectory.clear();
+    $("tray-list").replaceChildren();
+    textFileTarget = null;
+    $("text-file-modal").close();
+    $("text-file-content").value = "";
+    $("text-file-name").value = "新建文档.txt";
+    $("passkey-list").replaceChildren();
+    storageLocations = []; storageCurrent = null;
+    $("storage-picker-list").replaceChildren(); $("storage-picker-spaces").replaceChildren();
+    $("storage-picker-path").textContent = "/";
+    $("storage-location-current").textContent = "";
+    $("settings-name").value = "";
+    $("security-summary").textContent = "";
+    $("batch-results").hidden = true;
+    $("batch-result-list").replaceChildren();
+    state.entries = []; state.spaces = [];
+    state.selectedPaths.clear(); state.selectedPath = "";
+    state.pendingDeletes.clear(); state.busy = state.loading = state.refreshing = false;
+    state.search = "";
+    $("entries").replaceChildren(); $("space-list").replaceChildren(); directoryNodes.clear();
+  }
 
   function setAuthMessage(message, kind = "") {
     const node = $("auth-message");
@@ -481,7 +580,17 @@
   }
 
   function showAppForUser(user) {
+    const previous = webUser;
+    const accountKey = (value) => value ? JSON.stringify([value.id || "", value.username, value.role || "", value.policy_version || 0]) : "anonymous";
+    if (accountEstablished && accountKey(previous) !== accountKey(user)) {
+      resetAccountView();
+      state.path = "/";
+      history.replaceState(null, "", "#" + encodeURIComponent("/"));
+    }
     webUser = user || null;
+    accountEstablished = true;
+    $("login-password").value = "";
+    renderAccount();
     $("auth-loading").classList.add("hidden");
     const authScreen = $("auth-screen");
     if (authScreen.classList.contains("hidden")) {
@@ -502,10 +611,7 @@
   }
 
   function showLoginScreen() {
-    closePreview();
-    clearThumbnails();
-    if (window.WPSRichPreview) window.WPSRichPreview.clearReadme();
-    if (taskCenter) taskCenter.stop();
+    resetAccountView(true);
     $("auth-loading").classList.add("hidden");
     const authScreen = $("auth-screen");
     authScreen.classList.remove("leaving");
@@ -514,6 +620,7 @@
   }
 
   function setLoginMethod(method) {
+    const previousMethod = loginMethod;
     if (pendingTwoFactorChallenge) method = "password";
     loginMethod = method === "passkey" ? "passkey" : "password";
     const passwordMethod = $("auth-method-password");
@@ -529,7 +636,13 @@
     passwordPanel.classList.toggle("hidden", !passwordActive);
     passkeyPanel.classList.toggle("hidden", passwordActive);
     passkeyPanel.setAttribute("aria-hidden", String(passwordActive));
-    if (passwordActive) $("login-username").focus();
+    if (passwordActive) {
+      if (previousMethod === "passkey" && $("passkey-username").value) $("login-username").value = $("passkey-username").value;
+      $("login-username").focus();
+    } else {
+      if (previousMethod === "password" && $("login-username").value) $("passkey-username").value = $("login-username").value;
+      $("passkey-username").focus();
+    }
   }
 
   function setTwoFactorChallenge(challenge) {
@@ -606,6 +719,7 @@
 
   async function passkeyLogin() {
     if (authInFlight) return;
+    if (!$("passkey-username").value.trim()) { setAuthMessage("请输入 Passkey 所属账号的用户名"); $("passkey-username").focus(); return; }
     if (!window.PublicKeyCredential || !navigator.credentials) {
       setAuthMessage("当前浏览器不支持 Passkey");
       return;
@@ -617,7 +731,7 @@
     $("login-submit").disabled = true;
     setAuthMessage("正在等待 Passkey 验证…", "pending");
     try {
-      const data = await apiRequest("auth/passkey/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const data = await apiRequest("auth/passkey/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("passkey-username").value.trim() }) });
       const credential = await navigator.credentials.get({ publicKey: publicKeyRequestOptions(data.publicKey) });
       if (!credential) throw new Error("Passkey 验证已取消");
       const result = await apiRequest("auth/passkey/verify", {
@@ -723,10 +837,7 @@
 
   async function logout() {
     if (authInFlight) return;
-    closePreview();
-    clearThumbnails();
-    if (window.WPSRichPreview) window.WPSRichPreview.clearReadme();
-    if (taskCenter) taskCenter.stop();
+    resetAccountView();
     try {
       await apiRequest("auth/logout", { method: "POST" });
     } catch (_) {
@@ -892,7 +1003,7 @@
     $("up-button").disabled = state.busy || state.path === "/";
     $("refresh-button").disabled = state.busy;
     [$("folder-button"), $("upload-button"), $("upload-folder-button"), $("text-file-button")].forEach((button) => {
-      button.disabled = state.busy || state.loading || unavailable || virtualRoot;
+      button.disabled = state.busy || state.loading || unavailable || virtualRoot || !permitted("upload");
     });
     // Empty-state retry and search actions remain usable while WPS is down;
     // only remote entry operations depend on a connected upstream.
@@ -1026,6 +1137,7 @@
   }
 
   function showError(error, { notify = true } = {}) {
+    if (error && error.name === "AbortError") return;
     if (error && error.status === 401) {
       showLoginScreen();
       toggleStatusPanel(false);
@@ -1684,13 +1796,14 @@
       ...(entry.kind === "file" && isPreviewable(entry.name)
         ? [menuItem("在线浏览", "在线浏览文件", "eye", () => previewFile(entry, entryPath))]
         : []),
-      menuItem("重命名", "重命名", "pencil", () => rename(entry, entryPath)),
-      menuItem("复制", "复制到其他文件夹", "file", () => batchOperation("copy", [entryPath])),
-      menuItem("移动", "移动到其他文件夹", "move", () => move(entry, entryPath)),
+      ...(permitted("modify") ? [menuItem("重命名", "重命名", "pencil", () => rename(entry, entryPath))] : []),
+      ...(permitted("upload") ? [menuItem("复制", "复制到其他文件夹", "file", () => batchOperation("copy", [entryPath]))] : []),
+      ...(permitted("modify") ? [menuItem("移动", "移动到其他文件夹", "move", () => move(entry, entryPath))] : []),
       ...(entry.kind === "folder" ? [menuItem("打包下载", "下载文件夹为 ZIP", "download", () => downloadArchive([entryPath]))] : []),
-      menuItem("删除", "删除", "trash", () => remove(entry, entryPath), true),
+      ...(permitted("delete") ? [menuItem("删除", "删除", "trash", () => remove(entry, entryPath), true)] : []),
     );
 
+    if (!popover.childElementCount) return document.createDocumentFragment();
     trigger.addEventListener("click", (event) => {
       event.stopPropagation();
       if (openActionMenu === menu) {
@@ -1742,6 +1855,9 @@
     document.querySelectorAll("#selection-actions button, .entry-select").forEach((button) => {
       button.disabled = state.busy || state.loading || (button.id !== "selection-clear" && !button.classList.contains("entry-select") && state.connection !== "connected");
     });
+    $("batch-copy").disabled = $("batch-copy").disabled || !permitted("upload");
+    $("batch-move").disabled = $("batch-move").disabled || !permitted("modify");
+    $("batch-delete").disabled = $("batch-delete").disabled || !permitted("delete");
     document.querySelectorAll("#entries [data-entry-path]").forEach((node) => {
       const selected = state.selectedPaths.has(node.dataset.entryPath);
       node.classList.toggle("is-selected", selected);
@@ -2373,6 +2489,7 @@
   }
 
   async function initRootName() {
+    if (!isAdmin()) { rootName = "我的文件"; applyRootName(); return; }
     try {
       const data = await apiRequest("settings");
       if (data && typeof data.name === "string" && data.name) {
@@ -2534,6 +2651,7 @@
   }
 
   function openUpdateModal() {
+    if (!requirePermission("admin")) return;
     const modal = $("update-modal");
     if (!modal.hidden) { closeUpdateModal(); return; }
     toggleStatusPanel(false);
@@ -2560,6 +2678,7 @@
   }
 
   async function checkForUpdate(force = false) {
+    if (!isAdmin()) return null;
     if (updateCheckInFlight) return updateCheckInFlight;
     const refresh = $("update-modal-refresh");
     updateCheckInFlight = (async () => {
@@ -2628,6 +2747,7 @@
   }
 
   async function startUpdate() {
+    if (!requirePermission("admin")) return;
     if (updateIsActive()) return;
     if (!updateStatus || !updateStatus.update_available) {
       checkForUpdate(true);
@@ -2856,6 +2976,7 @@
 
   async function saveTextFile(event) {
     event.preventDefault();
+    if (!requirePermission("upload")) return;
     if (textFileSaving || textFileTarget === null) return;
     const errorNode = $("text-file-error");
     errorNode.textContent = "";
@@ -2905,6 +3026,7 @@
   }
 
   async function createFolder() {
+    if (!requirePermission("upload")) return;
     const name = await openInputModal("新建文件夹", "文件夹名称", "", "例如：项目资料");
     if (!name) return;
     setBusy(true);
@@ -2919,6 +3041,7 @@
   }
 
   async function rename(entry, path) {
+    if (!requirePermission("modify")) return;
     const name = await openInputModal("重命名", "新名称", entry.name);
     if (!name || name === entry.name) return;
     setBusy(true);
@@ -2933,6 +3056,7 @@
   }
 
   async function move(entry, path) {
+    if (!requirePermission("modify")) return;
     pickerFallback = false;
     const picked = await openFolderPicker(path);
     let destination = picked;
@@ -2954,6 +3078,7 @@
   }
 
   async function remove(entry, path) {
+    if (!requirePermission("delete")) return;
     const confirmed = await openConfirmModal("删除项目", `确定删除“${entry.name}”吗？此操作会同步到 WPS。`, "删除", true);
     if (!confirmed) return;
     const sourcePath = state.path;
@@ -2986,6 +3111,7 @@
   }
 
   async function batchOperation(operation, paths = Array.from(state.selectedPaths)) {
+    if (!requirePermission(operation === "delete" ? "delete" : operation === "copy" ? "upload" : "modify")) return;
     if (state.busy || state.loading || !paths.length) return;
     if (paths.length > 100) { toast("每次最多操作 100 项，请减少选择", "warn"); return; }
     const sourcePath = state.path;
@@ -3327,6 +3453,7 @@
   }
 
   async function uploadQueueItem(index) {
+    const generation = sessionGeneration;
     if (tray.cancelled || tray.cancelledItems.has(index) || tray.states[index] === "cancelled") return true;
     const file = tray.files[index];
     if (!file) return true;
@@ -3336,7 +3463,7 @@
     tray.errors[index] = "";
     tray.speeds[index] = "计算中";
     traySetItem(index);
-    const cancelled = () => tray.cancelled || tray.cancelledItems.has(index);
+    const cancelled = () => generation !== sessionGeneration || tray.cancelled || tray.cancelledItems.has(index);
     try {
       // A rejected, failed or cancelled directory prevents every descendant
       // from falling through into an existing remote directory of that name.
@@ -3357,6 +3484,7 @@
         traySetItem(index);
         return !tray.cancelled;
       }
+      if (generation !== sessionGeneration) return false;
       const existing = entries.find((entry) => entry.name === file.name);
       let overwrite = false;
       if (existing) {
@@ -3376,6 +3504,12 @@
             return true;
           }
         } else {
+          if (!permitted("modify")) {
+            tray.states[index] = "skipped";
+            tray.errors[index] = "当前账号没有覆盖已有文件的权限";
+            traySetItem(index);
+            return true;
+          }
           if (!(await openConfirmModal("文件已存在", `“${tray.relativePaths[index]}”已经存在，要覆盖它吗？`, "覆盖"))) {
             tray.states[index] = "skipped";
             tray.errors[index] = "用户取消覆盖";
@@ -3401,6 +3535,7 @@
       } else {
         await uploadOne(file, overwrite, target, index);
       }
+      if (generation !== sessionGeneration) return false;
       tray.done += 1;
       tray.states[index] = "done";
       traySetItem(index);
@@ -3410,6 +3545,7 @@
       clearDirectoryCacheFor(target);
       return true;
     } catch (error) {
+      if (generation !== sessionGeneration) return false;
       if (error.cancelled || cancelled()) {
         tray.states[index] = "cancelled";
         traySetItem(index);
@@ -3420,11 +3556,13 @@
       traySetItem(index);
       return false;
     } finally {
-      tray.xhr = null;
+      if (generation === sessionGeneration) tray.xhr = null;
     }
   }
 
   async function uploadFiles(files, options = {}) {
+    if (!requirePermission("upload")) return;
+    const generation = sessionGeneration;
     const retryIndex = Number.isInteger(options.retryIndex) ? options.retryIndex : null;
     const retry = retryIndex !== null && tray.files[retryIndex] === files[0];
     const targetPath = retry ? tray.rootPath : options.targetPath || state.path;
@@ -3461,6 +3599,7 @@
         if (!(await uploadQueueItem(retryIndex))) failure = new Error(tray.errors[retryIndex] || "上传失败");
       } else {
         for (let index = 0; index < tray.files.length; index += 1) {
+          if (generation !== sessionGeneration) return;
           if (tray.cancelled) break;
           if (tray.states[index] !== "pending") continue;
           if (tray.files.length > 1) setStatus(`准备上传第 ${index + 1}/${tray.files.length} 个项目`);
@@ -3470,8 +3609,10 @@
           }
         }
       }
+      if (generation !== sessionGeneration) return;
       // Successful items must appear even if another item failed or was cancelled.
       if (tray.done > 0 && state.path === targetPath) await load(targetPath, true, true);
+      if (generation !== sessionGeneration) return;
       if (tray.cancelled) {
         setStatus("上传已取消");
         toast("上传已取消", "info");
@@ -3487,11 +3628,11 @@
         trayFinishAll(!hasSkipped, hasSkipped ? "队列已处理" : "全部完成");
       }
     } catch (error) {
+      if (generation !== sessionGeneration) return;
       showError(error);
       trayFinishAll(false);
     } finally {
-      setBusy(false);
-      renderBreadcrumbs();
+      if (generation === sessionGeneration) { setBusy(false); renderBreadcrumbs(); }
     }
   }
 
@@ -3536,7 +3677,8 @@
   }
 
   async function uploadDrop(transfer) {
-    if (state.busy || state.loading || state.connection !== "connected") return;
+    if (!requirePermission("upload") || state.busy || state.loading || state.connection !== "connected") return;
+    const generation = sessionGeneration;
     const target = state.path;
     // DataTransfer is protected after this event returns: obtain handles and
     // fallback Files synchronously, before the first directory read awaits.
@@ -3550,6 +3692,7 @@
     setStatus("正在读取拖入的文件夹…");
     try {
       async function walk(entry, prefix = "", depth = 0) {
+        if (generation !== sessionGeneration) throw new DOMException("账号已切换", "AbortError");
         if (depth > 128 || collected.length + directories.length >= 10000) throw new Error("拖入的目录过大或层级过深，请分批上传");
         const path = prefix + entry.name;
         if (entry.isFile) {
@@ -3574,9 +3717,10 @@
           collected.push({ file, path: file.name });
         }
       }
+      if (generation !== sessionGeneration) return;
       setBusy(false);
       await uploadDirectoryFiles(collected, directories, target);
-    } catch (error) { setBusy(false); showError(error); }
+    } catch (error) { if (generation === sessionGeneration) { setBusy(false); showError(error); } }
   }
 
   /* ============ 拖放 ============ */
@@ -3587,6 +3731,7 @@
   }
 
   function showDropOverlay() {
+    if (!permitted("upload")) return;
     if (state.busy || state.loading || state.connection !== "connected" || (state.path === "/" && state.spaces.length > 0)) return;
     $("drop-target").textContent = state.path;
     $("drop-overlay").classList.add("active");
@@ -3598,8 +3743,18 @@
     $("drop-overlay").setAttribute("aria-hidden", "true");
   }
 
+  if (window.WPSUsers) usersManager = window.WPSUsers.init({
+    isAdmin,
+    request: apiRequest,
+    entries: (path, signal) => api("entries", path, { signal }),
+    confirm: openConfirmModal,
+    dismissConfirm: () => closeModal(false),
+    notify: toast,
+    onError: (error) => showError(error),
+  });
+
   if (window.WPSMediaPlayer) mediaPlayer = window.WPSMediaPlayer.init({
-    username: () => webUser && webUser.username,
+    username: () => webUser && webUser.id ? JSON.stringify([webUser.id, webUser.policy_version || 0, webUser.username]) : webUser && webUser.username,
     source: (path) => pathUrl("preview", path).toString(),
     open: (entry, path, autoplay) => previewFile(entry, path, false, autoplay),
   });
@@ -3619,6 +3774,7 @@
     dismissConfirm: () => closeModal(false),
     onQueued: onTaskQueued,
     onFinished: onTaskFinished,
+    canPerform: (operation) => permitted(operation === "delete" ? "delete" : operation === "copy" ? "upload" : "modify"),
     onReset: () => { state.pendingDeletes.clear(); $("batch-results").hidden = true; },
     onError: (error) => showError(error, { notify: false }),
     notify: toast,
@@ -3630,9 +3786,9 @@
     },
   });
 
-  if (window.WPSTextEditor) window.WPSTextEditor.init({
+  if (window.WPSTextEditor) textEditor = window.WPSTextEditor.init({
     getTarget: () => previewTarget,
-    canEdit: (entry) => isPreviewableText(entry.name),
+    canEdit: (entry) => permitted("modify") && isPreviewableText(entry.name),
     onSaved: async (path, entry, text) => {
       if (previewTarget && previewTarget.path === path) {
         previewGeneration += 1;
@@ -3652,7 +3808,8 @@
     onError: (error) => showError(error, { notify: false }),
   });
 
-  if (window.WPSGlobalSearch) window.WPSGlobalSearch.init({
+  if (window.WPSGlobalSearch) globalSearch = window.WPSGlobalSearch.init({
+    allScopeLabel: () => isAdmin() ? "所有已选空间" : "我的文件",
     getPath: () => state.path,
     getSpaces: () => state.spaces,
     navigate: (path) => load(path),
@@ -3671,6 +3828,7 @@
       $("login-code").focus();
     } else {
       $("login-username").value = "";
+      $("passkey-username").value = "";
       $("login-password").value = "";
       $("login-username").focus();
     }
@@ -4006,7 +4164,7 @@
     }
     renderBreadcrumbs();
     load(initial);
-    initLocalVersion();
+    if (isAdmin()) initLocalVersion();
     // This is intentionally fire-and-forget: the first directory render must
     // not wait for a GitHub mirror or make the app feel blocked on startup.
     checkForUpdate();

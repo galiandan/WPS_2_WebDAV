@@ -52,6 +52,8 @@ async def main():
                 return
             if path.endswith('/auth/me'):
                 data = {'authenticated': True, 'user': {'username': 'demo'}}
+            elif path.endswith('/auth/login'):
+                data = {'user': {'username': req.post_data_json['username']}}
             elif path.endswith('/settings'):
                 data = {'name': 'WPS Drive'}
             elif path.endswith('/status'):
@@ -220,7 +222,26 @@ async def main():
         await expect(page.locator('#text-editor-modal')).not_to_be_visible()
         await expect(page.locator('#preview-modal')).not_to_be_visible()
         await expect(page.locator('#auth-screen')).to_be_visible()
+        await expect(content).to_have_value('')
+        unauthorized = False
+        await page.locator('#login-username').fill('demo')
+        await page.locator('#login-password').fill('offline-password')
+        await page.locator('#login-submit').click()
+        await expect(page.locator('#auth-screen')).to_be_hidden()
+        await open_editor('空文件.md')
         await expect(content).to_have_value('登录过期后的草稿')
+        unauthorized = True
+        await page.locator('#text-editor-save').click()
+        await expect(page.locator('#auth-screen')).to_be_visible()
+        await expect(content).to_have_value('')
+        unauthorized = False
+        await page.locator('#login-username').fill('different-user')
+        await page.locator('#login-password').fill('offline-password')
+        await page.locator('#login-submit').click()
+        await expect(page.locator('#auth-screen')).to_be_hidden()
+        await page.locator('#space-list > .directory-node > .directory-row > .tree-link').click()
+        await open_editor('空文件.md')
+        await expect(content).to_have_value('新的内容')
         assert not errors, errors
         await context.close()
         await browser.close()

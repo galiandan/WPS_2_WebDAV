@@ -15,7 +15,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/galiandan/WPS_2_WebDAV/go/internal/accounts"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/budget"
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/config"
@@ -51,15 +53,19 @@ type Application struct {
 	Version string
 
 	// Assembled services, in construction order.
-	Settings *workspace.WebSettings
-	Sessions *auth.Store
-	State    *workspace.WorkspaceState // nil without an auto/workspace setup
-	Source   credentials.Source        // nil without any credential source
-	Client   *wps.Client
-	Budget   *budget.Budget
-	Storage  *storage.MultiSpace
-	Locks    *httpserver.DavLockStore
-	Updater  *update.Updater
+	Settings       *workspace.WebSettings
+	Accounts       *accounts.Store
+	AccountHub     *auth.AccountStores
+	memberMu       sync.Mutex
+	memberServices map[string]*memberService
+	Sessions       *auth.Store
+	State          *workspace.WorkspaceState // nil without an auto/workspace setup
+	Source         credentials.Source        // nil without any credential source
+	Client         *wps.Client
+	Budget         *budget.Budget
+	Storage        *storage.MultiSpace
+	Locks          *httpserver.DavLockStore
+	Updater        *update.Updater
 
 	rest *httpserver.RESTDispatcher
 	dav  *httpserver.DAVDispatcher
@@ -295,6 +301,15 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 	if application.Sessions != nil {
 		rest.SetWebAuth(application.Sessions)
 	}
+	if err := application.initAccounts(); err != nil {
+		return fail(err)
+	}
+	if application.AccountHub != nil {
+		rest.SetAccounts(application.AccountHub)
+		rest.SetUsers(application.Accounts, multi.BatchMetadata, application.rootScopeBinding)
+	}
+	rest.SetTaskResolver(application.resolveTaskOwner)
+	rest.SetSearchInvalidator(application.invalidateAllSearch)
 	rest.SetSearchIdentity(application.searchIdentity)
 	rest.SetStorageLocations(application.storageLocations())
 	rest.SetUpdater(application.Updater)
@@ -809,8 +824,8 @@ func (a *Application) Handler() (http.Handler, error) {
 			Health:   a.serveHealth,
 			WebApp:   a.serveWebApp,
 			WebAsset: a.serveWebAsset,
-			REST:     a.rest.ServeREST,
-			DAV:      a.serveDAVWithSearch,
+			REST:     a.serveScopedREST,
+			DAV:      a.serveScopedDAV,
 		},
 	})
 	if err != nil {
@@ -828,9 +843,13 @@ func (a *Application) Handler() (http.Handler, error) {
 			log.Printf("request failed: %v\n%s", recovered, stack)
 		},
 	}
+	if a.Accounts != nil {
+		chainConfig.Auth.Provider = a.Accounts
+	}
 	if a.Sessions != nil {
 		chainConfig.WebAuth = &httpserver.WebAuthConfig{
 			Store:      a.Sessions,
+			Accounts:   a.AccountHub,
 			RESTPrefix: a.Config.RESTPrefix,
 		}
 	}
@@ -850,6 +869,7 @@ func (a *Application) RESTPrefix() string {
 // Close releases the shared transports. Assembly failures and process
 // shutdown both call it; individual in-flight requests drain before that.
 func (a *Application) Close() {
+	a.stopMemberServices()
 	if a.rest != nil {
 		a.rest.CancelSearch()
 		a.rest.CloseTasks()

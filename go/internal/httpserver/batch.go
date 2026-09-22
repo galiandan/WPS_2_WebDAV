@@ -70,6 +70,11 @@ func (d *RESTDispatcher) doBatch(w http.ResponseWriter, r *http.Request) error {
 	if operation != "copy" && operation != "move" && operation != "delete" {
 		return errBadRequest("operation must be copy, move or delete")
 	}
+	if permissions, ok := d.mutations.(interface{ CheckBatchPermission(string) error }); ok {
+		if err := permissions.CheckBatchPermission(operation); err != nil {
+			return err
+		}
+	}
 	for key := range payload {
 		if key != "operation" && key != "paths" && (key != "destination" || operation == "delete") {
 			return errBadRequest("unknown batch field")
@@ -118,7 +123,16 @@ func (d *RESTDispatcher) doBatch(w http.ResponseWriter, r *http.Request) error {
 		if destination != "" {
 			target = strings.TrimSuffix(destination, "/") + "/" + path.Base(source)
 		}
-		if !d.locks.allowsTree(source, tokens) || (target != "" && (!d.locks.Allows(destination, tokens) || !d.locks.allowsTree(target, tokens))) {
+		allowed, lockErr := d.allowsTree(source, tokens)
+		if allowed && lockErr == nil && target != "" {
+			allowed, lockErr = d.allowsLock(destination, tokens)
+			if allowed && lockErr == nil {
+				allowed, lockErr = d.allowsTree(target, tokens)
+			}
+		}
+		if lockErr != nil {
+			result = batchFailure(r, source, lockErr)
+		} else if !allowed {
 			result.Status, result.Error = http.StatusLocked, "resource is locked"
 		} else {
 			err = d.applyBatchItem(r.Context(), operation, source, target)

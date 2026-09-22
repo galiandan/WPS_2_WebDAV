@@ -80,6 +80,25 @@ PATCH /api/v1/storage
 
 其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。 图片和 PDF 使用同一 `GET /api/v1/preview` 路由，支持 JPG/JPEG、PNG、GIF、WebP、AVIF、BMP、ICO、PDF（不区分大小写），按允许列表设置类型并返回 `Content-Disposition: inline`，复用下载并发、流式读取和单 Range 能力，不套用文本的 2 MiB 截断规则。HTML 源码可按纯文本/语法高亮查看，但不会按网页执行；SVG 不提供在线预览。PDF 由浏览器内置阅读器显示；不支持的浏览器可下载查看。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
 
+### 多用户与目录权限
+
+安装账号是不可通过网页删除/改名的管理员。管理员可调用：
+
+- `GET /api/v1/users` 列出管理员和成员，不返回密码验证材料。
+- `POST /api/v1/users` 创建成员：`{"username":"alice","password":"example-password","root_path":"/空间/目录","permissions":{"read":true,"upload":true,"delete":false}}`。
+- `PATCH /api/v1/users/<id>` 修改用户名、密码、根目录、权限或 `enabled`；省略字段保持原值。
+- `DELETE /api/v1/users/<id>` 删除成员。
+
+最多 32 个成员；用户名为 1–64 位字母/数字/点/横线/下划线，密码为 8–256 字节。读取权限必选；仅上传权限可以创建文件和目录、复制到不存在的目标，不能覆盖、编辑、移动、重命名或删除已有内容。覆盖/文本编辑/移动/重命名需要上传与删除权限。所有授权在存储层再次验证。
+
+成员的网页/REST 与 WebDAV `/dav/` 都以其分配目录为 `/`，不受管理员的 WebDAV 映射位置影响。列表、元数据、下载、预览、ZIP、搜索、编辑、任务和锁均遵守这个目录范围。成员无法调用用户管理、全局设置、WPS 凭据导入、更新或 WebDAV 存储位置管理接口。网页登录状态返回角色、权限和不透明账号/策略标识，成员不会收到实际挂载前缀或根目录 ID。
+
+成员目录不仅绑定文件夹 ID，还绑定实际群组与 WPS 接口环境，避免不同空间共用根 ID `0` 时误跟随同名挂载。更换目录、密码、权限或启停用户后策略版本变化，旧 Basic 验证缓存、网页会话、认证挑战、搜索和排队任务会在下一次校验时失效。已经开始的上游请求没有原子撤回能力。
+
+每个成员独立保存 2FA、恢复码与 Passkey，登录时 Passkey 选项可带 `username`；不提供用户名时保持安装管理员的兼容行为。管理员原有 `auth-settings.json` 无需迁移，成员使用独立的 `auth-<id>.json`。
+
+任务使用单个共享工作线程和既有全局预算，成员只能列出/查询/取消/重试自己当前策略下的记录，其他任务 ID 返回 404。成员搜索不共享结果或总数；最多缓存 8 个成员服务，每个索引最多 5000 项、1000 个目录和 4 MiB，所有账号共享一个扫描许可。缩略图生成与编辑内存许可也保持全局共享。
+
 ### 音视频、源码与缩略图
 
 `GET /api/v1/preview` 额外允许 MP4/M4V、WebM、OGV、MP3、M4A、AAC、OGG/OGA、WAV、FLAC，以允许列表 MIME 内联返回，复用单 Range 流式下载。实际能否播放取决于浏览器编解码器，无转码服务。网页提供同目录播放列表、倍速、播放进度记忆与本地 VTT/SRT 字幕；字幕不上传。

@@ -238,7 +238,7 @@ func (d *RESTDispatcher) doTextPut(w http.ResponseWriter, r *http.Request, route
 		return err
 	}
 	defer release()
-	allowed, err := checkLocks(w, r, d.locks, true, path)
+	allowed, err := d.checkLocks(w, r, path)
 	if err != nil || !allowed {
 		return err
 	}
@@ -267,7 +267,7 @@ func (d *RESTDispatcher) doTextPut(w http.ResponseWriter, r *http.Request, route
 	if !hmac.Equal([]byte(before.revision), []byte(revision)) {
 		return d.textReadError(w, r, errTextEditConflict, true)
 	}
-	allowed, err = checkLocks(w, r, d.locks, true, path)
+	allowed, err = d.checkLocks(w, r, path)
 	if err != nil || !allowed {
 		return err
 	}
@@ -278,6 +278,9 @@ func (d *RESTDispatcher) doTextPut(w http.ResponseWriter, r *http.Request, route
 		Size: &size, ContentType: "text/plain; charset=utf-8", Overwrite: true, ExpectedID: before.entry.ID,
 	})
 	if err != nil {
+		if domain, ok := model.AsStorageError(err); ok && domain.Kind == model.KindPermissionDenied {
+			return err
+		}
 		if errors.Is(err, storage.ErrUploadTargetChanged) || errors.Is(err, errTextEditConflict) {
 			return d.textReadError(w, r, err, true)
 		}

@@ -78,14 +78,16 @@ type factorState struct {
 }
 
 type factorChallenge struct {
-	Kind      string
-	Challenge []byte
-	Username  string
-	Session   string
-	RPID      string
-	Origin    string
-	Expires   time.Time
-	Attempts  int
+	Kind          string
+	Challenge     []byte
+	Username      string
+	Session       string
+	RPID          string
+	Origin        string
+	Expires       time.Time
+	Attempts      int
+	UserID        string
+	PolicyVersion uint64
 }
 
 type PasswordLogin struct {
@@ -271,27 +273,24 @@ func (s *Store) DisableTOTP(code string) error {
 // LoginWithFactors performs password authentication and returns a short-lived
 // challenge instead of a session when TOTP is enabled.
 func (s *Store) LoginWithFactors(username, password string) (PasswordLogin, error) {
-	configuredUsername, configuredPassword := s.credentialsValue()
-	username = strings.TrimSpace(username)
-	if username == "" || configuredUsername == "" || configuredPassword == "" ||
-		subtle.ConstantTimeCompare([]byte(username), []byte(configuredUsername)) != 1 ||
-		subtle.ConstantTimeCompare([]byte(password), []byte(configuredPassword)) != 1 {
-		return PasswordLogin{}, ErrInvalidCredentials
+	user, err := s.verifyCredentials(username, password)
+	if err != nil {
+		return PasswordLogin{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.factorState.TOTP != nil && s.factorState.TOTP.Secret != "" {
-		challenge, err := s.newChallengeLocked(factorChallenge{Kind: "totp", Username: configuredUsername})
+		challenge, err := s.newChallengeLocked(factorChallenge{Kind: "totp", Username: user.Username, UserID: user.ID, PolicyVersion: user.PolicyVersion})
 		if err != nil {
 			return PasswordLogin{}, err
 		}
 		return PasswordLogin{TwoFactorRequired: true, Challenge: challenge}, nil
 	}
-	token, err := s.newSessionLocked(configuredUsername)
+	token, err := s.newSessionForUserLocked(user)
 	if err != nil {
 		return PasswordLogin{}, err
 	}
-	return PasswordLogin{Token: token, User: User{Username: configuredUsername}}, nil
+	return PasswordLogin{Token: token, User: user}, nil
 }
 
 func (s *Store) VerifyTwoFactor(challenge, code string) (string, User, error) {
@@ -299,6 +298,11 @@ func (s *Store) VerifyTwoFactor(challenge, code string) (string, User, error) {
 	defer s.mu.Unlock()
 	pending, ok := s.pending[challenge]
 	if !ok || pending.Kind != "totp" || !s.now().Before(pending.Expires) {
+		delete(s.pending, challenge)
+		return "", User{}, ErrFactorChallengeExpired
+	}
+	user, validPrincipal := s.challengePrincipal(pending)
+	if !validPrincipal {
 		delete(s.pending, challenge)
 		return "", User{}, ErrFactorChallengeExpired
 	}
@@ -321,11 +325,11 @@ func (s *Store) VerifyTwoFactor(challenge, code string) (string, User, error) {
 		return "", User{}, ErrInvalidTwoFactor
 	}
 	delete(s.pending, challenge)
-	token, err := s.newSessionLocked(pending.Username)
+	token, err := s.newSessionForUserLocked(user)
 	if err != nil {
 		return "", User{}, err
 	}
-	return token, User{Username: pending.Username}, nil
+	return token, user, nil
 }
 
 func (s *Store) verifySecondFactorLocked(code string, consumeRecovery bool) (bool, error) {
@@ -415,16 +419,24 @@ func (s *Store) VerifyPasskeyLogin(challengeToken string, payload PasskeyCredent
 		s.pending[challenge.ChallengeString] = challenge.factorChallenge
 		return "", User{}, err
 	}
-	token, err := s.newSessionLocked(credential.Username)
+	user, validPrincipal := s.challengePrincipal(challenge.factorChallenge)
+	if !validPrincipal {
+		return "", User{}, ErrFactorChallengeExpired
+	}
+	if s.principalSource == nil {
+		user.Username = credential.Username
+	}
+	token, err := s.newSessionForUserLocked(user)
 	if err != nil {
 		return "", User{}, err
 	}
-	return token, User{Username: credential.Username}, nil
+	return token, user, nil
 }
 
 // BeginPasskeyRegistration starts a ceremony tied to the current session.
 func (s *Store) BeginPasskeyRegistration(sessionToken, username, rpID string) (PasskeyCreationOptions, error) {
-	if _, ok := s.Current(sessionToken); !ok {
+	user, ok := s.Current(sessionToken)
+	if !ok || user.Username != username {
 		return PasskeyCreationOptions{}, ErrInvalidCredentials
 	}
 	s.mu.Lock()
@@ -436,7 +448,7 @@ func (s *Store) BeginPasskeyRegistration(sessionToken, username, rpID string) (P
 	if err := s.persistFactorStateLocked(); err != nil {
 		return PasskeyCreationOptions{}, err
 	}
-	challenge, err := s.newChallengeLocked(factorChallenge{Kind: "passkey-register", Username: username, Session: sessionToken, RPID: rpID})
+	challenge, err := s.newChallengeLocked(factorChallenge{Kind: "passkey-register", Username: username, Session: sessionToken, RPID: rpID, UserID: user.ID, PolicyVersion: user.PolicyVersion})
 	if err != nil {
 		return PasskeyCreationOptions{}, err
 	}
@@ -470,6 +482,9 @@ func (s *Store) RegisterPasskey(sessionToken, challengeToken string, payload Pas
 	defer s.mu.Unlock()
 	challenge, ok := s.pending[challengeToken]
 	if !ok || challenge.Kind != "passkey-register" || challenge.Session != sessionToken || !s.now().Before(challenge.Expires) {
+		return ErrFactorChallengeExpired
+	}
+	if _, ok := s.challengePrincipal(challenge); !ok {
 		return ErrFactorChallengeExpired
 	}
 	if challenge.RPID != rpID {
@@ -529,15 +544,28 @@ func (s *Store) DeletePasskey(id string) error {
 }
 
 func (s *Store) newSessionLocked(username string) (string, error) {
-	token, err := randomToken()
-	if err != nil {
-		return "", errors.New("login failed")
+	user := Principal{Username: username}
+	if s.principalSource != nil {
+		var ok bool
+		user, ok = s.principalSource()
+		if !ok {
+			return "", ErrInvalidCredentials
+		}
 	}
-	s.sessions[token] = session{Username: username, Expires: s.now().Add(SessionMaxAge)}
-	return token, nil
+	return s.newSessionForUserLocked(user)
 }
 
 func (s *Store) newChallengeLocked(value factorChallenge) (string, error) {
+	if s.principalSource != nil {
+		user, ok := s.principalSource()
+		if !ok {
+			return "", ErrInvalidCredentials
+		}
+		if value.PolicyVersion != 0 && (value.UserID != user.ID || value.PolicyVersion != user.PolicyVersion) {
+			return "", ErrInvalidCredentials
+		}
+		value.UserID, value.PolicyVersion = user.ID, user.PolicyVersion
+	}
 	now := s.now()
 	for key, pending := range s.pending {
 		if !now.Before(pending.Expires) {
@@ -571,6 +599,10 @@ type challengeMatch struct {
 func (s *Store) findChallengeLocked(token, kind string) (challengeMatch, error) {
 	challenge, ok := s.pending[token]
 	if !ok || challenge.Kind != kind || !s.now().Before(challenge.Expires) {
+		delete(s.pending, token)
+		return challengeMatch{}, ErrFactorChallengeExpired
+	}
+	if _, ok := s.challengePrincipal(challenge); !ok {
 		delete(s.pending, token)
 		return challengeMatch{}, ErrFactorChallengeExpired
 	}

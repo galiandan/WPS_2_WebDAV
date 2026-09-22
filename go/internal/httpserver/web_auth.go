@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,11 +14,31 @@ import (
 	"github.com/galiandan/WPS_2_WebDAV/go/internal/auth"
 )
 
-// WebAuthController exposes the one-account browser login flow. The account
-// credentials are the same credentials used by WebDAV Basic Auth.
+// WebAuthController routes browser sessions and factors to their owning account.
+// Password verification is shared with WebDAV Basic Auth.
 type WebAuthController struct {
-	store *auth.Store
+	store    *auth.Store
+	accounts *auth.AccountStores
 }
+
+type requestAuthStoreKey struct{}
+
+func (d *RESTDispatcher) requestAuthStore(r *http.Request) *auth.Store {
+	if store, ok := r.Context().Value(requestAuthStoreKey{}).(*auth.Store); ok {
+		return store
+	}
+	return d.webAuth.store
+}
+func (d *RESTDispatcher) SetAccounts(hub *auth.AccountStores) {
+	d.accountHub = hub
+	if hub != nil {
+		if d.webAuth == nil {
+			d.webAuth = &WebAuthController{store: hub.AdminStore()}
+		}
+		d.webAuth.accounts = hub
+	}
+}
+func (d *RESTDispatcher) AccountHub() *auth.AccountStores { return d.accountHub }
 
 // SetWebAuth enables the browser login/logout endpoints on a dispatcher.
 func (d *RESTDispatcher) SetWebAuth(store *auth.Store) {
@@ -25,7 +46,13 @@ func (d *RESTDispatcher) SetWebAuth(store *auth.Store) {
 }
 
 type authUserPayload struct {
-	Username string `json:"username"`
+	Username      string            `json:"username"`
+	ID            string            `json:"id,omitempty"`
+	Role          string            `json:"role,omitempty"`
+	PolicyVersion uint64            `json:"policy_version,omitempty"`
+	RootPath      string            `json:"root_path,omitempty"`
+	RootID        string            `json:"root_id,omitempty"`
+	Permissions   *auth.Permissions `json:"permissions,omitempty"`
 }
 
 type authMePayload struct {
@@ -36,6 +63,11 @@ type authMePayload struct {
 func (d *RESTDispatcher) serveWebAuth(w http.ResponseWriter, r *http.Request, route RESTRoute) error {
 	if d.webAuth == nil || d.webAuth.store == nil {
 		return sendJSON(w, r, http.StatusNotFound, map[string]string{"error": "web authentication is unavailable"}, d.limits, nil)
+	}
+	if d.webAuth.accounts != nil {
+		if store, principal, ok := d.webAuth.accounts.ForSession(sessionToken(r)); ok {
+			r = r.WithContext(context.WithValue(auth.WithPrincipal(r.Context(), principal), requestAuthStoreKey{}, store))
+		}
 	}
 	switch route.Suffix {
 	case "auth/me":
@@ -56,8 +88,8 @@ func (d *RESTDispatcher) serveWebAuth(w http.ResponseWriter, r *http.Request, ro
 			return nil
 		}
 		return sendJSON(w, r, http.StatusOK, map[string]any{
-			"status": "ok", "totp_enabled": d.webAuth.store.TwoFactorEnabled(),
-			"passkeys": d.webAuth.store.Passkeys(),
+			"status": "ok", "totp_enabled": d.requestAuthStore(r).TwoFactorEnabled(),
+			"passkeys": d.requestAuthStore(r).Passkeys(),
 		}, d.limits, nil)
 	case "auth/login":
 		if r.Method != http.MethodPost {
@@ -113,7 +145,11 @@ func (d *RESTDispatcher) serveWebAuth(w http.ResponseWriter, r *http.Request, ro
 		if r.Method != http.MethodPost {
 			return sendAuthError(w, r, http.StatusMethodNotAllowed, "auth_method_not_allowed", "method not allowed")
 		}
-		d.webAuth.store.Logout(sessionToken(r))
+		if d.webAuth.accounts != nil {
+			d.webAuth.accounts.Logout(sessionToken(r))
+		} else {
+			d.webAuth.store.Logout(sessionToken(r))
+		}
 		http.SetCookie(w, expiredSessionCookie(r))
 		return sendJSON(w, r, http.StatusOK, map[string]string{"status": "ok"}, d.limits, nil)
 	default:
@@ -130,7 +166,14 @@ func (d *RESTDispatcher) login(w http.ResponseWriter, r *http.Request) error {
 	if !ok {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_input", "请输入用户名和密码")
 	}
-	login, err := d.webAuth.store.LoginWithFactors(username, password)
+	store := d.webAuth.store
+	if d.webAuth.accounts != nil {
+		store, err = d.webAuth.accounts.ForUsername(username)
+		if err != nil {
+			return sendAuthError(w, r, http.StatusUnauthorized, "auth_invalid_credentials", "用户名或密码错误")
+		}
+	}
+	login, err := store.LoginWithFactors(username, password)
 	if errors.Is(err, auth.ErrInvalidCredentials) {
 		return sendAuthError(w, r, http.StatusUnauthorized, "auth_invalid_credentials", "用户名或密码错误")
 	}
@@ -154,7 +197,15 @@ func (d *RESTDispatcher) verifyTwoFactor(w http.ResponseWriter, r *http.Request)
 	if !challengeOK || !codeOK || len(payload) != 2 || strings.TrimSpace(challenge) == "" || strings.TrimSpace(code) == "" {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_input", "请输入验证码")
 	}
-	token, user, err := d.webAuth.store.VerifyTwoFactor(challenge, code)
+	store := d.webAuth.store
+	if d.webAuth.accounts != nil {
+		var found bool
+		store, found = d.webAuth.accounts.ForChallenge(challenge)
+		if !found {
+			return sendAuthError(w, r, http.StatusUnauthorized, "auth_challenge_expired", "登录验证码已过期，请重新输入密码")
+		}
+	}
+	token, user, err := store.VerifyTwoFactor(challenge, code)
 	if errors.Is(err, auth.ErrFactorChallengeExpired) {
 		return sendAuthError(w, r, http.StatusUnauthorized, "auth_challenge_expired", "登录验证码已过期，请重新输入密码")
 	}
@@ -173,7 +224,7 @@ func (d *RESTDispatcher) totpSetup(w http.ResponseWriter, r *http.Request) error
 	if !ok {
 		return nil
 	}
-	setup, err := d.webAuth.store.BeginTOTPSetup(user.Username)
+	setup, err := d.requestAuthStore(r).BeginTOTPSetup(user.Username)
 	if err != nil {
 		return sendAuthError(w, r, http.StatusInternalServerError, "auth_factor_failed", "无法生成验证器密钥")
 	}
@@ -193,7 +244,10 @@ func (d *RESTDispatcher) totpEnable(w http.ResponseWriter, r *http.Request) erro
 	if !secretOK || !codeOK || len(payload) != 2 {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_input", "请输入验证码")
 	}
-	recovery, err := d.webAuth.store.EnableTOTP(secret, code)
+	if _, ok := d.requireUser(w, r); !ok {
+		return nil
+	}
+	recovery, err := d.requestAuthStore(r).EnableTOTP(secret, code)
 	if errors.Is(err, auth.ErrInvalidTwoFactor) {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_factor", "验证码错误")
 	}
@@ -215,7 +269,10 @@ func (d *RESTDispatcher) totpDisable(w http.ResponseWriter, r *http.Request) err
 	if !codeOK || len(payload) != 1 {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_input", "请输入验证码")
 	}
-	if err := d.webAuth.store.DisableTOTP(code); errors.Is(err, auth.ErrInvalidTwoFactor) {
+	if _, ok := d.requireUser(w, r); !ok {
+		return nil
+	}
+	if err := d.requestAuthStore(r).DisableTOTP(code); errors.Is(err, auth.ErrInvalidTwoFactor) {
 		return sendAuthError(w, r, http.StatusUnauthorized, "auth_invalid_factor", "验证码错误")
 	} else if err != nil {
 		return sendAuthError(w, r, http.StatusInternalServerError, "auth_factor_failed", "无法关闭两步验证")
@@ -225,7 +282,37 @@ func (d *RESTDispatcher) totpDisable(w http.ResponseWriter, r *http.Request) err
 
 func (d *RESTDispatcher) passkeyLoginOptions(w http.ResponseWriter, r *http.Request) error {
 	_, rpID, _ := passkeyRequestContext(r)
-	options, err := d.webAuth.store.BeginPasskeyLogin(rpID)
+	store := d.webAuth.store
+	if d.webAuth.accounts != nil {
+		username := ""
+		if len(r.TransferEncoding) > 0 || r.ContentLength > 0 || r.Header.Get("Content-Length") != "" && r.Header.Get("Content-Length") != "0" {
+			payload, err := readAuthJSONBody(w, r, d.limits)
+			if err != nil || payload == nil {
+				return err
+			}
+			if len(payload) > 1 {
+				return errBadRequest("only username is accepted")
+			}
+			if value, exists := payload["username"]; exists {
+				var ok bool
+				username, ok = value.(string)
+				if !ok {
+					return errBadRequest("username must be a string")
+				}
+			}
+		}
+		if username == "" {
+			if admin, ok := d.webAuth.accounts.Provider().LookupID(auth.InstallationID); ok {
+				username = admin.Username
+			}
+		}
+		var err error
+		store, err = d.webAuth.accounts.ForUsername(username)
+		if err != nil {
+			return sendAuthError(w, r, http.StatusNotFound, "passkey_not_configured", "尚未注册 Passkey")
+		}
+	}
+	options, err := store.BeginPasskeyLogin(rpID)
 	if errors.Is(err, auth.ErrPasskeyNotConfigured) {
 		return sendAuthError(w, r, http.StatusNotFound, "passkey_not_configured", "尚未注册 Passkey")
 	}
@@ -252,7 +339,15 @@ func (d *RESTDispatcher) verifyPasskeyLogin(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_origin", "当前地址不支持 Passkey")
 	}
-	token, user, err := d.webAuth.store.VerifyPasskeyLogin(challenge, credential, rpID, origin)
+	store := d.webAuth.store
+	if d.webAuth.accounts != nil {
+		var found bool
+		store, found = d.webAuth.accounts.ForChallenge(challenge)
+		if !found {
+			return sendAuthError(w, r, http.StatusUnauthorized, "auth_invalid_passkey", "Passkey 验证失败，请重试")
+		}
+	}
+	token, user, err := store.VerifyPasskeyLogin(challenge, credential, rpID, origin)
 	if errors.Is(err, auth.ErrFactorChallengeExpired) || errors.Is(err, auth.ErrInvalidPasskey) {
 		return sendAuthError(w, r, http.StatusUnauthorized, "auth_invalid_passkey", "Passkey 验证失败，请重试")
 	}
@@ -272,7 +367,7 @@ func (d *RESTDispatcher) passkeyRegistrationOptions(w http.ResponseWriter, r *ht
 	if err != nil {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_origin", "当前地址不支持 Passkey")
 	}
-	options, err := d.webAuth.store.BeginPasskeyRegistration(sessionToken(r), user.Username, rpID)
+	options, err := d.requestAuthStore(r).BeginPasskeyRegistration(sessionToken(r), user.Username, rpID)
 	if errors.Is(err, auth.ErrFactorState) {
 		return sendAuthError(w, r, http.StatusInternalServerError, "auth_state_unavailable", "无法保存登录安全设置，请检查服务端配置目录的写入权限和磁盘空间")
 	}
@@ -300,7 +395,7 @@ func (d *RESTDispatcher) registerPasskey(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_origin", "当前地址不支持 Passkey")
 	}
-	if err := d.webAuth.store.RegisterPasskey(sessionToken(r), challenge, credential, name, rpID, origin); errors.Is(err, auth.ErrInvalidPasskey) || errors.Is(err, auth.ErrFactorChallengeExpired) {
+	if err := d.requestAuthStore(r).RegisterPasskey(sessionToken(r), challenge, credential, name, rpID, origin); errors.Is(err, auth.ErrInvalidPasskey) || errors.Is(err, auth.ErrFactorChallengeExpired) {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_passkey", "Passkey 注册失败，请重试")
 	} else if errors.Is(err, auth.ErrFactorState) {
 		return sendAuthError(w, r, http.StatusInternalServerError, "auth_state_unavailable", "Passkey 未保存到网站，请检查服务端配置目录的写入权限和磁盘空间后重试")
@@ -324,7 +419,10 @@ func (d *RESTDispatcher) deletePasskey(w http.ResponseWriter, r *http.Request) e
 	if !ok || id == "" || len(payload) != 1 {
 		return sendAuthError(w, r, http.StatusBadRequest, "auth_invalid_input", "Passkey 数据无效")
 	}
-	if err := d.webAuth.store.DeletePasskey(id); err != nil {
+	if _, ok := d.requireUser(w, r); !ok {
+		return nil
+	}
+	if err := d.requestAuthStore(r).DeletePasskey(id); err != nil {
 		return sendAuthError(w, r, http.StatusNotFound, "passkey_not_found", "Passkey 不存在")
 	}
 	return sendJSON(w, r, http.StatusOK, map[string]string{"status": "ok"}, d.limits, nil)
@@ -417,10 +515,22 @@ func readAuthJSONBody(w http.ResponseWriter, r *http.Request, limits ControlLimi
 }
 
 func publicAuthUser(user auth.User) *authUserPayload {
-	return &authUserPayload{Username: user.Username}
+	payload := &authUserPayload{Username: user.Username, ID: user.ID, Role: user.Role, PolicyVersion: user.PolicyVersion, RootPath: user.RootPath, RootID: user.RootID}
+	if user.Role == "member" {
+		payload.RootPath = "/"
+		payload.RootID = ""
+	}
+	if user.ID != "" {
+		permissions := user.Permissions
+		payload.Permissions = &permissions
+	}
+	return payload
 }
 
 func (a *WebAuthController) currentUser(r *http.Request) (auth.User, bool) {
+	if a.accounts != nil {
+		return a.accounts.Current(sessionToken(r))
+	}
 	return a.store.Current(sessionToken(r))
 }
 

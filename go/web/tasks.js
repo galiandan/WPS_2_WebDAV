@@ -138,7 +138,7 @@
         } else if (task.retryable_count > 0) {
           const retry = button(`重试 ${task.retryable_count} 项`, () => taskAction(task, "retry"));
           retry.dataset.taskAction = "retry";
-          retry.disabled = pending;
+          retry.disabled = pending || Boolean(config.canPerform && !config.canPerform(task.operation));
           actions.append(retry);
         }
         row.append(actions);
@@ -242,6 +242,7 @@
 
       async function taskAction(task, action) {
         if (pendingActions.has(task.id) || !active) return;
+        if (action === "retry" && config.canPerform && !config.canPerform(task.operation)) { showError(Object.assign(new Error("当前账号没有此任务的执行权限"), { status: 403 })); return; }
         const epoch = lifecycle;
         pendingActions.add(task.id);
         render();

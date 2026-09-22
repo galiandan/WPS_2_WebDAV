@@ -41,6 +41,8 @@ type Binding struct {
 	ID   string `json:"id"`
 }
 type Spec struct {
+	OwnerID       string    `json:"owner_id,omitempty"`
+	PolicyVersion uint64    `json:"policy_version,omitempty"`
 	Operation     string    `json:"operation"`
 	Destination   string    `json:"destination,omitempty"`
 	DestinationID string    `json:"destination_id,omitempty"`
@@ -186,6 +188,9 @@ func writeDurable(file, content string) (int64, error) {
 }
 
 func validateSpec(spec Spec) error {
+	if spec.OwnerID != "" && spec.OwnerID != "installation" && (!validID(spec.OwnerID) || spec.PolicyVersion == 0) {
+		return ErrInvalid
+	}
 	if spec.Operation != "copy" && spec.Operation != "move" && spec.Operation != "delete" {
 		return ErrInvalid
 	}
@@ -613,4 +618,44 @@ func (m *Manager) Close() {
 	m.mu.Unlock()
 	m.signal()
 	<-m.done
+}
+
+// Spec returns a private snapshot for owner and policy checks at the HTTP
+// boundary. It is never serialized into public task responses.
+func (m *Manager) Spec(id string) (Spec, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.find(id)
+	if r == nil {
+		return Spec{}, ErrNotFound
+	}
+	spec := r.Spec
+	spec.Sources = append([]Binding(nil), spec.Sources...)
+	return spec, nil
+}
+
+func OwnerMatches(spec Spec, owner string, version uint64) bool {
+	actual := spec.OwnerID
+	if actual == "" {
+		actual = "installation"
+	}
+	if owner == "" {
+		owner = "installation"
+	}
+	return actual == owner && (owner == "installation" || spec.PolicyVersion == version)
+}
+
+// ListOwned never exposes the names/counts of another account or an older
+// root policy. The single worker and history budget remain shared globally.
+func (m *Manager) ListOwned(owner string, version uint64) ([]Task, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Task, 0)
+	for _, r := range m.records {
+		if OwnerMatches(r.Spec, owner, version) {
+			out = append(out, public(r.Task))
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out, m.persistenceError
 }

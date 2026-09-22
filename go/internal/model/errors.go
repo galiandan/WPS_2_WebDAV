@@ -20,6 +20,7 @@ const (
 	KindUnsupportedOperation ErrorKind = "unsupported_operation"
 	KindIOFailure            ErrorKind = "io_failure"
 	KindBadRequest           ErrorKind = "bad_request"
+	KindPermissionDenied     ErrorKind = "permission_denied"
 )
 
 // StorageError is a domain error the HTTP layer can translate into a status

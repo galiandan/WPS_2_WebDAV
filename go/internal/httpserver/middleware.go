@@ -245,6 +245,7 @@ func healthShim(health http.HandlerFunc) Middleware {
 // paths, hot-read per request, constant-time comparison. WPS cookies are
 // never used as adapter credentials.
 type BasicAuthConfig struct {
+	Provider     auth.Provider
 	Username     string
 	Password     string
 	UsernameFile string
@@ -289,6 +290,7 @@ func (c BasicAuthConfig) Credentials() (string, string) {
 // fetches; WebDAV still receives the normal challenge.
 type WebAuthConfig struct {
 	Store      *auth.Store
+	Accounts   *auth.AccountStores
 	RESTPrefix string
 }
 
@@ -311,7 +313,7 @@ func newBasicAuth(config BasicAuthConfig, webAuth *WebAuthConfig) (basicAuth, er
 // turns authentication on, even a half-configured one (D-05), which then
 // rejects everything.
 func (a basicAuth) enabled() bool {
-	return a.config.Username != "" || a.config.Password != "" ||
+	return a.config.Provider != nil || a.config.Username != "" || a.config.Password != "" ||
 		a.config.UsernameFile != "" || a.config.PasswordFile != ""
 }
 
@@ -323,6 +325,10 @@ func (a basicAuth) values() (string, string) {
 // accepts mirrors Python's BasicAuth.accepts including the strict base64
 // validation and the constant-time comparisons.
 func (a basicAuth) accepts(header string) bool {
+	if a.config.Provider != nil {
+		_, ok := a.principal(header)
+		return ok
+	}
 	username, password := a.values()
 	if username == "" || password == "" || header == "" {
 		return false
@@ -346,6 +352,34 @@ func (a basicAuth) accepts(header string) bool {
 	userOK := subtle.ConstantTimeCompare([]byte(suppliedUser), []byte(username)) == 1
 	passwordOK := subtle.ConstantTimeCompare([]byte(suppliedPassword), []byte(password)) == 1
 	return userOK && passwordOK
+}
+
+func (a basicAuth) principal(header string) (auth.Principal, bool) {
+	if a.config.Provider == nil {
+		if !a.accepts(header) {
+			return auth.Principal{}, false
+		}
+		name, _ := a.values()
+		return auth.Principal{ID: auth.InstallationID, Username: name, Role: "admin", Permissions: auth.Permissions{Read: true, Upload: true, Delete: true}, RootPath: "/"}, true
+	}
+	scheme, encoded, ok := strings.Cut(header, " ")
+	if !ok || !strings.EqualFold(scheme, "basic") || !validBase64Alphabet(strings.TrimSpace(encoded)) {
+		return auth.Principal{}, false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil || !utf8.Valid(decoded) {
+		return auth.Principal{}, false
+	}
+	name, password, ok := strings.Cut(string(decoded), ":")
+	if !ok {
+		return auth.Principal{}, false
+	}
+	principal, err := a.config.Provider.Authenticate(name, password)
+	if err != nil {
+		return auth.Principal{}, false
+	}
+	current, ok := a.config.Provider.LookupID(principal.ID)
+	return current, ok && current.PolicyVersion == principal.PolicyVersion
 }
 
 const base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
@@ -373,14 +407,24 @@ func (a basicAuth) middleware() Middleware {
 			}
 			if a.webAuth != nil && a.isBrowserAPIRequest(r) {
 				if token := webSessionToken(r); token != "" {
-					if _, ok := a.webAuth.Store.Current(token); ok && !a.isBasicOnlyPath(path) {
-						next.ServeHTTP(w, r)
+					principal, ok := a.webAuth.Store.Current(token)
+					if a.webAuth.Accounts != nil {
+						principal, ok = a.webAuth.Accounts.Current(token)
+					}
+					if ok && !a.isBasicOnlyPath(path) {
+						if principal.ID == "" {
+							principal.ID = auth.InstallationID
+							principal.Role = "admin"
+							principal.RootPath = "/"
+							principal.Permissions = auth.Permissions{Read: true, Upload: true, Delete: true}
+						}
+						next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), principal)))
 						return
 					}
 				}
 			}
-			if a.accepts(r.Header.Get("Authorization")) {
-				next.ServeHTTP(w, r)
+			if principal, ok := a.principal(r.Header.Get("Authorization")); ok {
+				next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), principal)))
 				return
 			}
 			if a.webAuth != nil && a.isBrowserAPIRequest(r) {
@@ -420,7 +464,10 @@ func (a basicAuth) isBasicOnlyPath(path string) bool {
 		return false
 	}
 	prefix := NormalizePrefix(a.webAuth.RESTPrefix)
-	return path == prefix+"/session/import"
+	if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+		return false
+	}
+	return strings.Trim(strings.TrimPrefix(path, prefix), "/") == "session/import"
 }
 
 func webSessionToken(r *http.Request) string {

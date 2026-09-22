@@ -1,0 +1,28 @@
+.users-dialog { width: min(760px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+.users-card { width: 100%; max-width: none; }
+.users-heading, .users-toolbar, .user-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.users-heading h2 { margin: 0; }
+.users-toolbar { flex-wrap: wrap; margin: 16px 0; }
+.users-list { display: flex; flex-direction: column; gap: 10px; }
+.user-item { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--surface-2); overflow-wrap: anywhere; }
+.user-state, .user-root { font-size: 13px; color: var(--text-2); }
+.user-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.user-actions button { min-height: 30px; padding: 4px 10px; font-size: 13px; }
+.user-actions .danger { color: var(--bad); }
+.users-form { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 8px; }
+.users-form[hidden], .users-field[hidden], [data-admin-only][hidden], #users-button[hidden], #version-button[hidden] { display: none !important; }
+.users-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; margin: 12px 0; }
+.users-root-row { display: flex; gap: 8px; }
+.users-root-row input { min-width: 0; flex: 1; }
+.users-root-row button { flex-shrink: 0; }
+.users-permissions { margin: 14px 0 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.users-permissions .users-field, .users-field:has(> input[type="checkbox"]) { flex-direction: row; align-items: center; justify-content: space-between; }
+.users-field input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+.users-root-dialog { width: min(540px, calc(100vw - 24px)); }
+.users-root-dialog .picker-list { max-height: 50dvh; overflow: auto; }
+.account-summary { margin: 0 8px 12px; font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+@media (max-width: 767px) {
+  .users-heading { align-items: flex-start; }
+  .users-heading h2 { font-size: 18px; }
+  .users-root-row { flex-direction: column; }
+}

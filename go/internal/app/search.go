@@ -15,8 +15,8 @@ import (
 func (a *Application) serveDAVWithSearch(w http.ResponseWriter, r *http.Request, path string) error {
 	switch r.Method {
 	case "PUT", "MKCOL", "DELETE", "MOVE", "COPY":
-		a.rest.InvalidateSearch()
-		defer a.rest.InvalidateSearch()
+		a.invalidateAllSearch()
+		defer a.invalidateAllSearch()
 	}
 	return a.dav.ServeDAV(w, r, path)
 }

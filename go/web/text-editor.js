@@ -90,6 +90,7 @@
         let message = `请求失败（${response.status}）`, code = "";
         try { const data = await response.json(); if (data.error) message = data.error; code = data.code || ""; } catch (_) {}
         if (code === "text_save_uncertain" || code === "text_save_unverified") message = "保存结果未确认，远端可能已改变。草稿已保留，请先复制需要的内容，再重新读取核对。";
+        if (response.status === 403) message = "当前账号没有编辑此文件的权限。";
         if (response.status === 412) message = "文件已被修改、替换或删除，未覆盖远端内容。草稿已保留；请复制需要的内容，再重新读取最新版本。";
         if (response.status === 413) message = "文件超过 2 MiB 编辑上限，请下载后编辑。";
         if (response.status === 423) message = "文件正被 WebDAV 客户端锁定，请稍后保存。";
@@ -163,6 +164,7 @@
       }
       async function saveFile() {
         if (save.disabled || !draft) return;
+        if (!config.canEdit({ name: draft.name })) { error.textContent = "当前账号没有编辑文件的权限"; return; }
         const id = ++generation;
         const active = new AbortController();
         active.saving = true;
@@ -220,6 +222,19 @@
         open.hidden = !preview.open || !target || !config.canEdit(target.entry);
       }).observe(preview, { attributes: true, attributeFilter: ["open"] });
       open.hidden = true;
+      function suspend() {
+        generation += 1;
+        if (controller) controller.abort();
+        controller = null; busy = false;
+        textarea.value = pathLabel.textContent = error.textContent = status.textContent = "";
+        title.textContent = "编辑文本文件";
+        dialog.close();
+        open.hidden = true;
+      }
+      return {
+        suspend,
+        reset() { suspend(); draft = null; update(); },
+      };
     },
   };
 })();

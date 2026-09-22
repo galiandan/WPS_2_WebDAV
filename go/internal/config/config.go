@@ -104,6 +104,7 @@ type Config struct {
 	UsernameFile   string
 	PasswordFile   string
 	WebSettingsDir string
+	UsersFile      string
 	TasksFile      string
 	DAVPrefix      string
 	RESTPrefix     string
@@ -278,6 +279,13 @@ func Load() (Config, error) {
 	}
 	if err := validateWebSettingsPath(cfg.WebSettingsDir); err != nil {
 		return Config{}, err
+	}
+	cfg.UsersFile = os.Getenv("WPS_USERS_FILE")
+	if cfg.UsersFile == "" {
+		cfg.UsersFile = filepath.Join(filepath.Dir(cfg.WebSettingsDir), "users.json")
+	}
+	if err := securefile.ValidateStatePath(cfg.UsersFile); err != nil {
+		return Config{}, fmt.Errorf("invalid users file path")
 	}
 	cfg.TasksFile = os.Getenv("WPS_TASKS_FILE")
 	if cfg.TasksFile == "" {
