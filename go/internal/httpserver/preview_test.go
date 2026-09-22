@@ -82,7 +82,7 @@ func TestPreviewCancelDuringBlockedRead(t *testing.T) {
 }
 
 func TestMediaPreviewStreamsAndHonorsRange(t *testing.T) {
-	for _, name := range []string{"photo.PNG", "document.pdf"} {
+	for _, name := range []string{"photo.PNG", "document.pdf", "movie.MP4", "music.mp3", "track.FLAC", "movie.webm"} {
 		for _, partial := range []bool{false, true} {
 			store := &downloadStorageFake{entry: downloadFileEntry(), payload: "0123456789"}
 			store.entry.Name = name
@@ -113,13 +113,28 @@ func TestMediaPreviewStreamsAndHonorsRange(t *testing.T) {
 }
 
 func TestMediaPreviewRejectsActiveFormatsBeforeOpening(t *testing.T) {
-	for _, name := range []string{"page.html", "image.svg", "photo.png.html", "file.bin"} {
+	for _, name := range []string{"page.xhtml", "image.svg", "photo.png.exe", "file.bin"} {
 		store := downloadStorage(t, newFakeStream("active content", nil))
 		store.entry.Name = name
 		recorder := httptest.NewRecorder()
 		newDownloadRouter(t, store, DownloadLimits{}).ServeHTTP(recorder, newTestRequest("GET", "/api/v1/preview?path=%2Fmedia"))
 		if recorder.Code != 501 || len(store.opened) != 0 {
 			t.Fatalf("active format opened: %s status=%d", name, recorder.Code)
+		}
+	}
+}
+
+func TestCodePreviewRemainsBoundedInertBytes(t *testing.T) {
+	for _, name := range []string{"source.go", "source.ts", "source.CPP", "source.py", "README.markdown", "page.html"} {
+		store := downloadStorage(t, newFakeStream("<script>alert(1)</script>", nil))
+		store.entry.Name = name
+		response := httptest.NewRecorder()
+		newDownloadRouter(t, store, DownloadLimits{PreviewMaxBytes: 8}).ServeHTTP(response, newTestRequest("GET", "/api/v1/preview?path=%2Fsource"))
+		if response.Code != 200 || response.Header().Get("Content-Type") != "application/octet-stream" || response.Body.String() != "<script>" || response.Header().Get("X-Preview-Truncated") != "true" {
+			t.Fatalf("%s: status=%d headers=%v body=%q", name, response.Code, response.Header(), response.Body.String())
+		}
+		if isPreviewableText(name) {
+			t.Fatalf("code unexpectedly editable: %s", name)
 		}
 	}
 }

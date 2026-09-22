@@ -106,6 +106,10 @@ async def main():
 
         async def check(name, expected):
             await open_preview(name)
+            await expect(page.locator('#preview-loading')).to_be_hidden()
+            toggle = page.locator('#rich-preview-toggle')
+            if await toggle.is_visible() and await toggle.inner_text() == '查看原文':
+                await toggle.click()
             await expect(page.locator('#preview-content')).to_be_visible()
             await expect(page.locator('#preview-content')).to_have_text(expected)
             await page.locator('#preview-close').click()

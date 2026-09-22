@@ -20,7 +20,7 @@ import (
 	"sync"
 )
 
-//go:embed index.html style.css app.js search.js search.css tasks.js tasks.css text-editor.js text-editor.css bg-internal.jpg
+//go:embed index.html style.css app.js search.js search.css tasks.js tasks.css text-editor.js text-editor.css rich-preview.js rich-preview.css rich-preview-worker.js vendor-marked.js vendor-purify.js vendor-highlight.js player.js player.css bg-internal.jpg
 var files embed.FS
 
 // CacheControl is the fixed cache policy for every web asset: store freely,
@@ -29,15 +29,23 @@ const CacheControl = "no-cache"
 
 // assetContentTypes is the whitelist; anything outside it is never served.
 var assetContentTypes = map[string]string{
-	"tasks.js":        "text/javascript; charset=utf-8",
-	"tasks.css":       "text/css; charset=utf-8",
-	"text-editor.js":  "text/javascript; charset=utf-8",
-	"text-editor.css": "text/css; charset=utf-8",
-	"app.js":          "text/javascript; charset=utf-8",
-	"search.js":       "text/javascript; charset=utf-8",
-	"search.css":      "text/css; charset=utf-8",
-	"style.css":       "text/css; charset=utf-8",
-	"bg-internal.jpg": "image/jpeg",
+	"player.js":              "text/javascript; charset=utf-8",
+	"player.css":             "text/css; charset=utf-8",
+	"rich-preview.js":        "text/javascript; charset=utf-8",
+	"rich-preview-worker.js": "text/javascript; charset=utf-8",
+	"rich-preview.css":       "text/css; charset=utf-8",
+	"vendor-marked.js":       "text/javascript; charset=utf-8",
+	"vendor-purify.js":       "text/javascript; charset=utf-8",
+	"vendor-highlight.js":    "text/javascript; charset=utf-8",
+	"tasks.js":               "text/javascript; charset=utf-8",
+	"tasks.css":              "text/css; charset=utf-8",
+	"text-editor.js":         "text/javascript; charset=utf-8",
+	"text-editor.css":        "text/css; charset=utf-8",
+	"app.js":                 "text/javascript; charset=utf-8",
+	"search.js":              "text/javascript; charset=utf-8",
+	"search.css":             "text/css; charset=utf-8",
+	"style.css":              "text/css; charset=utf-8",
+	"bg-internal.jpg":        "image/jpeg",
 }
 
 // Page returns the index.html bytes. With //go:embed the file exists at

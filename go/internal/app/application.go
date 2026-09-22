@@ -33,7 +33,7 @@ import (
 // webContentSecurityPolicy keeps the embedded page self-contained: there are
 // no inline scripts or styles and no third-party network resources.
 const webContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; " +
-	"img-src 'self'; connect-src 'self'; object-src 'none'; " +
+	"img-src 'self'; media-src 'self' blob:; connect-src 'self'; object-src 'none'; " +
 	"base-uri 'none'; frame-ancestors 'none'"
 
 // healthPayload mirrors the Python /healthz body byte for byte.

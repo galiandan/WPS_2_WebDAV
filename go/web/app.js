@@ -468,6 +468,7 @@
 
   /* ============ 网页账号会话 ============ */
   let taskCenter = null;
+  let mediaPlayer = null;
   let webUser = null;
   let authInFlight = false;
   let pendingTwoFactorChallenge = "";
@@ -501,6 +502,9 @@
   }
 
   function showLoginScreen() {
+    closePreview();
+    clearThumbnails();
+    if (window.WPSRichPreview) window.WPSRichPreview.clearReadme();
     if (taskCenter) taskCenter.stop();
     $("auth-loading").classList.add("hidden");
     const authScreen = $("auth-screen");
@@ -719,6 +723,9 @@
 
   async function logout() {
     if (authInFlight) return;
+    closePreview();
+    clearThumbnails();
+    if (window.WPSRichPreview) window.WPSRichPreview.clearReadme();
     if (taskCenter) taskCenter.stop();
     try {
       await apiRequest("auth/logout", { method: "POST" });
@@ -1196,7 +1203,73 @@
     const glyph = el("span", "entry-glyph " + spec.tint + (large ? " lg" : ""));
     glyph.setAttribute("aria-hidden", "true");
     glyph.append(icon(spec.icon));
+    if (large && entry.kind === "file" && /\.(jpe?g|png|gif)$/i.test(entry.name)) attachThumbnail(glyph, entry);
     return glyph;
+  }
+
+  let thumbnailGeneration = 0;
+  let thumbnailObserver = null;
+  let thumbnailQueue = [];
+  const thumbnailActive = new Set();
+
+  function clearThumbnails() {
+    thumbnailGeneration += 1;
+    if (thumbnailObserver) thumbnailObserver.disconnect();
+    thumbnailObserver = null;
+    thumbnailQueue = [];
+    for (const image of thumbnailActive) {
+      image.onload = image.onerror = null;
+      image.removeAttribute("src");
+    }
+    thumbnailActive.clear();
+  }
+
+  function runThumbnailQueue() {
+    while (thumbnailActive.size < 2 && thumbnailQueue.length) {
+      const image = thumbnailQueue.shift();
+      if (!image.isConnected) continue;
+      const generation = thumbnailGeneration;
+      thumbnailActive.add(image);
+      const finish = (success) => {
+        if (generation !== thumbnailGeneration) return;
+        thumbnailActive.delete(image);
+        image.onload = image.onerror = null;
+        if (success && image.isConnected) image.parentElement.classList.add("thumbnail-ready");
+        else image.remove();
+        runThumbnailQueue();
+      };
+      image.onload = () => finish(image.naturalWidth > 0);
+      image.onerror = () => finish(false);
+      image.src = image.dataset.thumbnailUrl;
+    }
+  }
+
+  function attachThumbnail(glyph, entry) {
+    const image = el("img", "entry-thumbnail");
+    image.alt = "";
+    image.decoding = "async";
+    const url = pathUrl("thumbnail", joinPath(state.path, entry.name));
+    url.searchParams.set("version", `${entry.id || ""}:${entry.modified_at || 0}:${entry.size || 0}`);
+    image.dataset.thumbnailUrl = url.toString();
+    glyph.classList.add("thumbnail-glyph");
+    glyph.append(image);
+    if (typeof IntersectionObserver !== "function") {
+      thumbnailQueue.push(image);
+      requestAnimationFrame(runThumbnailQueue);
+      return;
+    }
+    if (!thumbnailObserver) {
+      const generation = thumbnailGeneration;
+      thumbnailObserver = new IntersectionObserver((entries) => {
+        if (generation !== thumbnailGeneration) return;
+        for (const entry of entries) if (entry.isIntersecting) {
+          thumbnailObserver.unobserve(entry.target);
+          thumbnailQueue.push(entry.target);
+        }
+        runThumbnailQueue();
+      }, { rootMargin: "120px" });
+    }
+    thumbnailObserver.observe(image);
   }
 
   /* ============ 格式化 ============ */
@@ -1776,6 +1849,7 @@
   }
 
   function renderEntries({ animate = false } = {}) {
+    clearThumbnails();
     const holder = $("entries");
     holder.hidden = state.loading && !state.refreshing;
     if (holder.hidden) {
@@ -1957,8 +2031,10 @@
   }
 
   async function load(path, quiet = false, force = false) {
+    if (window.WPSRichPreview) window.WPSRichPreview.clearReadme();
     const targetPath = canonicalPath(path);
     const previousPath = state.path;
+    if (targetPath !== previousPath && previewTarget && isPreviewableMedia(previewTarget.entry.name)) closePreview();
     const preserveCurrentList = targetPath === state.path && force && state.entries.length > 0;
     const cachedEntries = preserveCurrentList ? state.entries : cachedDirectoryEntries(targetPath);
     const showCachedImmediately = preserveCurrentList || Array.isArray(cachedEntries);
@@ -2010,6 +2086,7 @@
         renderEntries({ animate: !showCachedImmediately });
       }
       prefetchChildDirectories(targetPath, state.entries);
+      if (window.WPSRichPreview) window.WPSRichPreview.loadReadme(targetPath, state.entries);
       setStatus(`${state.entries.length} 个项目`, "success");
     } catch (error) {
       if (requestGeneration !== navigationGeneration) return;
@@ -2056,14 +2133,24 @@
     return typeof name === "string" && /\.(jpe?g|png|gif|webp|avif|bmp|ico)$/i.test(name);
   }
 
+  function isPreviewableCode(name) {
+    return typeof name === "string" && /\.(markdown|js|mjs|cjs|jsx|ts|tsx|css|html?|go|py|sh|bash|sql|rs|java|c|h|cpp|hpp|diff|patch)$/i.test(name);
+  }
+
+  function isPreviewableMedia(name) {
+    return Boolean(window.WPSMediaPlayer && window.WPSMediaPlayer.supports(name));
+  }
+
   function isPreviewable(name) {
-    return isPreviewableText(name) || isPreviewableImage(name) || /\.pdf$/i.test(name);
+    return isPreviewableText(name) || isPreviewableCode(name) || isPreviewableImage(name) || isPreviewableMedia(name) || /\.pdf$/i.test(name);
   }
 
   let previewGallery = [];
   let previewGalleryIndex = -1;
 
   function clearMediaPreview() {
+    if (mediaPlayer) mediaPlayer.clear();
+    if (window.WPSRichPreview) window.WPSRichPreview.clearPreview();
     for (const media of $("preview-media").querySelectorAll("img, iframe")) {
       media.onload = null;
       media.onerror = null;
@@ -2074,8 +2161,8 @@
     $("preview-media-toolbar").hidden = true;
   }
 
-  function previewFile(entry, path, galleryNavigation = false) {
-    if (isPreviewableText(entry.name)) {
+  function previewFile(entry, path, galleryNavigation = false, mediaAutoplay = false) {
+    if (isPreviewableText(entry.name) || isPreviewableCode(entry.name)) {
       previewText(entry, path);
       return;
     }
@@ -2097,6 +2184,13 @@
     $("preview-download").disabled = false;
     $("preview-note").hidden = isImage;
     $("preview-note").textContent = isImage ? "" : "PDF 使用浏览器内置阅读器；若未显示内容，请下载后查看。";
+    if (isPreviewableMedia(entry.name) && mediaPlayer) {
+      $("preview-meta").textContent = `${formatBytes(entry.size)} · 音视频播放`;
+      $("preview-note").hidden = true;
+      mediaPlayer.open(entry, path, sortedEntries(parentPath(path) === state.path ? state.entries : []).filter((item) => item.kind === "file" && isPreviewableMedia(item.name)).map((item) => ({ entry: item, path: joinPath(state.path, item.name) })), mediaAutoplay);
+      if (!$("preview-modal").open) $("preview-modal").showModal();
+      return;
+    }
     const container = $("preview-media");
     container.hidden = false;
     const media = document.createElement(isImage ? "img" : "iframe");
@@ -2178,6 +2272,7 @@
   }
 
   function renderPreview() {
+    if (window.WPSRichPreview) window.WPSRichPreview.clearPreview();
     if (!previewBytes) return;
     const content = $("preview-content");
     const selected = $("preview-encoding").value;
@@ -2204,6 +2299,7 @@
       if (text.includes("\ufffd")) notes.push("部分字符无法解码，请尝试切换编码。");
       $("preview-note").textContent = notes.join(" ");
       $("preview-note").hidden = notes.length === 0;
+      if (window.WPSRichPreview) window.WPSRichPreview.renderText({ text, path: previewTarget.path, name: previewTarget.entry.name, truncated: previewTruncated });
     } catch (error) {
       $("preview-error").textContent = error.message || "文本解码失败，请切换编码或下载查看。";
     }
@@ -3501,6 +3597,21 @@
     $("drop-overlay").classList.remove("active");
     $("drop-overlay").setAttribute("aria-hidden", "true");
   }
+
+  if (window.WPSMediaPlayer) mediaPlayer = window.WPSMediaPlayer.init({
+    username: () => webUser && webUser.username,
+    source: (path) => pathUrl("preview", path).toString(),
+    open: (entry, path, autoplay) => previewFile(entry, path, false, autoplay),
+  });
+
+  if (window.WPSRichPreview) window.WPSRichPreview.init({
+    navigate: (path) => load(path),
+    preview: (entry, path) => previewFile(entry, path),
+    canPreview: (entry) => entry.kind === "file" && isPreviewable(entry.name),
+    metadata: async (path) => (await api("metadata", path)).entry,
+    closePreview,
+    onError: (error) => showError(error, { notify: false }),
+  });
 
   if (window.WPSTaskCenter) taskCenter = window.WPSTaskCenter.init({
     request: apiRequest,

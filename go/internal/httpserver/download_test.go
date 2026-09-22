@@ -591,7 +591,7 @@ func TestRESTPreviewRejectsUnsupportedFiles(t *testing.T) {
 	if recorder.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d body = %q", recorder.Code, recorder.Body.String())
 	}
-	if recorder.Body.String() != `{"error":"only supported text, image and PDF files can be previewed"}` {
+	if recorder.Body.String() != `{"error":"only supported text, image, PDF, audio and video files can be previewed"}` {
 		t.Errorf("body = %q", recorder.Body.String())
 	}
 }

@@ -179,6 +179,8 @@ type RESTDispatcher struct {
 	taskIdentity   func() ([32]byte, error)
 	textOnce       sync.Once
 	textEditor     *textEditorState
+	thumbnailOnce  sync.Once
+	thumbnails     *thumbnailState
 }
 
 // SetStorageLocations enables the authenticated storage-location settings
@@ -414,6 +416,8 @@ func (d *RESTDispatcher) doGet(w http.ResponseWriter, r *http.Request, route RES
 	switch route.Suffix {
 	case "entries", "list":
 		return d.doEntries(w, r, path)
+	case "thumbnail":
+		return d.doThumbnail(w, r, path)
 	case "storage/entries":
 		return d.doStorageEntries(w, r, path)
 	case "metadata":

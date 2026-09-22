@@ -1,0 +1,31 @@
+.rich-preview { max-height: 60dvh; overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.rich-document { color: var(--text); line-height: 1.7; overflow-wrap: anywhere; }
+.rich-document > :first-child { margin-top: 0; }
+.rich-document > :last-child { margin-bottom: 0; }
+.rich-document h1, .rich-document h2, .rich-document h3 { line-height: 1.35; margin: 1em 0 .5em; }
+.rich-document h1 { font-size: 1.65em; }
+.rich-document h2 { font-size: 1.4em; }
+.rich-document h3 { font-size: 1.2em; }
+.rich-document ul, .rich-document ol { padding-left: 1.8em; }
+.rich-document a[href] { color: var(--accent-deep); text-decoration: underline; cursor: pointer; }
+.rich-disabled-link, .rich-image-placeholder { color: var(--text-3); }
+.rich-document blockquote { margin: 14px 0; padding: 2px 14px; border-left: 3px solid var(--line-strong); color: var(--text-2); }
+.rich-document pre { background: var(--surface-2); padding: 12px; overflow: auto; border-radius: 8px; line-height: 1.55; }
+.rich-document code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .9em; white-space: pre; }
+.rich-document :not(pre) > code { white-space: break-spaces; background: var(--surface-2); padding: .1em .3em; border-radius: 4px; }
+.rich-document table { display: block; width: max-content; max-width: 100%; overflow: auto; border-collapse: collapse; }
+.rich-document th, .rich-document td { padding: 7px 11px; border: 1px solid var(--line-strong); text-align: left; }
+.rich-document th { background: var(--surface-2); }
+.rich-document img { max-width: 100%; max-height: 480px; height: auto; object-fit: contain; }
+.readme-panel { margin-top: 20px; padding: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.readme-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.readme-heading h2 { font-size: 15px; margin: 0; }
+.readme-panel .rich-document { max-height: 600px; overflow: auto; }
+/* Scoped original token colors use existing light/dark design tokens. */
+.rich-document .hljs-comment, .rich-document .hljs-quote { color: var(--text-3); font-style: italic; }
+.rich-document .hljs-keyword, .rich-document .hljs-selector-tag, .rich-document .hljs-literal { color: var(--accent-deep); font-weight: 600; }
+.rich-document .hljs-string, .rich-document .hljs-regexp, .rich-document .hljs-addition { color: var(--ok); }
+.rich-document .hljs-number, .rich-document .hljs-symbol, .rich-document .hljs-attr { color: var(--warn); }
+.rich-document .hljs-title, .rich-document .hljs-function, .rich-document .hljs-built_in { color: var(--accent); }
+.rich-document .hljs-deletion, .rich-document .hljs-tag { color: var(--bad); }
+@media (max-width: 640px) { .readme-panel { padding: 14px; } .rich-preview { padding: 12px; } }

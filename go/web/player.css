@@ -1,0 +1,19 @@
+.preview-media.has-player { display: flex; flex-direction: column; align-items: stretch; padding: 14px; overflow: auto; max-height: min(68vh, 720px); }
+.native-player { display: block; width: 100%; max-width: 100%; }
+video.native-player { max-height: min(45vh, 480px); min-height: 180px; background: #101218; object-fit: contain; }
+audio.native-player { min-height: 54px; }
+.player-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.player-toolbar button, .player-subtitles button { min-height: 32px; padding: 5px 10px; font-size: 13px; }
+.player-toolbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.player-toolbar select { width: auto; padding: 5px; }
+.player-playlist { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 13px; }
+.player-playlist select { flex: 1; min-width: 0; width: 100%; padding: 6px; text-overflow: ellipsis; }
+.player-progress-note { margin: 10px 0 0; }
+.player-subtitles { display: flex; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+.player-subtitle-note { flex-basis: 100%; overflow-wrap: anywhere; margin: 0; }
+@media (max-width: 767px) {
+  .preview-media.has-player { padding: 10px; max-height: 61dvh; }
+  video.native-player { min-height: 130px; max-height: 32dvh; }
+  .player-playlist { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .player-toolbar { gap: 6px; }
+}

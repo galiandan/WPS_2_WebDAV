@@ -78,7 +78,19 @@ PATCH /api/v1/storage
 
 重命名时，`PATCH` 请求体使用 JSON，例如 `{"name":"new-name.txt"}`。也接受字段名 `fname` 以便与 WPS 字段对应。移动到目标目录并保留原名时使用 `{"parent_path":"/folder"}`；也可以使用完整目标路径 `{"destination":"/folder/file.txt"}`。适配器会使用自己的 secret 中的 CSRF，不使用调用方提交的认证值。
 
-其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。 图片和 PDF 使用同一 `GET /api/v1/preview` 路由，支持 JPG/JPEG、PNG、GIF、WebP、AVIF、BMP、ICO、PDF（不区分大小写），按允许列表设置类型并返回 `Content-Disposition: inline`，复用下载并发、流式读取和单 Range 能力，不套用文本的 2 MiB 截断规则。HTML 和 SVG 不提供在线预览。PDF 由浏览器内置阅读器显示；不支持的浏览器可下载查看。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+其中 `GET entries`、`metadata`、`download`、`preview`、`PUT upload`、`POST folders`、`DELETE entries`、`PATCH entries` 和 WebDAV `MOVE` 已连接到企业和个人 WPS 原型；个人端自动使用 `drive.wps.cn/api/...`，企业端使用 `365.kdocs.cn/3rd/drive/api/...`。`preview` 接受 `.txt`、`.log`、`.md`、`.csv`、`.json`、`.xml`、`.yaml`、`.yml`、`.ini`、`.conf`、`.toml`（不区分大小写），默认最多返回前 2 MiB 原始字节。响应类型为 `application/octet-stream`，不声明文本编码，不返回下载附件头；包含 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Preview-Limit`（字节上限）和 `X-Preview-Truncated`（是否截断）。网页使用 BOM / UTF-8 检查并回退到 GB18030，支持手动选择 UTF-8、GB18030/GBK、Big5 和 UTF-16 LE/BE；切换编码复用已读字节。截断时隐藏末尾不完整字符，显示实际读取上限。文本仅作为纯文本展示；含二进制控制字符时提示切换编码或下载。关闭预览会取消读取。 图片和 PDF 使用同一 `GET /api/v1/preview` 路由，支持 JPG/JPEG、PNG、GIF、WebP、AVIF、BMP、ICO、PDF（不区分大小写），按允许列表设置类型并返回 `Content-Disposition: inline`，复用下载并发、流式读取和单 Range 能力，不套用文本的 2 MiB 截断规则。HTML 源码可按纯文本/语法高亮查看，但不会按网页执行；SVG 不提供在线预览。PDF 由浏览器内置阅读器显示；不支持的浏览器可下载查看。`PUT upload` 对大文件会透明选择分片上传。COPY 在适配器层通过已有的下载/上传能力完成，不需要新的 WPS API。跨目录同时改名仍返回 `501`。上传请求需要 `Content-Length`，文件内容不会被适配器作为长期缓存保存。
+
+### 音视频、源码与缩略图
+
+`GET /api/v1/preview` 额外允许 MP4/M4V、WebM、OGV、MP3、M4A、AAC、OGG/OGA、WAV、FLAC，以允许列表 MIME 内联返回，复用单 Range 流式下载。实际能否播放取决于浏览器编解码器，无转码服务。网页提供同目录播放列表、倍速、播放进度记忆与本地 VTT/SRT 字幕；字幕不上传。
+
+源码预览扩展至 `.markdown/.js/.mjs/.cjs/.ts/.jsx/.tsx/.go/.py/.sh/.bash/.css/.html/.htm/.sql/.rs/.java/.c/.h/.cpp/.hpp/.diff/.patch`。这些文件与纯文本一样作为有上限的 `application/octet-stream` 字节返回，HTML 不作为活动文档执行。编辑和新建文本的扩展名限制不因此扩大。
+
+`GET /api/v1/thumbnail?path=...` 为 JPEG、PNG、GIF 首帧生成保持比例、最长边 256 像素的 JPEG，透明背景合成为白色。输入最多 8 MiB、800 万像素、单边 8192 像素；输出最多 128 KiB。服务端仅 1 个活动生成任务，最多 8 个等待者、等待 15 秒；关闭连接会取消读取与缩放。超限返回 507，不支持格式返回 501，读取/解码失败提供脱敏错误，前端保留文件图标。
+
+有账号/工作区指纹和文件版本时，服务端缓存最多 64 张、4 MiB、5 分钟；键包含文件路径、元数据及私有身份。没有身份或版本则不缓存。浏览器响应使用 `no-store`，不长期保存私有缩略图。
+
+富文本使用内嵌 marked、DOMPurify 与 highlight.js，在 Web Worker 内解析/高亮，2 秒后可中止；输入最多 256 KiB，生成 HTML 最多 1 MiB，最多 10000 个元素，长代码块回退原文。原始 HTML 转义后再清理，链接仅允许 HTTP(S) 或已规范化的适配器内部路径，相对图片只允许本适配器安全图片预览；远程图片、脚本、SVG/data URL 不自动加载。目录 `README.md` 使用同样规则显示，目录切换取消旧请求。
 
 ### 持久化后台任务
 

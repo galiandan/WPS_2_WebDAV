@@ -55,3 +55,7 @@ GitHub CI 会运行此目录的全部离线浏览器脚本，并保留截图供�
 文本编辑回归：运行 `python test/ui-offline/text_edit.py`，覆盖编辑版本、UTF-8 保存、中文编码、空文件、冲突与失败保留草稿、取消读取和保存状态；截图在 `/tmp/wps-text-editor-desktop.png` 和 `/tmp/wps-text-editor-mobile.png`。
 
 后台任务中心回归：运行 `python test/ui-offline/tasks.py`，覆盖服务端排队、页面刷新、部分失败、受控重试、取消期间的旧轮询响应、登录过期和本页上传状态；截图在 `/tmp/wps-tasks-desktop.png` 和 `/tmp/wps-tasks-mobile.png`。
+
+音视频与缩略图回归：运行 `python test/ui-offline/media_player.py`，使用合成 WAV/WebM 验证实际播放、Range、倍速、进度恢复、本地 VTT/SRT 字幕、关闭清理及网格缩略图退回图标。样本来源见 fixtures/README.md，无 FFmpeg 运行时依赖。截图在 `/tmp/wps-media-player-desktop.png` 和 `/tmp/wps-media-player-mobile.png`。
+
+富文本回归：运行 `python test/ui-offline/rich_preview.py`，覆盖 Markdown/源码、原文切换、编码、恶意 HTML/URL、外部请求隔离、规范化相对路径、渲染预算与工作线程超时、README 导航竞态及手机布局。截图在 `/tmp/wps-rich-preview-desktop.png` 和 `/tmp/wps-rich-preview-mobile.png`。

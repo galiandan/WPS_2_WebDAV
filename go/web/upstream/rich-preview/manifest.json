@@ -1,0 +1,35 @@
+[
+  {
+    "project": "marked",
+    "version": "18.0.13",
+    "license": "MIT",
+    "package_url": "https://registry.npmjs.org/marked/-/marked-18.0.13.tgz",
+    "package_integrity": "sha512-xTxVzZsBFwunP6HDmtBkabUQEYArnP7/rMDGmPj9SlrKlQ4i8MdYVow+nJL0eOqwpUqhzBoTBRADGN6uYwPyOw==",
+    "upstream_file": "lib/marked.umd.js",
+    "asset": "vendor-marked.js",
+    "size": 45843,
+    "sha256": "b147274a9ce27d17276587167e49483d719f6893eeca3a3667a59797661d3556"
+  },
+  {
+    "project": "dompurify",
+    "version": "3.4.15",
+    "license": "(MPL-2.0 OR Apache-2.0)",
+    "package_url": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.15.tgz",
+    "package_integrity": "sha512-EUBjM+B+lkDE41iE82DDSCfkoPGfXx8IxFxPMjNzm/Uk4xDet77rTN9wqlxlVg71kK7XGuUMv6wUxJUwwv+Xyw==",
+    "upstream_file": "dist/purify.min.js",
+    "asset": "vendor-purify.js",
+    "size": 29369,
+    "sha256": "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5"
+  },
+  {
+    "project": "highlight",
+    "version": "11.12.0",
+    "license": "BSD-3-Clause",
+    "package_url": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "package_integrity": "sha512-KvOKXODaiFmId9xaq3xc5xCL66wVLUuOngDbO9B/kewbFTqdGbn2nJxNhN3H5R1cgDTVj6R8vH0zgiNDEGjpDw==",
+    "upstream_file": "highlight.min.js",
+    "asset": "vendor-highlight.js",
+    "size": 129254,
+    "sha256": "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53"
+  }
+]
