@@ -62,6 +62,8 @@ async def main():
                 data = {'version': 'offline'}
             elif path.endswith('/update'):
                 data = {'state': 'idle', 'update_available': False}
+            elif path.endswith('/transfers'):
+                data = {'tasks': []}
             elif path.endswith('/tasks'):
                 data = {'tasks': []}
             elif path.endswith('/entries'):

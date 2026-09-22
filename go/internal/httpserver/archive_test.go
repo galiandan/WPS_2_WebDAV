@@ -65,6 +65,28 @@ func archiveDispatcher(t *testing.T, f *archiveStorageFake) *RESTDispatcher {
 	return newReadDispatcherDownloads(t, f, nil, f)
 }
 
+type replacingArchiveSource struct{ *archiveStorageFake }
+
+func (f replacingArchiveSource) OpenPath(ctx context.Context, path string, offset int64, length *int64) (DownloadStream, error) {
+	stream, err := f.archiveStorageFake.OpenPath(ctx, path, offset, length)
+	replacement := f.entries[path]
+	replacement.ID = "replacement"
+	f.entries[path] = replacement
+	return stream, err
+}
+
+func TestArchiveRejectsReplacementWhileOpeningStream(t *testing.T) {
+	entry := archiveFile("original", "a.txt", "secret")
+	stream := newFakeStream("secret", entry.Size)
+	fake := &archiveStorageFake{entries: map[string]model.RemoteEntry{"/a.txt": entry}, streams: map[string]DownloadStream{"/a.txt": stream}}
+	d := newReadDispatcherDownloads(t, fake, nil, replacingArchiveSource{fake})
+	var output bytes.Buffer
+	_, err := d.copyArchiveFile(context.Background(), &output, archiveItem{path: "/a.txt", name: "a.txt", entry: entry}, 100, make([]byte, 32))
+	if err == nil || output.Len() != 0 || stream.closeCalls() != 1 {
+		t.Fatalf("replacement streamed: err=%v bytes=%d closes=%d", err, output.Len(), stream.closeCalls())
+	}
+}
+
 func TestArchiveStreamsNestedFilesEmptyFoldersAndLiteralNames(t *testing.T) {
 	for _, transport := range []string{"json", "form", "get"} {
 		t.Run(transport, func(t *testing.T) {

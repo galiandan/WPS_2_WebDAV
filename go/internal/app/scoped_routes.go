@@ -162,6 +162,12 @@ func (a *Application) serveScopedREST(w http.ResponseWriter, r *http.Request, ro
 		}
 		return memberDenied()
 	}
+	if route.Suffix == "transfers" || strings.HasPrefix(route.Suffix, "transfers/") {
+		if a.Transfers == nil {
+			return memberDenied()
+		}
+		return a.Transfers.Serve(w, r, route)
+	}
 	if route.Suffix == "shares" || strings.HasPrefix(route.Suffix, "shares/") {
 		if a.Shares == nil {
 			return memberDenied()

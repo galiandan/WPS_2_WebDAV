@@ -55,6 +55,7 @@ type Application struct {
 	// Assembled services, in construction order.
 	Settings       *workspace.WebSettings
 	Accounts       *accounts.Store
+	Transfers      *httpserver.TransferController
 	Shares         *httpserver.ShareController
 	AccountHub     *auth.AccountStores
 	memberMu       sync.Mutex
@@ -334,6 +335,9 @@ func New(cfg config.Config, version string, options ...Option) (*Application, er
 		return fail(err)
 	}
 	if err := application.initShares(); err != nil {
+		return fail(err)
+	}
+	if err := application.initTransfers(); err != nil {
 		return fail(err)
 	}
 	return application, nil
@@ -875,6 +879,9 @@ func (a *Application) RESTPrefix() string {
 // Close releases the shared transports. Assembly failures and process
 // shutdown both call it; individual in-flight requests drain before that.
 func (a *Application) Close() {
+	if a.Transfers != nil {
+		a.Transfers.Close()
+	}
 	a.stopMemberServices()
 	if a.rest != nil {
 		a.rest.CancelSearch()

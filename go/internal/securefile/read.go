@@ -100,6 +100,27 @@ func ValidateStatePath(path string) error {
 	return checkStatePath(path)
 }
 
+// OpenPrivateRegular opens a private binary file without following a final
+// symlink and validates its type, owner and permissions after opening. The
+// caller owns the returned handle. maxBytes <= 0 disables the size check.
+func OpenPrivateRegular(path string, maxBytes int64) (*os.File, error) {
+	if !supported() {
+		return nil, errCode(CodeUnsupportedPlatform)
+	}
+	if err := checkStatePath(path); err != nil {
+		return nil, err
+	}
+	file, err := openSecure(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := checkAfterOpen(file, maxBytes); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
 // checkStatePath applies shape, parent, and pre-open file checks shared by
 // ReadJSONState and ValidateStatePath.
 func checkStatePath(path string) error {

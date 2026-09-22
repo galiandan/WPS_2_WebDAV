@@ -25,8 +25,10 @@ func ownedByService(info os.FileInfo) bool {
 
 // openSecure opens read-only with O_NOFOLLOW and O_CLOEXEC so a symlink
 // swapped in after the pre-open check fails instead of being followed.
+// O_NONBLOCK prevents a swapped FIFO from waiting for a writer before the
+// caller can reject it with the post-open regular-file check.
 func openSecure(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, errCode(CodeOpenMissing)

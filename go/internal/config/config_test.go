@@ -12,7 +12,7 @@ import (
 // deterministic blank slate.
 var allEnvNames = []string{
 	"WPS_CREDENTIAL_REFRESH_COMMAND", "WPS_GROUP_ID", "WPS_ROOT_ID",
-	"WPS_WORKSPACE_FILE", "WPS_WEB_SETTINGS_FILE", "WPS_TASKS_FILE", "WPS_USERS_FILE", "WPS_SHARES_FILE", "WPS_COOKIE_FILE", "WPS_CSRF_TOKEN_FILE",
+	"WPS_WORKSPACE_FILE", "WPS_WEB_SETTINGS_FILE", "WPS_TASKS_FILE", "WPS_USERS_FILE", "WPS_SHARES_FILE", "WPS_TRANSFERS_FILE", "WPS_TRANSFER_DATA_DIR", "WPS_COOKIE_FILE", "WPS_CSRF_TOKEN_FILE",
 	"WPS_CREDENTIAL_REFRESH_TIMEOUT", "WPS_BASE_URL", "WPS_ACCOUNT_BASE_URL", "WPS_MODE",
 	"WPS_OBJECT_STORAGE_HOST_SUFFIX", "WPS_AUTO_REFRESH", "WPS_REFERER",
 	"WPS_ORIGIN", "WPS_CID", "WPS_TIMEOUT", "WPS_STATUS_PROBE_TTL",
@@ -145,6 +145,38 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ResolvedGroupID() != "" {
 		t.Errorf("ResolvedGroupID = %q, want empty", cfg.ResolvedGroupID())
+	}
+}
+
+func TestTransferStatePaths(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.TransfersFile != filepath.Join(filepath.Dir(cfg.WebSettingsDir), "transfers.json") || cfg.TransferDataDir != "" {
+		t.Fatalf("transfer defaults: %q %q err=%v", cfg.TransfersFile, cfg.TransferDataDir, err)
+	}
+	private := mkPrivateDir(t)
+	state := filepath.Join(private, "transfers.json")
+	t.Setenv("WPS_TRANSFERS_FILE", state)
+	t.Setenv("WPS_TRANSFER_DATA_DIR", private)
+	cfg, err = Load()
+	if err != nil || cfg.TransfersFile != state || cfg.TransferDataDir != private {
+		t.Fatalf("transfer overrides: %q %q err=%v", cfg.TransfersFile, cfg.TransferDataDir, err)
+	}
+	for _, name := range []string{"WPS_TRANSFERS_FILE", "WPS_TRANSFER_DATA_DIR"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "relative")
+			if _, err := Load(); err == nil {
+				t.Fatal("relative transfer path accepted")
+			}
+		})
+	}
+	link := filepath.Join(mkPrivateDir(t), "linked")
+	if err := os.Symlink(private, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WPS_TRANSFER_DATA_DIR", link)
+	if _, err := Load(); err == nil {
+		t.Fatal("symlinked transfer directory accepted")
 	}
 }
 

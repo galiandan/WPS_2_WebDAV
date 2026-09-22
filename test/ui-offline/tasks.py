@@ -75,6 +75,8 @@ async def main():
                 data = {'entries': [file(SPACE[1:], 'folder')] if folder == '/' else list(files) if folder == SPACE else []}
                 if folder == '/':
                     data['entries'][0]['id'] = 'space:test'
+            elif path.endswith('/transfers'):
+                data = {'tasks': []}
             elif path.endswith('/tasks') and request.request.method == 'GET':
                 reads += 1
                 if unauthorized:
@@ -135,7 +137,7 @@ async def main():
         await expect(page.locator('#tasks-modal')).to_be_visible()
         await expect(page.locator('#tasks-count')).to_have_text('1')
         await expect(page.locator('.task-summary')).to_have_text('已处理 0 / 2 项 · 成功 0 项 · 失败 0 项')
-        await expect(page.locator('#tasks-modal')).to_contain_text('关闭页面仍会继续')
+        await expect(page.locator('#tasks-modal')).to_contain_text('关闭页面后继续处理')
         assert set(mutations[0][1]['paths']) == {SPACE + '/a.txt', SPACE + '/' + SPECIAL}
         await page.locator('#tasks-close').click()
         await expect(page.locator('#upload-button')).to_be_enabled()

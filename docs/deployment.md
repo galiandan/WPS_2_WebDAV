@@ -32,7 +32,7 @@ set -o pipefail; curl -fL --progress-bar --connect-timeout 10 --max-time 120 'ht
 
 安装器会按 `[当前阶段/总阶段]` 输出进度。预编译二进制和源码归档下载都会显示进度；只有进入回退路径时，Native 才会检查/下载 Go `1.25+` 并现场构建。Docker 会在发行版提供时自动安装 Buildx，预编译路径和源码路径都优先使用 Buildx 和逐行构建输出；旧发行版没有插件时使用兼容构建器。源码回退时 Docker 才会下载配置的 Go 构建镜像。若地址无响应，会在超时后退出，不会无限卡住。
 
-预编译 Release 默认标签为 `v1.0.16`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
+预编译 Release 默认标签为 `v1.6.0`，资产名为 `wps-adapter-linux-amd64`、`wps-adapter-linux-arm64`、`wps-adapter-linux-386`、`wps-adapter-linux-armv6`、`wps-adapter-linux-armv7`、`wps-adapter-linux-ppc64le`、`wps-adapter-linux-riscv64` 和 `wps-adapter-linux-s390x`。可用 `WPS_ADAPTER_BINARY_RELEASE_TAG` 和 `WPS_ADAPTER_BINARY_BASE_URL` 指向自己的 Release 目录；后者必须是 HTTPS 目录地址，安装器会在末尾追加资产文件名。
 
 手动使用 Compose 且 Docker Hub 访问不稳定时，可在构建前指定镜像：
 
@@ -255,3 +255,15 @@ Docker 和 systemd 安装的默认私有配置目录已提供持久化和写权�
 ### 分享状态
 
 `shares.json` 默认与网页设置同目录，可通过 `WPS_SHARES_FILE` 指定；以 `0600` 保存分享目标、所有者、有效期及密钥/提取码验证值，不保存明文链接密钥或提取码。访客授权 Cookie 的验证状态仅保留在内存，重启后需重新打开原分享链接。分享必须在配置了适配器账号后使用。
+
+### 离线下载与后台 ZIP 存储
+
+从 1.6.0 起，已登录账号可提交后台 ZIP；具有上传权限的账号还可将公网 HTTP(S) 文件下载到 WPS。服务端执行不依赖网页保持打开，传输记录默认保存在网页设置同目录的 `transfers.json`，可用 `WPS_TRANSFERS_FILE` 指定绝对路径。文件以 `0600` 原子保存，父目录必须私有且允许服务用户创建和替换文件。源 URL 可能含查询参数凭据，会随记录私有保存以支持重试；不会进入公共任务状态、服务日志或浏览器存储，不应公开任务记录或将其加入仓库。
+
+临时文件与 ZIP 结果默认放在实际上传 spool 目录下的 `transfers/`；正常一键安装通常为部署目录的 `data/uploads/transfers/`。可设置 `WPS_TRANSFER_DATA_DIR` 为专用绝对路径，目录权限为 `0700`，文件为 `0600`，不允许符号链接路径。需要容器重建后继续下载未过期 ZIP 时，应将任务文件与结果目录都保存在持久卷。systemd 自定义目录需加入服务的 `ReadWritePaths`；Docker 需提供对应可写挂载并保持服务用户所有权。使用系统临时目录时，系统清理或重启可能提前移除 ZIP 结果。
+
+传输队列使用一个工作线程，最多 16 个排队/执行任务和 100 条历史记录；与复制/移动/删除任务队列分开。单任务最多 1 GiB、设 30 分钟执行预算（已进入 WPS 上传的在途请求可能在预算到期后继续，需核对结果），临时文件与保留的 ZIP 总计最多 2 GiB。离线下载另受 `WPS_MAX_UPLOAD_BYTES` 限制，设置为 `0` 也不能解除 1 GiB 上限。后台 ZIP 的大小包含目录等归档开销，预估超限时也会拒绝。传输复用 `WPS_MAX_UPLOADS`、`WPS_MAX_DOWNLOADS` 和 `WPS_UPLOAD_MIN_FREE_BYTES`，默认仍保留至少 512 MiB 磁盘空闲；2 GiB 目录上限不是预先分配磁盘空间。离线下载会消耗 VPS 的下载与上传带宽，后台 ZIP 会消耗从 WPS 读取和向浏览器发送的带宽。
+
+远端地址仅允许公网 HTTP(S)，每次 DNS 解析和重定向都检查地址并固定连接 IP，最多跟随 5 次重定向。不使用环境代理，不接受 URL 账号密码、自定义认证头、FTP 或种子；不会发送或继承 Cookie、Authorization、Referer。需要登录或特殊请求头的下载站点不适用。
+
+ZIP 结果在生成完成 1 小时后失效并清理，过期后需重新打包。取消下载/打包会清理未完成临时文件；进入 WPS 上传阶段后不能取消或重试，失败、超时或中断后应先核对目标目录。服务重启将未完成任务标记中断，不会自动重放；尚未开始上传的任务才可能提供受控重试。状态损坏或启动时无法持久化会阻止服务启动，运行中状态写入失败会停止启动新任务；修复路径、权限或磁盘问题后重启。

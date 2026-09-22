@@ -52,6 +52,8 @@ async def owner_tests(browser):
             data = {'authenticated': True, 'user': {'id': 'reader', 'username': 'reader', 'role': 'member', 'policy_version': 1, 'permissions': {'read': True, 'upload': False, 'delete': False}}}
         elif path.endswith('/status'):
             data = {'status': 'connected'}
+        elif path.endswith('/transfers'):
+            data = {'tasks': []}
         elif path.endswith('/tasks'):
             data = {'tasks': []}
         elif path.endswith('/entries'):

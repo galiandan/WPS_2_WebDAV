@@ -1,0 +1,7 @@
+.transfer-dialog { width: min(580px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+.transfer-form { width: 100%; max-width: none; }
+.transfer-field { display: flex; flex-direction: column; gap: 7px; margin: 15px 0; font-size: 13px; }
+.transfer-field input { width: 100%; }
+.transfer-destination { font-size: 13px; overflow-wrap: anywhere; color: var(--text-2); }
+
+#offline-download-button[hidden], #background-archive[hidden] { display: none !important; }

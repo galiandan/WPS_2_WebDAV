@@ -114,6 +114,8 @@ async def main():
                     users[:] = [user for user in users if user['id'] != identifier]
                     await request.fulfill(status=204)
                     return
+            elif path.endswith('/transfers'):
+                data = {'tasks': []}
             elif path.endswith('/tasks'):
                 if expired:
                     await request.fulfill(status=401, json={'error': '登录过期'})
@@ -212,7 +214,7 @@ async def main():
         await expect(page.locator('#space-root')).to_have_text('我的文件')
         for identifier in ['users-button', 'version-button']:
             await expect(page.locator('#' + identifier)).to_be_hidden()
-        for identifier in ['upload-button', 'upload-folder-button', 'folder-button', 'text-file-button']:
+        for identifier in ['upload-button', 'upload-folder-button', 'folder-button', 'text-file-button', 'offline-download-button']:
             await expect(page.locator('#' + identifier)).to_be_disabled()
         before = len(mutations)
         await page.evaluate('document.getElementById("folder-button").disabled=false; document.getElementById("folder-button").click(); document.getElementById("users-button").click();')

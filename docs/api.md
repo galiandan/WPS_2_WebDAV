@@ -6,7 +6,7 @@
 
 打开 `http://<服务器地址>:<端口>/` 会进入内置登录页面；网页直接使用安装时设置的适配器 Basic Auth 账号，不再触发浏览器原生 Basic Auth 弹窗。登录后可以浏览目录、打开文件夹、上传文件、在线浏览纯文本文件、下载文件、新建文件夹、重命名、移动和删除。左侧提供多级目录树：箭头展开或收起，点击名称进入目录；当前目录精确高亮，从面包屑、列表或直接链接进入深层目录时自动展开路径。目录树只列文件夹，按需读取一层并复用目录缓存；空目录、失败重试和目录变更同步均在侧栏显示。支持键盘左右键展开/收起和父子目录间移动，手机端从导航按钮打开抽屉。列表和网格视图中，双击支持预览的文件即可打开在线浏览，也可通过文件菜单进入。 文件工具栏的“新建文本文件”支持填写名称和内容，以 UTF-8 在当前目录创建可预览格式的文件（支持空文件），复用 PUT /api/v1/upload 且不覆盖同名项目。保存失败或关闭窗口后草稿保留在当前页面，并保持原目标目录；刷新或离开页面会丢失草稿。点击右上角齿轮可以直接修改云盘显示名称；页面只调用同源 REST 接口，上传使用浏览器请求体直接送入适配器，下载由适配器流式转发到浏览器。当前目录读取完成后，网页会在后台以单并发预取最多 8 个直接子文件夹，缓存 30 秒；进入已预取或已经访问过的文件夹时，网页先立即显示缓存内容，再后台刷新，不会先清空列表等待 WPS。状态检查仅用于后台状态徽标，不会阻塞目录导航。刷新目录或执行写操作会清理这批缓存。
 
-网页不提供注册功能，也不创建额外的用户数据库。唯一网页登录账号就是安装时写入 `/opt/wps-adapter/config/secrets/adapter-username` 和 `/opt/wps-adapter/config/secrets/adapter-password` 的适配器账号；浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。替换这两个文件后，网页登录和 WebDAV 会同时使用新凭据。
+网页不提供自行注册功能。安装管理员使用 `/opt/wps-adapter/config/secrets/adapter-username` 和 `/opt/wps-adapter/config/secrets/adapter-password` 中的适配器账号，也可在设置中创建具有独立目录权限的成员。浏览器会话使用 HttpOnly Cookie，服务重启后会话失效。替换管理员凭据文件后，其网页登录和 WebDAV 同时使用新凭据；成员使用各自账号。
 
 
 文本阅读交互参考 [OpenList 文本预览](https://github.com/OpenListTeam/OpenList-Frontend/blob/4520f96204408982a563e6a075adc020bac5dccb/src/pages/home/previews/text-editor.tsx)和[编码选择](https://github.com/OpenListTeam/OpenList-Frontend/blob/4520f96204408982a563e6a075adc020bac5dccb/src/components/EncodingSelect.tsx)；本项目使用原生 `TextDecoder` 和 `<pre>` 实现只读预览，无需加载外部编辑器。
@@ -43,7 +43,7 @@ WebDAV `PUT` 对同名文件执行覆盖更新；REST `PUT` 默认不覆盖同�
 
 ## REST
 
-所有 `path` 都是 URL 查询参数，值是以 `/` 开头的远端路径。网页认证接口如下：
+远端路径以 `/` 开头，并相对于当前账号可访问的根目录；下列单文件接口使用 URL 查询参数，批量与传输接口按各自说明使用 JSON 路径字段。网页认证接口如下：
 
 ```text
 GET  /api/v1/auth/me
@@ -51,7 +51,7 @@ POST /api/v1/auth/login
 POST /api/v1/auth/logout
 ```
 
-`login` 接收 `{"username":"...","password":"..."}`，凭据必须与安装时的适配器账号一致；成功后通过 HttpOnly `wps_session` Cookie 建立会话。认证接口和网页资源可以匿名访问；文件、设置和 WPS 状态接口必须有网页会话或适配器 Basic Auth。WebDAV 始终使用 Basic Auth，不接受网页会话 Cookie。
+`login` 接收 `{"username":"...","password":"..."}`，凭据来自安装管理员或已启用的成员账号；成功后通过 HttpOnly `wps_session` Cookie 建立会话。认证接口和网页资源可以匿名访问；启用认证后，文件、设置和 WPS 状态接口必须有网页会话或适配器 Basic Auth，并受账号权限约束。WebDAV 始终使用 Basic Auth，不接受网页会话 Cookie。离线下载与后台 ZIP 必须启用认证，即使其他文件接口采用无认证部署也不会开放。
 
 文件 API：
 
@@ -123,7 +123,7 @@ PATCH /api/v1/storage
 
 每个成员独立保存 2FA、恢复码与 Passkey，登录时 Passkey 选项可带 `username`；不提供用户名时保持安装管理员的兼容行为。管理员原有 `auth-settings.json` 无需迁移，成员使用独立的 `auth-<id>.json`。
 
-任务使用单个共享工作线程和既有全局预算，成员只能列出/查询/取消/重试自己当前策略下的记录，其他任务 ID 返回 404。成员搜索不共享结果或总数；最多缓存 8 个成员服务，每个索引最多 5000 项、1000 个目录和 4 MiB，所有账号共享一个扫描许可。缩略图生成与编辑内存许可也保持全局共享。
+复制/移动/删除队列与离线下载/后台 ZIP 队列各使用单个工作线程，共用既有上传/下载和磁盘预算。成员只能列出/查询/取消/重试自己当前策略下的记录，其他任务 ID 返回 404。成员搜索不共享结果或总数；最多缓存 8 个成员服务，每个索引最多 5000 项、1000 个目录和 4 MiB，所有账号共享一个扫描许可。缩略图生成与编辑内存许可也保持全局共享。
 
 ### 音视频、源码与缩略图
 
@@ -150,6 +150,40 @@ PATCH /api/v1/storage
 
 每次最多 100 项，工作线程为 1，最多 16 个排队或执行任务，最多保存最近 100 条记录。状态以 0600 JSON 原子落盘，每个项目执行前和得到结果后均记录；启动时将旧排队/执行记录标记中断，不自动恢复。源文件、目标目录 ID 与私有账号/工作区指纹绑定，变化时拒绝旧任务。锁在实际执行时检查。不确定网络失败、超时或进程中断可能已经影响上游，需先核对远端结果。状态写入失败后不再启动新任务；修复文件路径/权限后重启。
 
+### 离线下载与后台 ZIP
+
+`POST /api/v1/transfers` 创建传输任务，成功返回 `202` 和 `{task: ...}`。必须使用已启用账号的网页会话或 Basic Auth；分享访客授权不能使用。支持两种请求，请求体最多 64 KiB，不接受额外字段：
+
+```json
+{"kind":"fetch","url":"https://example.com/file.zip","destination":"/空间/目录/file.zip"}
+```
+
+```json
+{"kind":"archive","paths":["/空间/文件.txt","/空间/目录"]}
+```
+
+`fetch` 要求读取和上传权限，`destination` 是完整的新文件路径，父目录必须存在，同名不覆盖。执行前和上传前重新核对目标目录 ID、账号与实际空间绑定，并检查 WebDAV 写锁；上传时继续验证父目录身份。文件先完整下载到 VPS 私有临时文件，再上传到 WPS，不支持任意认证头、Cookie、FTP、磁力链接或种子任务。
+
+源地址最多 8192 字节，只接受无账号密码、无片段的公网 HTTP(S) URL。执行时验证所有 DNS 结果并固定连接到已通过校验的 IP；最多跟随 5 次重定向，每次重新校验地址。拒绝内网、回环、链路本地、保留地址及混有这些地址的 DNS 结果，不使用环境代理，不转发 Authorization、Cookie 或 Referer。只接受完整的 `200` 文件响应和未压缩的 HTTP 正文，校验声明长度与实际长度，不提供远端下载续传。
+
+`archive` 需要读取权限，每次选择 1–100 个文件/目录，拒绝根目录、重复路径或互相包含的选择。使用与即时打包相同的目录展开规则：最多 10000 项、64 层和 8 MiB 累计名称，保留空目录并拒绝名称冲突。生成的 ZIP 包括目录等开销最多 1 GiB；预估超过上限也会拒绝。单个选项以其名称加 `.zip` 命名，多个选项使用 `files.zip`。只有生成并保存完整结果后才能下载。
+
+| 方法 | 地址 | 响应或行为 |
+| --- | --- | --- |
+| `GET` | `/api/v1/transfers` | `200`，`{tasks: [...], persistence_error: false}` |
+| `GET` | `/api/v1/transfers/<id>` | `200`，`{task: ...}` |
+| `POST` | `/api/v1/transfers/<id>/cancel` | `200`，`{task: ...}`；仅取消尚未进入 WPS 上传阶段的任务 |
+| `POST` | `/api/v1/transfers/<id>/retry` | `202`，`{task: ...}`；为可安全重试的任务建立新任务 |
+| `GET` | `/api/v1/transfers/<id>/download` | 下载已完成且未过期的 ZIP，支持标准字节范围请求 |
+
+任务包含 `id/kind/name/destination/state/stage/bytes_done/bytes_total/files_done/files_total/error/can_retry/can_cancel/artifact_ready/artifact_expires_at/artifact_size/created_at/updated_at/cancel_requested/retried_from`；可选字段可能省略。状态为 `queued/running/completed/failed/cancelled/interrupted`，阶段还包括 `preparing/downloading/uploading/packaging/ready`。字节进度按当前阶段计算；上传阶段统计交给上传器的数据量，达到 100% 后仍需等待 WPS 上传和登记确认，不表示远端已经写入完成。`bytes_total=0` 表示尚未知总量；客户端以 `can_cancel/can_retry/artifact_ready` 决定可用操作。公开任务不返回源 URL、私有身份绑定或上游地址。
+
+传输队列独立于 `/tasks`，全体账号共享一个工作线程，排队和执行合计最多 16 个，历史最多 100 条，状态文件最多 8 MiB。单任务设 30 分钟执行预算（已进入 WPS 上传的在途请求可能在预算到期后继续，需核对结果），单个临时文件/ZIP 最多 1 GiB，传输目录内文件合计最多 2 GiB，并受共享传输槽和磁盘空闲预留限制。`fetch` 取 1 GiB 与正数 `WPS_MAX_UPLOAD_BYTES` 中较小者；把后者设为 `0` 不会解除 1 GiB 限制。ZIP 从生成完成起保留 1 小时，到期后拒绝下载并清理；需要再次获取时重新提交打包。
+
+任务与当前账号、权限策略、实际 WPS 空间及目标身份绑定；列表、操作和 ZIP 下载仅对本人当前策略开放，其他任务 ID 返回 `404`，授权失效返回 `403`。队列已满返回 `503`，不可安全取消或重试返回 `409`。进入 `uploading` 前先持久化远端写入标记，此后不能取消或重试；上传错误、超时或进程中断都可能已经写入 WPS，必须先检查目标目录。重试会重新下载/打包，不续接旧字节；同一旧任务不能重复创建多个重试任务。
+
+记录以 `0600` 私有 JSON 原子保存，源 URL（包括可能含凭据的查询参数）只在该记录中保留供受控重试，不进入公共状态、服务日志或浏览器存储。服务重启把未完成任务标记 `interrupted`，不自动重放，并清理未完成临时文件；已完成 ZIP 仅在结果文件仍存在且未过期时可用。状态落盘失败后停止启动新任务；修复路径/权限后重启。配置与磁盘说明见 [deployment.md](deployment.md#离线下载与后台-zip-存储)。
+
 ### 在线文本编辑
 
 `GET /api/v1/text?path=/空间/文件.txt` 返回完整原始字节（最多 2 MiB）与强 `ETag` 编辑版本。支持的扩展名与纯文本预览一致，旧中文编码可在网页中切换。`PUT` 同一路径上传 UTF-8 原始正文，必须带读取时的 `If-Match`；成功返回 `{path,entry,revision}` 和新的 `ETag`。
@@ -162,7 +196,7 @@ WPS 没有已验证的原子 compare-and-swap 覆盖接口，检查与上传之�
 
 `POST /api/v1/batch` 接收 `{"operation":"copy","paths":["/空间/目录/文件.txt"],"destination":"/空间/目标目录"}`。`operation` 支持 `copy`、`move`、`delete`；删除省略 `destination`。最多 100 个不重叠路径，拒绝根目录和目标落在源目录内部，复制/移动不覆盖同名目标。沿用现有空间边界，不增加 WPS 原生目录复制或跨空间操作。响应包含 `results: [{path,ok,status,error?}]`、`succeeded` 和 `failed`；HTTP 200 不代表所有项目成功。取消请求后不启动剩余项目，已经完成的项目不回滚，也不会隐式重试。
 
-`POST /api/v1/archive` 接收 `{"paths":["/空间/文件.txt","/空间/目录"]}`；也接受表单 `paths` 字段（值为 JSON 数组），使浏览器直接保存下载而不在 JavaScript 中缓冲整个 ZIP。`GET /api/v1/archive?path=...&path=...` 提供相同读取行为。返回 ZIP 附件，保留相对目录与空目录，采用不压缩的流式打包。每次最多选择 100 项、展开 10000 项、64 层、10 GiB 数据和 8 MiB 累计名称；同名或大小写冲突拒绝打包。开始传输后若上游失败、大小变化或超过预算，立即中断 HTTP 传输，不生成貌似成功的残缺 ZIP。ZIP 不支持 Range 续传。
+`POST /api/v1/archive` 接收 `{"paths":["/空间/文件.txt","/空间/目录"]}`；也接受表单 `paths` 字段（值为 JSON 数组），使浏览器直接保存下载而不在 JavaScript 中缓冲整个 ZIP。`GET /api/v1/archive?path=...&path=...` 提供相同读取行为。返回 ZIP 附件，保留相对目录与空目录，采用不压缩的流式打包。每次最多选择 100 项、展开 10000 项、64 层、10 GiB 数据和 8 MiB 累计名称；同名或大小写冲突拒绝打包。开始传输后若上游失败、大小变化或超过预算，立即中断 HTTP 传输，不生成貌似成功的残缺 ZIP。此即时流式接口不支持 Range 续传；需在关闭网页后继续准备 ZIP 时，可使用前述 `kind=archive` 传输任务，其大小上限为 1 GiB。
 
 ### 全局文件名与路径搜索
 

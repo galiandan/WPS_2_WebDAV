@@ -488,6 +488,7 @@
   let usersManager = null;
   let sharesManager = null;
   let zipBrowser = null;
+  let transferManager = null;
   let textEditor = null;
   let globalSearch = null;
   let sessionGeneration = 0;
@@ -521,6 +522,7 @@
     const admin = isAdmin();
     $("users-button").hidden = !admin;
     $("shares-button").hidden = $("selection-share").hidden = !canShare();
+    $("offline-download-button").hidden = $("background-archive").hidden = !webUser;
     $("version-button").hidden = !admin;
     document.querySelectorAll("[data-admin-only]").forEach((item) => { item.hidden = !admin; });
     $("settings-description").textContent = admin ? "修改本地显示方式和云盘名称" : "管理当前账号的登录安全和本地显示方式";
@@ -545,6 +547,7 @@
     if (usersManager) usersManager.reset();
     if (sharesManager) sharesManager.reset();
     if (zipBrowser) zipBrowser.reset();
+    if (transferManager) transferManager.reset();
     if (textEditor) { if (preserveEditor) textEditor.suspend(); else textEditor.reset(); }
     if (globalSearch) globalSearch.reset();
     closeModal(null);
@@ -1009,7 +1012,7 @@
     // lets a user return to the root or another cached location.
     $("up-button").disabled = state.busy || state.path === "/";
     $("refresh-button").disabled = state.busy;
-    [$("folder-button"), $("upload-button"), $("upload-folder-button"), $("text-file-button")].forEach((button) => {
+    [$("folder-button"), $("upload-button"), $("upload-folder-button"), $("text-file-button"), $("offline-download-button")].forEach((button) => {
       button.disabled = state.busy || state.loading || unavailable || virtualRoot || !permitted("upload");
     });
     // Empty-state retry and search actions remain usable while WPS is down;
@@ -1808,6 +1811,7 @@
       ...(permitted("upload") ? [menuItem("复制", "复制到其他文件夹", "file", () => batchOperation("copy", [entryPath]))] : []),
       ...(permitted("modify") ? [menuItem("移动", "移动到其他文件夹", "move", () => move(entry, entryPath))] : []),
       ...(entry.kind === "folder" ? [menuItem("打包下载", "下载文件夹为 ZIP", "download", () => downloadArchive([entryPath]))] : []),
+      ...(webUser && entry.kind === "folder" ? [menuItem("后台打包", "在服务器准备 ZIP", "clock", () => backgroundArchive([entryPath]))] : []),
       ...(permitted("delete") ? [menuItem("删除", "删除", "trash", () => remove(entry, entryPath), true)] : []),
     );
 
@@ -1864,6 +1868,7 @@
       button.disabled = state.busy || state.loading || (button.id !== "selection-clear" && !button.classList.contains("entry-select") && state.connection !== "connected");
     });
     $("selection-share").disabled = $("selection-share").disabled || !canShare() || state.selectedPaths.size !== 1;
+    $("background-archive").disabled = $("background-archive").disabled || !webUser || !permitted("read");
     $("batch-copy").disabled = $("batch-copy").disabled || !permitted("upload");
     $("batch-move").disabled = $("batch-move").disabled || !permitted("modify");
     $("batch-delete").disabled = $("batch-delete").disabled || !permitted("delete");
@@ -3174,6 +3179,28 @@
     else updateSelectionControls();
   }
 
+  async function backgroundArchive(paths = Array.from(state.selectedPaths)) {
+    if (!webUser || !requirePermission("read") || state.busy || state.loading || !paths.length) return;
+    if (paths.length > 100) { toast("每次最多打包 100 个所选项目，请减少选择", "warn"); return; }
+    setBusy(true);
+    try {
+      await taskCenter.enqueueTransfer({ kind: "archive", paths });
+      toast("后台打包任务已提交，完成后可在任务中心下载", "info", 5000);
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        showError(error);
+        toast("请在任务中心确认提交结果，避免重复创建任务", "warn", 5000);
+      }
+    } finally { setBusy(false); }
+  }
+
+  async function onTransferFinished(task) {
+    if (task.kind !== "fetch" || !task.destination) return;
+    const parent = parentPath(task.destination);
+    clearDirectoryCacheFor(parent);
+    if (state.path === parent) await load(parent, true, true);
+  }
+
   let archiveDownloadID = 0;
 
   function downloadArchive(paths = Array.from(state.selectedPaths)) {
@@ -3795,7 +3822,9 @@
     dismissConfirm: () => closeModal(false),
     onQueued: onTaskQueued,
     onFinished: onTaskFinished,
-    canPerform: (operation) => permitted(operation === "delete" ? "delete" : operation === "copy" ? "upload" : "modify"),
+    onTransferFinished,
+    transfersEnabled: () => Boolean(webUser),
+    canPerform: (operation) => permitted(operation === "delete" ? "delete" : operation === "archive" ? "read" : operation === "copy" || operation === "fetch" ? "upload" : "modify"),
     onReset: () => { state.pendingDeletes.clear(); $("batch-results").hidden = true; },
     onError: (error) => showError(error, { notify: false }),
     notify: toast,
@@ -3805,6 +3834,12 @@
       $("upload-tray").setAttribute("aria-hidden", "false");
       document.body.classList.add("upload-tray-open");
     },
+  });
+
+  if (window.WPSTransfers) transferManager = window.WPSTransfers.init({
+    canFetch: () => Boolean(webUser) && permitted("upload"),
+    enqueue: (body) => taskCenter.enqueueTransfer(body),
+    onError: (error) => showError(error, { notify: false }),
   });
 
   if (window.WPSTextEditor) textEditor = window.WPSTextEditor.init({
@@ -4024,6 +4059,10 @@
   $("selection-clear").addEventListener("click", () => { state.selectedPaths.clear(); state.selectedPath = ""; updateSelectionControls(); });
   ["copy", "move", "delete"].forEach((operation) => $("batch-" + operation).addEventListener("click", () => batchOperation(operation)));
   $("batch-archive").addEventListener("click", () => downloadArchive());
+  $("background-archive").addEventListener("click", () => backgroundArchive());
+  $("offline-download-button").addEventListener("click", () => {
+    if (transferManager && !$("offline-download-button").disabled) transferManager.open(state.path);
+  });
   $("shares-button").addEventListener("click", () => { if (sharesManager) sharesManager.open(); });
   $("selection-share").addEventListener("click", () => {
     if (!sharesManager || state.selectedPaths.size !== 1 || !requirePermission("read")) return;

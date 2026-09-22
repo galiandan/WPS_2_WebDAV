@@ -99,20 +99,22 @@ type Config struct {
 	MaxLocks           int
 
 	// Adapter Basic Auth and networking.
-	Username       string
-	Password       string
-	UsernameFile   string
-	PasswordFile   string
-	WebSettingsDir string
-	SharesFile     string
-	UsersFile      string
-	TasksFile      string
-	DAVPrefix      string
-	RESTPrefix     string
-	Bind           string
-	Port           int
-	MaxConnections int
-	RequestTimeout float64
+	Username        string
+	Password        string
+	UsernameFile    string
+	PasswordFile    string
+	WebSettingsDir  string
+	TransfersFile   string
+	TransferDataDir string
+	SharesFile      string
+	UsersFile       string
+	TasksFile       string
+	DAVPrefix       string
+	RESTPrefix      string
+	Bind            string
+	Port            int
+	MaxConnections  int
+	RequestTimeout  float64
 }
 
 // Load reads the environment with the Python reference's evaluation order:
@@ -280,6 +282,22 @@ func Load() (Config, error) {
 	}
 	if err := validateWebSettingsPath(cfg.WebSettingsDir); err != nil {
 		return Config{}, err
+	}
+	cfg.TransfersFile = os.Getenv("WPS_TRANSFERS_FILE")
+	if cfg.TransfersFile == "" {
+		cfg.TransfersFile = filepath.Join(filepath.Dir(cfg.WebSettingsDir), "transfers.json")
+	}
+	if err := securefile.ValidateStatePath(cfg.TransfersFile); err != nil {
+		return Config{}, fmt.Errorf("invalid transfers file path")
+	}
+	cfg.TransferDataDir = os.Getenv("WPS_TRANSFER_DATA_DIR")
+	if cfg.TransferDataDir != "" {
+		if !filepath.IsAbs(cfg.TransferDataDir) {
+			return Config{}, fmt.Errorf("transfer data directory must be absolute")
+		}
+		if err := securefile.ValidateStatePath(filepath.Join(cfg.TransferDataDir, ".validation")); err != nil {
+			return Config{}, fmt.Errorf("invalid transfer data directory")
+		}
 	}
 	cfg.SharesFile = os.Getenv("WPS_SHARES_FILE")
 	if cfg.SharesFile == "" {

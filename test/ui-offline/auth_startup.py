@@ -39,6 +39,8 @@ async def check_case(browser, outcome):
                 await request.fulfill(json={'authenticated': outcome == 'authenticated', 'user': {'username': 'demo'}})
         elif path.endswith('/settings'):
             await request.fulfill(json={'name': 'WPS Drive'})
+        elif path.endswith('/transfers'):
+            await request.fulfill(json={'tasks': []})
         elif path.endswith('/tasks'):
             await request.fulfill(json={'tasks': []})
         elif path.endswith('/status'):
@@ -79,6 +81,8 @@ async def check_case(browser, outcome):
     if outcome == 'disabled':
         await expect(page.locator('#shares-button')).to_be_hidden()
         await expect(page.locator('#selection-share')).to_be_hidden()
+        await expect(page.locator('#offline-download-button')).to_be_hidden()
+        await expect(page.locator('#background-archive')).to_be_hidden()
     if outcome == 'authenticated':
         await page.screenshot(path='/tmp/wps-auth-startup.png')
     assert not errors, errors

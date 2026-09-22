@@ -67,6 +67,8 @@ async def main():
                 data = {'entries': list(tree.get(query['path'][0], []))}
             elif path.endswith('/tasks') and request.request.method == 'GET':
                 data = {'tasks': tasks}
+            elif path.endswith('/transfers'):
+                data = {'tasks': []}
             elif path.endswith('/tasks'):
                 body = request.request.post_data_json
                 batches.append(body)

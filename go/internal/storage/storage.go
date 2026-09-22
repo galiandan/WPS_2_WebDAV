@@ -528,6 +528,9 @@ func (s *Storage) UploadPath(ctx context.Context, path string, source io.Reader,
 	if err != nil {
 		return model.RemoteEntry{}, err
 	}
+	if options.ExpectedParentID != "" && parent.ID != options.ExpectedParentID {
+		return model.RemoteEntry{}, ErrUploadTargetChanged
+	}
 	children, err := s.children(parent.ID)
 	if err != nil {
 		return model.RemoteEntry{}, err
@@ -551,6 +554,20 @@ func (s *Storage) UploadPath(ctx context.Context, path string, source io.Reader,
 		return model.RemoteEntry{}, err
 	}
 	defer release()
+	if options.ExpectedParentID != "" {
+		s.invalidate()
+		freshParent, _, _, err := s.parentAndName(path)
+		if err != nil || freshParent.ID != options.ExpectedParentID {
+			return model.RemoteEntry{}, ErrUploadTargetChanged
+		}
+		if !options.Overwrite {
+			if _, err := s.Metadata(path); err == nil {
+				return model.RemoteEntry{}, model.NewStorageError(model.KindAlreadyExists, "destination already exists")
+			} else if !isEntryNotFound(err) {
+				return model.RemoteEntry{}, err
+			}
+		}
+	}
 	if options.ExpectedID != "" {
 		// Waiting for an upload slot can outlast the directory-cache TTL.
 		// Check again using fresh path metadata immediately before writing;
@@ -589,10 +606,11 @@ func (s *Storage) UploadPath(ctx context.Context, path string, source io.Reader,
 
 // UploadOptions carries upload_path's optional keyword surface.
 type UploadOptions struct {
-	Size        *int64
-	ContentType string
-	CSRFToken   string
-	Overwrite   bool
+	ExpectedParentID string
+	Size             *int64
+	ContentType      string
+	CSRFToken        string
+	Overwrite        bool
 	// ExpectedID restricts overwrite to an existing file. This is a local
 	// precondition, not an atomic WPS compare-and-swap operation.
 	ExpectedID string

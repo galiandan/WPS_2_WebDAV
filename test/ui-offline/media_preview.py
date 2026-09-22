@@ -78,6 +78,8 @@ async def main():
                 data = {'authenticated': True, 'user': {'username': 'demo'}}
             elif url.path.endswith('/settings'):
                 data = {'name': 'WPS Drive'}
+            elif url.path.endswith('/transfers'):
+                data = {'tasks': []}
             elif url.path.endswith('/tasks'):
                 data = {'tasks': []}
             elif url.path.endswith('/status'):

@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/assets/style.css">
   <link rel="stylesheet" href="/assets/search.css">
   <link rel="stylesheet" href="/assets/tasks.css">
+  <link rel="stylesheet" href="/assets/transfers.css">
   <link rel="stylesheet" href="/assets/text-editor.css">
   <link rel="stylesheet" href="/assets/player.css">
   <link rel="stylesheet" href="/assets/users.css">
@@ -270,6 +271,7 @@ SOFTWARE.
           <button id="batch-copy" type="button">复制</button>
           <button id="batch-move" type="button">移动</button>
           <button id="batch-archive" type="button">打包下载</button>
+          <button id="background-archive" type="button" hidden>后台打包</button>
           <button id="batch-delete" class="danger" type="button">删除</button>
           <button id="selection-clear" type="button">取消选择</button>
         </div>
@@ -305,6 +307,7 @@ SOFTWARE.
       <button id="text-file-button" class="toolbar-action" type="button" title="新建文本文件"><svg class="icon"><use href="#i-pencil"/></svg><span>新建文本文件</span></button>
       <button id="folder-button" class="toolbar-action" type="button" title="新建文件夹"><svg class="icon"><use href="#i-plus"/></svg><span>新建文件夹</span></button>
       <button id="upload-folder-button" class="toolbar-action" type="button" title="上传文件夹（保留目录结构）"><svg class="icon"><use href="#i-folder"/></svg><span>上传文件夹</span></button>
+      <button id="offline-download-button" class="toolbar-action" type="button" title="离线下载" hidden><svg class="icon"><use href="#i-download"/></svg><span>离线下载</span></button>
       <button id="upload-button" class="primary toolbar-action" type="button" title="上传文件"><svg class="icon"><use href="#i-upload"/></svg><span>上传文件</span></button>
       <button id="settings-button" class="icon-button" type="button" title="设置云盘名称" aria-label="设置云盘名称"><svg class="icon"><use href="#i-sliders"/></svg></button>
       <button id="theme-button" class="icon-button" type="button" title="切换主题" aria-label="切换主题"><svg class="icon"><use id="theme-icon" href="#i-sun"/></svg></button>
@@ -507,6 +510,7 @@ SOFTWARE.
 
   <script src="/assets/search.js" defer></script>
   <script src="/assets/tasks.js" defer></script>
+  <script src="/assets/transfers.js" defer></script>
   <script src="/assets/text-editor.js" defer></script>
   <script src="/assets/player.js" defer></script>
   <script src="/assets/vendor-purify.js" defer></script>

@@ -197,8 +197,16 @@ func (b *Budget) ReserveSpool(total int64, current int64) (int64, error) {
 	if total <= b.uploadSpoolMemory {
 		return current, nil
 	}
+	return b.ReserveDisk(b.uploadSpoolDir, total, current)
+}
+
+// ReserveDisk applies the shared temporary-disk accounting to data that is
+// always on disk, including bounded remote fetches and background ZIP files.
+func (b *Budget) ReserveDisk(spoolDir string, total, current int64) (int64, error) {
+	if total < 0 || total > (1<<62)-b.uploadMinFreeBytes {
+		return current, model.NewStorageError(model.KindInsufficientStorage, "temporary data exceeds the disk limit")
+	}
 	required := total + b.uploadMinFreeBytes
-	spoolDir := b.uploadSpoolDir
 	if spoolDir == "" {
 		spoolDir = os.TempDir()
 	}

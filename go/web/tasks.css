@@ -30,3 +30,6 @@
   .task-item { padding: 12px; }
   .task-item-head time { font-size: 11px; }
 }
+
+.transfer-task-name { font-weight: 600; font-size: 14px; margin: 10px 0 0; }
+.transfer-task-error { color: var(--bad); font-size: 13px; overflow-wrap: anywhere; margin-bottom: 0; }

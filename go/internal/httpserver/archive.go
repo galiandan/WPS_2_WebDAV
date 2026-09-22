@@ -248,6 +248,17 @@ func (d *RESTDispatcher) copyArchiveFile(ctx context.Context, output io.Writer, 
 	defer stream.Close()
 	stopCancel := context.AfterFunc(ctx, func() { stream.Close() })
 	defer stopCancel()
+	// Resolving the stream may refresh directory metadata. Recheck its
+	// identity before consuming bytes from a replacement at the same path.
+	d.invalidateTextMetadata()
+	current, err = d.downloads.Metadata(item.path)
+	if err != nil {
+		return 0, err
+	}
+	if current.Kind != model.KindFile || current.ID != item.entry.ID ||
+		!sameArchiveOptional(current.Size, item.entry.Size) || !sameArchiveOptional(current.Etag, item.entry.Etag) {
+		return 0, fmt.Errorf("archive file changed")
+	}
 	if stream.HTTPStatus() != http.StatusOK || stream.ContentRange() != nil {
 		return 0, fmt.Errorf("archive received an incomplete object response")
 	}
